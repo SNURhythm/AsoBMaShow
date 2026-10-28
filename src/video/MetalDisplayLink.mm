@@ -2,7 +2,6 @@
 #include "MetalDisplayLinkFrame.h"
 #include "MetalDrawableProvider.h"
 #include "MetalPresentationTiming.h"
-#include "MetalPreparationPacer.h"
 #include "../targets.h"
 #if TARGET_OS_IPHONE
 #include "../../cmake/BgfxMetalPresentationGate.h"
@@ -13,8 +12,6 @@
 #import <Metal/Metal.h>
 #include <algorithm>
 #include <cassert>
-#include <chrono>
-#include <thread>
 
 namespace video {
 struct MetalDisplayLinkState {
@@ -27,10 +24,6 @@ struct MetalDisplayLinkState {
   std::function<bool()> isCurrent;
   std::uint64_t generation = 0;
   std::uint64_t timingToken = 0;
-  MetalPreparationPacer preparationPacer;
-  double deadline = 0, callbackTime = 0, previousCallbackTime = 0;
-  double preparationStart = 0, preparationCost = 0;
-  bool gameplay = false;
   float rate = 0;
   double retryAfter = 0;
   bool claimed = false, scheduled = false;
@@ -53,8 +46,6 @@ API_AVAILABLE(macos(14.0), ios(17.0))
     state->timingToken = video::presentationTiming::capture().begin(
         CACurrentMediaTime(), update.targetTimestamp,
         update.targetPresentationTimestamp, state->generation);
-    state->deadline = update.targetTimestamp;
-    state->callbackTime = CACurrentMediaTime();
     const auto token = state->timingToken;
     if (token) {
       [update.drawable addPresentedHandler:^(id<MTLDrawable> drawable) {
@@ -73,13 +64,6 @@ namespace {
 thread_local MetalDisplayLinkState *current = nullptr;
 
 void endFrame(MetalDisplayLinkState &state) {
-  if (state.frame.managed()) {
-    if (state.gameplay && state.scheduled && state.preparationCost > 0)
-      state.preparationPacer.observe(state.preparationCost);
-    else
-      state.preparationPacer.reset();
-  }
-  state.preparationStart = state.preparationCost = 0;
   presentationTiming::capture().record(state.timingToken,
       presentationTiming::Event::FrameEnd, CACurrentMediaTime());
   state.timingToken = 0;
@@ -96,8 +80,6 @@ void pause(MetalDisplayLinkState &state) {
 }
 void invalidate(MetalDisplayLinkState &state) {
   pause(state);
-  state.preparationPacer.reset();
-  state.previousCallbackTime = 0;
   if (@available(macOS 14.0, iOS 17.0, *)) {
     [(CAMetalDisplayLink *)state.link invalidate];
     ((CAMetalDisplayLink *)state.link).delegate = nil;
@@ -138,8 +120,6 @@ bool shouldPresent(void *layer, void *drawable) {
       drawable == (__bridge void *)state.drawable && geometryMatches(state, layer) &&
       state.isCurrent && state.isCurrent();
   state.scheduled = state.scheduled || allowed;
-  if (allowed && state.preparationStart > 0)
-    state.preparationCost = CACurrentMediaTime() - state.preparationStart;
   return allowed;
 }
 std::uint64_t timingToken() { return current ? current->timingToken : 0; }
@@ -195,11 +175,9 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
       }
       auto *link = (CAMetalDisplayLink *)state.link;
       if (state.rate != rate) {
-        state.preparationPacer.reset();
         link.preferredFrameRateRange = CAFrameRateRangeMake(rate, rate, rate);
         state.rate = rate;
       }
-      if (state.generation != generation) state.preparationPacer.reset();
       state.generation = generation;
       state.isCurrent = std::move(isCurrent);
       state.frame.begin(generation);
@@ -224,28 +202,9 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
 
 bool MetalDisplayLink::hasFrame() const { return state_->frame.managed(); }
 bool MetalDisplayLink::didSchedulePresent() const { return state_->scheduled; }
-bool MetalDisplayLink::markPreparationStart(bool gameplay) {
-  auto &state = *state_;
-  if (!state.frame.ready()) return true; // Timer fallback keeps its own pacing.
-  if (!gameplay || gameplay != state.gameplay || state.previousCallbackTime <= 0 ||
-      state.callbackTime - state.previousCallbackTime > .1)
-    state.preparationPacer.reset();
-  state.gameplay = gameplay;
-  state.previousCallbackTime = state.callbackTime;
-  const auto clock = [] { return CACurrentMediaTime(); };
-  const double now = clock();
-  const double start = gameplay
-      ? state.preparationPacer.startTime(now, state.deadline, 1.0 / state.rate) : now;
-  if (!waitForMetalPreparation(start, state.deadline,
-      [&] { return state.isCurrent && state.isCurrent(); }, clock,
-      [](double seconds) { std::this_thread::sleep_for(std::chrono::duration<double>(seconds)); })) {
-    state.preparationPacer.reset();
-    return false;
-  }
-  state.preparationStart = clock();
+void MetalDisplayLink::markPreparationStart(bool gameplay) {
   presentationTiming::capture().record(state_->timingToken,
-      presentationTiming::Event::PreparationStart, state.preparationStart, gameplay);
-  return true;
+      presentationTiming::Event::PreparationStart, CACurrentMediaTime(), gameplay);
 }
 void MetalDisplayLink::markPreparationEnd() {
   presentationTiming::capture().record(state_->timingToken,

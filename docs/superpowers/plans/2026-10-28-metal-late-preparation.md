@@ -1,5 +1,7 @@
 # Later Metal frame preparation experiment
 
+**Rejected and reverted.** The user rejected deliberate pre-input waiting for this rhythm game. Immediate input/scene preparation is restored; timing diagnostics remain. The following describes the historical experiment, not current behavior. Lower preparation-to-display age did not establish lower input or audio latency, and capture 24 exposed additional deadline crossings.
+
 The user approved the next controlled change in the capture-23 analysis. Move input/scene preparation later; preserve presentation targets, three drawables, GPU limit three, and fallback behavior. No deployment.
 
 Implementation choices: gameplay only; 30 submitted-frame warm-up; maximum CPU preparation-to-presentation-request duration in the last 120 submitted frames, with a 3 ms floor and 1.5 ms scheduling/wakeup margin. Delay at most 4 ms or half the refresh interval, whichever is smaller. A large workload immediately removes delay until it ages out. Reset on idle/missing submission, gameplay transitions, lifecycle/layer/rate changes and callback gaps over 100 ms. Cancellable sleeps are at most 1 ms each. Never begin preparation after a known expired deadline; do not wait for GPU/display completion. Preserve timing-v1 fields for comparison.

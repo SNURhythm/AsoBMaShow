@@ -1,5 +1,7 @@
 # Later Metal preparation: controlled device experiment
 
+**Rejected and reverted.** The user rejected deliberate pre-input waiting for this rhythm game. Immediate input/scene preparation is restored; timing diagnostics remain. The following describes the historical experiment, not current behavior. Lower preparation-to-display age did not establish lower input or audio latency, and capture 24 exposed additional deadline crossings.
+
 Capture 23 showed steady gameplay meeting its assigned display targets, with
 about 16.61 ms between preparation and display. This candidate moves preparation
 closer to the submission deadline. It does not change the assigned target,

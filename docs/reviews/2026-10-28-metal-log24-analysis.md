@@ -1,5 +1,7 @@
 # Capture 24: younger frames, less protection against CPU spikes
 
+**Decision after review with the user:** Remove deliberate pre-input waiting entirely. The 1 ms proposal below is superseded. A smaller frame-age metric is not sufficient evidence of better rhythm-game responsiveness. Keep immediate input/scene processing and the diagnostic capture.
+
 The later-preparation experiment is active and produces the intended median
 improvement: preparation-to-display age falls from **16.615 ms to 12.789 ms**,
 a **3.825 ms (23.0%)** reduction against capture 23. The median callback-to-

@@ -54,21 +54,6 @@ def object_block(project: str, object_id: str, next_section: str) -> str:
 
 
 class IOSBuildSetupTests(unittest.TestCase):
-    def test_ios_rejected_preparation_drains_events_before_skipping_render(self):
-        source = MAIN_SOURCE.read_text()
-        reject = source.index("const bool iosPreparationRejected")
-        poll = source.index("while (pollApplicationEvent(&e))", reject)
-        native = source.index("RawTouchRegistration::pollUiEvent", poll)
-        skip = source.index("if (iosPreparationRejected) continue;", native)
-        publish = source.index("advanceLegacyInputFrame", skip)
-        update = source.index("sceneManager.update(deltaTime)", publish)
-        self.assertLess(reject, poll)
-        self.assertLess(native, skip)
-        self.assertLess(skip, publish)
-        self.assertLess(publish, update)
-        self.assertIn("if (iosPreparationRejected) iosDisplayLink.endFrame();", source[reject:poll])
-        self.assertIn("if (!iosPreparationRejected)", source[reject:poll])
-
     @classmethod
     def setUpClass(cls):
         cls.project = PROJECT.read_text(encoding="utf-8")
