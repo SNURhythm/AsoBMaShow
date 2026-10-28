@@ -4,6 +4,7 @@
 #include "ClearLampColors.h"
 #include "IconText.h"
 #include "UiTheme.h"
+#include "AppTheme.h"
 #include "MainMenuTheme.h"
 #include "../ScoreRankUtils.h"
 
@@ -177,6 +178,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
       });
   goalButton->setStyledBorderWidth(0);
   goalIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 25);
+  goalIconView->setName("chartListGoalFlag");
   goalIconView->setText(ui_icons::textForCodepoint(0xf024));
   goalIconView->setAlign(TextView::CENTER);
   goalIconView->setVAlign(TextView::MIDDLE);
@@ -237,6 +239,7 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   unavailable = record.unavailable;
   solidArchive = record.solidArchive;
   goal = false;
+  goalAchieved = false;
   const bool random = record.randomSelect.has_value();
   artworkPlaceholder->setText(ui_icons::textForCodepoint(random ? 0xf074 : ui_icons::kMusic));
   detailsLayout->setVisible(!random);
@@ -332,7 +335,8 @@ void ChartListItemView::setGoalHandler(std::function<void(const ChartMetaRecord 
   goalHandler = std::move(handler);
 }
 
-void ChartListItemView::setGoalState(bool nextGoal) {
+void ChartListItemView::setGoalState(bool nextGoal, bool achieved) {
+  goalAchieved = nextGoal && achieved;
   goal = nextGoal;
   refreshGoalButton();
 }
@@ -347,7 +351,7 @@ void ChartListItemView::refreshGoalButton() {
   goalOutlineView->setDisplay(goal ? YGDisplayNone : YGDisplayFlex);
   goalOutlineView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::secondary);
   goalIconView->setThemedColor(goal
-      ? (selected ? main_menu_theme::selectedAccent : main_menu_theme::accent)
+      ? (goalAchieved ? app_theme::lime : (selected ? main_menu_theme::selectedAccent : main_menu_theme::accent))
       : (selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted));
 }
 

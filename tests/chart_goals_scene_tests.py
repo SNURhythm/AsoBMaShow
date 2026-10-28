@@ -42,6 +42,67 @@ class ChartGoalsSceneTests(unittest.TestCase):
                 [source], binary, source.parent, includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_active_and_achieved_sections_page_independently(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src/scene/ChartGoalsScene.cpp").read_text()
+        start = source.index("    const auto renderGroup =")
+        end = source.index("\n  }\n  if (!message_", start)
+        fixture = r'''
+#include <algorithm>
+#include <cassert>
+#include <functional>
+#include <string>
+#include <vector>
+struct View { View *setThemedColor(int) { return this; } };
+namespace chart_goals {
+constexpr int pageSize = 20;
+struct Goal { struct { std::string Title, SubTitle; } chart; int target = 0; };
+struct GoalProgress { Goal goal; struct { bool achieved = false; } progress; };
+}
+namespace app_theme { constexpr int textSecondary=0; enum class ActionCategory { Neutral }; }
+namespace ui_icons { constexpr int kHide=1, kPlus=2; }
+namespace i18n { std::string tr(const char *s) { return s; } }
+std::vector<std::string> titles, actions;
+View view;
+View *card(View *) { return &view; }
+View *label(View *, const std::string &s, int size) { if (size==24) titles.push_back(s); return &view; }
+std::string scope(const chart_goals::Goal &) { return "LN"; }
+void targets(View *, int) {}
+void action(View *, const std::string &s, std::function<void()>,
+    app_theme::ActionCategory = app_theme::ActionCategory::Neutral, int = 0) { actions.push_back(s); }
+struct Scene {
+  struct { std::vector<chart_goals::GoalProgress> goals; } page_;
+  int offset_=0, achievedOffset_=0;
+  bool showAchieved_=false;
+  void later(std::function<void()> f) { f(); }
+  void showGoal(chart_goals::Goal) {}
+  void build() { titles.clear(); actions.clear(); View *body=&view; GROUPS }
+};
+int main() {
+  Scene scene;
+  for (int i=0;i<25;++i) {
+    scene.page_.goals.push_back({{{"Done", std::to_string(i)}}, {true}});
+    scene.page_.goals.push_back({{{"Active", std::to_string(i)}}, {false}});
+  }
+  scene.build();
+  assert(titles.size()==20 && titles.front()=="Active 0" && titles.back()=="Active 19");
+  assert(actions.back()=="goals.ui.show_achieved");
+  scene.showAchieved_=true; scene.achievedOffset_=20; scene.build();
+  assert(titles.size()==25 && titles[20]=="Done 20" && titles.back()=="Done 24");
+  scene.offset_=20; scene.build();
+  assert(titles.size()==10 && titles.front()=="Active 20" && titles[5]=="Done 20");
+  scene.page_.goals.clear(); scene.build();
+  assert(titles.empty() && actions.empty() && scene.offset_==0);
+}
+'''.replace("GROUPS", source[start:end])
+        with tempfile.TemporaryDirectory(prefix="asobmashow-goal-groups-") as directory:
+            path = Path(directory) / "groups.cpp"
+            binary = Path(directory) / "groups"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
+
 
 if __name__ == "__main__":
     unittest.main()

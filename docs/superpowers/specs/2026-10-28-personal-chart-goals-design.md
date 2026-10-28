@@ -52,7 +52,9 @@ See [research and tradeoffs](../../research/rhythm-game-motivation-2026-10-28.md
   return safely; deferred view rebuilding avoids deleting controls mid-callback.
 - Follow-up: a chart-row flag opens the configured goal (current LN mode first,
   then another configured scope); the favorite star moves beside the detail title.
-  A Goals folder aggregates indexed charts with goals in both selectors.
+  A Goals folder aggregates indexed charts with unfinished goals in both selectors.
+  Achieved goal flags are green; achieved goals are collapsed below unfinished
+  goals with Combo-style plus/hide controls and independent pagination.
 - Follow-up: retain and display set/first-achieved timestamps. Changed targets
   start a new timeline; unchanged targets preserve dates. Goal completion during
   a saved play produces one finite result banner, delayed until Combo closes.

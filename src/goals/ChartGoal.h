@@ -26,9 +26,12 @@ struct Progress {
 };
 struct GoalProgress { Goal goal; Progress progress; };
 struct ProgressPage { std::vector<GoalProgress> goals; bool hasMore = false; };
-// Identity-only selector cache: one mode mask per chart, without score projection.
+// Selector cache: saved and currently achieved mode masks per chart.
 struct Index {
   std::map<std::string, unsigned> modes;
+  std::map<std::string, unsigned> achievedModes;
+  std::vector<std::string> activeHashes() const;
+  bool allAchieved(std::string_view sha256) const;
   std::vector<std::string> hashes() const;
   std::optional<int> modeFor(std::string_view sha256, int preferredMode) const;
 };

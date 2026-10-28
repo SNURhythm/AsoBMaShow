@@ -43,7 +43,8 @@ private:
   std::optional<chart_goals::GoalProgress> selected_;
   chart_goals::Goal draft_;
   bool editing_ = false, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
-  int offset_ = 0;
+  int offset_ = 0, achievedOffset_ = 0;
+  bool showAchieved_ = false;
   View *root_ = nullptr;
   ScrollView *scroll_ = nullptr;
   OverlayPortal *portal_ = nullptr;

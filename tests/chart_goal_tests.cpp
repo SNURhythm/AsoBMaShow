@@ -68,10 +68,17 @@ int main() {
   CHECK(loadPage(db.get(), 0).goals.size() == 1);
   goal.longNoteMode = 2; save(db.get(), goal);
   CHECK(loadPage(db.get(), 0).goals.size() == 2);
-  const auto index = loadIndex(db.get());
+  auto index = loadIndex(db.get());
   CHECK(index.hashes() == std::vector<std::string>{std::string(64, 'a')});
   CHECK(index.modeFor(goal.chart.SHA256, 2) == 2);
   CHECK(index.modeFor(goal.chart.SHA256, 3) == 1); // A highlighted flag always opens a saved goal.
+  index.achievedModes[std::string(64, 'a')] = 1u << 1;
+  CHECK(!index.allAchieved(goal.chart.SHA256));
+  CHECK(index.activeHashes().size() == 1); // A pending goal in another mode keeps the chart.
+  index.achievedModes[std::string(64, 'a')] |= 1u << 2;
+  CHECK(index.allAchieved(goal.chart.SHA256) && index.activeHashes().empty());
+  CHECK(index.hashes().size() == 1 && index.modeFor(goal.chart.SHA256, 2) == 2);
+
   auto other = goal.chart; other.SHA256 = std::string(64, 'b');
   CHECK(!index.modeFor(other.SHA256, 1));
   other.SHA256 = ""; CHECK(!index.modeFor(other.SHA256, 1));

@@ -1862,7 +1862,7 @@ bool MusicSelectScene::loadDirectoryChildren(
       const auto goals = context.scoreRepository.LoadChartGoalIndex(error);
       if (!goals) { SDL_Log("Unable to load goal folder: %s", error.c_str()); return false; }
       ChartMetaQuery query;
-      query.allowedSha256 = goals->hashes();
+      query.allowedSha256 = goals->activeHashes();
       query.selectedLongNoteMode = selectedLongNoteMode;
       std::vector<ChartMetaRecord> records;
       chartSession_->QueryChartMeta(query, records);

@@ -258,7 +258,14 @@ int main() {
     require(goal && goal->getVisible(), "playable rows retain their goal action");
     std::string openedPath;
     row.setGoalHandler([&](const ChartMetaRecord &clicked) { openedPath = clicked.meta.BmsPath; });
+    row.setGoalState(true, true);
+    auto *flag = dynamic_cast<TextView *>(dynamic_cast<Button *>(goal)->getContentView()->findViewByName("chartListGoalFlag"));
+    require(flag != nullptr, "goal button contains its flag icon");
+    const auto achievedColor = flag->currentColor();
     row.setGoalState(true);
+    const auto activeColor = flag->currentColor();
+    require(achievedColor.r != activeColor.r || achievedColor.g != activeColor.g ||
+                achievedColor.b != activeColor.b, "achieved flags use a distinct color");
     require(dynamic_cast<Button *>(goal)->isSelected(), "configured goals highlight their flag");
     SDL_Event click{};
     click.button.button = SDL_BUTTON_LEFT;

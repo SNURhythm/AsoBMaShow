@@ -516,6 +516,9 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   saved = scores.LoadChartGoal(goal.chart, 3, error);
   assert(saved && saved->progress.achieved);
   assert(saved->goal.setAtUnixMillis == setAt && saved->goal.achievedAtUnixMillis >= setAt);
+  const auto achievedIndex = scores.LoadChartGoalIndex(error);
+  assert(achievedIndex && achievedIndex->allAchieved(goal.chart.SHA256));
+  assert(achievedIndex->activeHashes().empty());
   const auto achievedAt = saved->goal.achievedAtUnixMillis;
   assert(scores.SaveChartGoal(saved->goal, error));
   assert(scores.LoadChartGoal(goal.chart, 3, error)->goal.achievedAtUnixMillis == achievedAt);
@@ -526,6 +529,7 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   assert(page && page->goals.size() == 1 && page->goals[0].progress.achieved);
   assert(scores.ClearImportedIrScores(kProvider).status == ImportedIrScoreProjectionStatus::Applied);
   assert(!scores.LoadChartGoal(goal.chart, 1, error)->progress.achieved);
+  assert(scores.LoadChartGoalIndex(error)->activeHashes().size() == 1);
   assert(scores.LoadChartGoal(goal.chart, 1, error)->goal.achievedAtUnixMillis == achievedAt);
   goal.chart.SHA256 = std::string(64, 'b');
   goal.chart.TotalLongNotes = 1;

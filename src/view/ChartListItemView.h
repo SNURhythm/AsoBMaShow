@@ -19,7 +19,7 @@ public:
   void setClearRank(int clearRank);
   void setBestScoreRank(int score, int maxScore);
   void setGoalHandler(std::function<void(const ChartMetaRecord &)> handler);
-  void setGoalState(bool goal);
+  void setGoalState(bool goal, bool achieved = false);
   void onSelected() override;
   void onUnselected() override;
 
@@ -36,6 +36,7 @@ private:
   bool unavailable = false;
   bool solidArchive = false;
   bool goal = false;
+  bool goalAchieved = false;
   bool selected = false;
   std::function<void(const ChartMetaRecord &)> goalHandler;
   View *contentCard;

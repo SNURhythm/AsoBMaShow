@@ -29,6 +29,20 @@ std::vector<std::string> Index::hashes() const {
   for (const auto &[hash, mask] : modes) result.push_back(hash);
   return result;
 }
+std::vector<std::string> Index::activeHashes() const {
+  std::vector<std::string> result;
+  for (const auto &[hash, mask] : modes)
+    if (!allAchieved(hash)) result.push_back(hash);
+  return result;
+}
+bool Index::allAchieved(std::string_view sha256) const {
+  std::string hash;
+  try { hash = normalizedHash(sha256); }
+  catch (const std::invalid_argument &) { return false; }
+  const auto saved = modes.find(hash), achieved = achievedModes.find(hash);
+  return saved != modes.end() && achieved != achievedModes.end() &&
+      (saved->second & achieved->second) == saved->second;
+}
 std::optional<int> Index::modeFor(std::string_view sha256, int preferredMode) const {
   std::string hash;
   try { hash = normalizedHash(sha256); }

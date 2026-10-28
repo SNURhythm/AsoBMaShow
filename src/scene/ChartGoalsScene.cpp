@@ -5,10 +5,12 @@
 #include "../rendering/common.h"
 #include "../rendering/ResponsiveUi.h"
 #include "../view/ActionButtonStyle.h"
+#include "../view/ActionButtonContent.h"
 #include "../view/AppTheme.h"
 #include "../view/Button.h"
 #include "../view/ClearLampColors.h"
 #include "../view/DropdownView.h"
+#include "../view/IconText.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
@@ -36,13 +38,20 @@ View *card(View *parent) {
   return view;
 }
 Button *action(View *parent, const std::string &value, std::function<void()> click,
-               app_theme::ActionCategory category = app_theme::ActionCategory::Neutral) {
+               app_theme::ActionCategory category = app_theme::ActionCategory::Neutral,
+               uint32_t glyph = 0) {
   auto *button = new Button();
   button->setHeight(rendering::compactMenuCanvasActive ? 66 : 52)->setMinWidth(0)->setFlexShrink(0);
   auto *text = new TextView(app_theme::font, 21);
   text->setText(value); text->setAlign(TextView::CENTER); text->setVAlign(TextView::MIDDLE);
-  button->setContentView(text); button->setCornerRadius(16);
+  if (glyph) {
+    auto *content = action_button::makeInlineContent(text, glyph);
+    content->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
+    button->setContentView(content);
+  } else button->setContentView(text);
+  button->setCornerRadius(16);
   action_button::applyStyle(button, text, category);
+  if (glyph) action_button::setIconColor(button, [category] { return app_theme::actionPalette(category).label; });
   button->setOnClickListener(std::move(click)); parent->addView(button);
   return button;
 }
@@ -99,7 +108,7 @@ bool ChartGoalsScene::checkProfile() {
   if (profileId_ == context.profileManager.activeProfile().id) return true;
   profileId_ = context.profileManager.activeProfile().id;
   initial_.reset(); initialMode_.reset(); resolved_.reset(); selected_.reset();
-  draft_ = {}; page_ = {}; offset_ = 0;
+  draft_ = {}; page_ = {}; offset_ = achievedOffset_ = 0; showAchieved_ = false;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
   return false;
@@ -123,12 +132,19 @@ void ChartGoalsScene::init() {
 }
 void ChartGoalsScene::reload() {
   std::string error;
-  auto loaded = context.scoreRepository.LoadChartGoals(offset_, error);
-  loadFailed_ = !loaded;
-  if (loaded) page_ = std::move(*loaded);
-  if (!loaded) {
-    SDL_Log("Cannot load personal goals: %s", error.c_str());
-    message_ = i18n::tr("goals.ui.storage_error"); return;
+  page_ = {};
+  loadFailed_ = false;
+  // Goal metadata is small; collect pages before partitioning so completed
+  // entries never displace unfinished goals onto later pages.
+  for (int offset = 0;; offset += chart_goals::pageSize) {
+    auto loaded = context.scoreRepository.LoadChartGoals(offset, error);
+    if (!loaded) {
+      loadFailed_ = true;
+      SDL_Log("Cannot load personal goals: %s", error.c_str());
+      message_ = i18n::tr("goals.ui.storage_error"); return;
+    }
+    for (auto &entry : loaded->goals) page_.goals.push_back(std::move(entry));
+    if (!loaded->hasMore) break;
   }
   if (selected_ && !editing_) {
     auto current = context.scoreRepository.LoadChartGoal(draft_.chart, draft_.longNoteMode, error);
@@ -243,8 +259,7 @@ void ChartGoalsScene::build() {
     action(body, i18n::tr("streak.ui.retry"), [this] { later([this] { message_.clear(); reload(); }); });
   } else if (selected_ || editing_) {
     auto *detail = card(body);
-    label(detail, draft_.chart.Title, 28);
-    if (!draft_.chart.SubTitle.empty()) label(detail, draft_.chart.SubTitle, 21);
+    label(detail, draft_.chart.Title + (draft_.chart.SubTitle.empty() ? "" : " " + draft_.chart.SubTitle), 28);
     label(detail, scope(draft_), 18)->setThemedColor(app_theme::textSecondary);
     if (editing_) {
       std::string error;
@@ -328,18 +343,36 @@ void ChartGoalsScene::build() {
     }
   } else {
     label(body, i18n::tr("goals.ui.intro"), 19);
-    if (page_.goals.empty()) label(body, i18n::tr("goals.ui.empty"));
-    for (const auto &entry : page_.goals) {
-      auto *row = card(body);
-      label(row, entry.goal.chart.Title, 24);
-      if (!entry.goal.chart.SubTitle.empty()) label(row, entry.goal.chart.SubTitle, 18);
-      label(row, scope(entry.goal), 18)->setThemedColor(app_theme::textSecondary);
-      targets(row, entry.goal.target);
-      action(row, i18n::tr(entry.progress.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),
-          [this, goal = entry.goal] { later([this, goal] { showGoal(goal); }); });
+    if (page_.goals.empty()) label(body, i18n::format("goals.ui.empty", {{"flag", "⚑"}}));
+    const auto renderGroup = [this, body](bool achieved, int &offset) {
+      std::vector<const chart_goals::GoalProgress *> entries;
+      for (const auto &entry : page_.goals)
+        if (entry.progress.achieved == achieved) entries.push_back(&entry);
+      const int count = static_cast<int>(entries.size());
+      offset = std::min(offset, count == 0 ? 0 : (count - 1) / chart_goals::pageSize * chart_goals::pageSize);
+      for (int i = offset; i < std::min(count, offset + chart_goals::pageSize); ++i) {
+        const auto &entry = *entries[i];
+        auto *row = card(body);
+        label(row, entry.goal.chart.Title + (entry.goal.chart.SubTitle.empty() ? "" : " " + entry.goal.chart.SubTitle), 24);
+        label(row, scope(entry.goal), 18)->setThemedColor(app_theme::textSecondary);
+        targets(row, entry.goal.target);
+        action(row, i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),
+            [this, goal = entry.goal] { later([this, goal] { showGoal(goal); }); });
+      }
+      if (offset > 0) action(body, i18n::tr("goals.ui.previous"), [this, achieved] { later([this, achieved] {
+        (achieved ? achievedOffset_ : offset_) -= chart_goals::pageSize;
+      }); });
+      if (offset + chart_goals::pageSize < count) action(body, i18n::tr("goals.ui.next"), [this, achieved] { later([this, achieved] {
+        (achieved ? achievedOffset_ : offset_) += chart_goals::pageSize;
+      }); });
+    };
+    renderGroup(false, offset_);
+    if (std::ranges::any_of(page_.goals, [](const auto &entry) { return entry.progress.achieved; })) {
+      action(body, i18n::tr(showAchieved_ ? "goals.ui.hide_achieved" : "goals.ui.show_achieved"),
+          [this] { later([this] { showAchieved_ = !showAchieved_; }); },
+          app_theme::ActionCategory::Neutral, showAchieved_ ? ui_icons::kHide : ui_icons::kPlus);
+      if (showAchieved_) renderGroup(true, achievedOffset_);
     }
-    if (offset_ > 0) action(body, i18n::tr("goals.ui.previous"), [this] { later([this] { offset_ -= chart_goals::pageSize; reload(); }); });
-    if (page_.hasMore) action(body, i18n::tr("goals.ui.next"), [this] { later([this] { offset_ += chart_goals::pageSize; reload(); }); });
   }
   if (!message_.empty()) label(body, message_, 19)->setThemedColor(app_theme::coral);
   addView(portal_); layout();

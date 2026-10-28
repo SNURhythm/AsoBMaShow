@@ -1488,9 +1488,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
     } else {
       chartListItemView->setBestScoreRank(0, 0);
     }
-    chartListItemView->setGoalState(chartGoalIndex.modeFor(item.meta.SHA256,
+    const auto goalMode = chartGoalIndex.modeFor(item.meta.SHA256,
         scoreLongNoteModeForClearLamp(item.meta,
-            long_note_mode::valueFromId(profileSelections.longNoteMode))).has_value());
+            long_note_mode::valueFromId(profileSelections.longNoteMode)));
+    bool goalAchieved = false;
+    if (goalMode) {
+      const auto achieved = chartGoalIndex.achievedModes.find(chart_goals::normalizedHash(item.meta.SHA256));
+      goalAchieved = achieved != chartGoalIndex.achievedModes.end() &&
+          (achieved->second & (1u << *goalMode));
+    }
+    chartListItemView->setGoalState(goalMode.has_value(), goalAchieved);
     chartListItemView->setGoalHandler([this](const ChartMetaRecord &record) {
       openChartGoal(record);
     });
@@ -2848,7 +2855,7 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   std::string goalError;
   const auto goals = context.scoreRepository.LoadChartGoalIndex(goalError);
   chartGoalIndex = goals.value_or(chart_goals::Index{});
-  chartGoalHashes = chartGoalIndex.hashes();
+  chartGoalHashes = chartGoalIndex.activeHashes();
   if (!goals) SDL_Log("Unable to load goal folders: %s", goalError.c_str());
   assignmentDayId = streak::today();
   assignmentDay = {};

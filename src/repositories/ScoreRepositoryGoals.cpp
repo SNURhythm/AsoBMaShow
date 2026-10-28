@@ -64,7 +64,17 @@ std::optional<chart_goals::Index> ScoreRepository::LoadChartGoalIndex(std::strin
   std::lock_guard lock(impl_->sessionMutex);
   error.clear();
   if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return {}; }
-  try { return chart_goals::loadIndex(impl_->sessionDatabase); }
+  SqliteTransactionHandle tx(impl_->sessionDatabase, "BEGIN", error);
+  if (!tx.active()) return {};
+  try {
+    auto result = chart_goals::loadIndex(impl_->sessionDatabase);
+    for (const auto &[hash, mask] : result.modes)
+      for (const auto &goal : chart_goals::loadForChart(impl_->sessionDatabase, hash))
+        if (project(impl_->sessionDatabase, goal).progress.achieved)
+          result.achievedModes[hash] |= 1u << goal.longNoteMode;
+    if (!tx.commit(error)) return {};
+    return result;
+  }
   catch (const std::exception &failure) { error = failure.what(); return {}; }
 }
 std::optional<chart_goals::GoalProgress> ScoreRepository::PreviewChartGoal(

@@ -13,7 +13,7 @@ unchanged and are not required to use goals.
   mode. An empty flag opens a new goal editor.
 - The favorite star is beside the chart title in the detail panel.
 - The **Goals** folder in either selector gathers indexed charts with goals
-  across LN modes, including achieved goals. Normal search and filters apply.
+  across LN modes with at least one unfinished goal. Normal search and filters apply.
 - Choose a minimum successful lamp, a score rank (E through MAX), a custom EX
   rate to two decimal places, or both. If both are chosen, both must be met.
 - Open **Personal goals** from Combo to browse goals, including achieved ones,
@@ -75,3 +75,10 @@ research are in [the ecosystem report](../research/rhythm-game-motivation-2026-1
 The goal editor shows the current best lamp and EX score before saving, including eligible imported records for the selected LN scope.
 
 New achievements play a short trumpet-style fanfare when the result banner appears, using the existing system sound bus and master volume.
+
+Flags are green when the goal they open is achieved. Achieved-only charts are
+excluded from the Goals folder. A
+chart remains in that folder while any LN-mode goal is unfinished. In Personal
+goals, unfinished goals appear first; achieved goals are collapsed at the bottom
+behind the same plus/hide control used by Combo optional challenges. Each group
+pages independently. Titles and subtitles share one heading.

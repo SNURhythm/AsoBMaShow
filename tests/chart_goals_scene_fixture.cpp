@@ -34,6 +34,8 @@ struct ChartGoalsScene {
     struct { std::string selectedLnMode = "HCN"; } settings; } context;
   std::string profileId_ = "one", message_, customRate_;
   bool editing_ = true, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
+  bool showAchieved_ = false;
+  int achievedOffset_ = 0;
   int offset_ = 20, builds = 0, reloads = 0;
   chart_goals::Goal draft_;
   chart_goals::ProgressPage page_;
