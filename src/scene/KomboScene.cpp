@@ -628,7 +628,8 @@ void KomboScene::routine(View *body) {
   body->addView(assignments);
   for (std::size_t i = 0; i < draft_.assignments.size(); ++i) {
     const auto &a = draft_.assignments[i];
-    label(assignments, assignmentName(a) + (kombo::isGoalsAssignment(a) ? "" : "  ·  " + assignmentLevelsText(a)), 22);
+    auto *title = label(assignments, assignmentName(a) + (kombo::isGoalsAssignment(a) ? "" : "  ·  " + assignmentLevelsText(a)), 22);
+    if (i > 0) title->setMargin(Edge::Top, 8);
     const auto quota = kombo::isGoalsAssignment(a) ? i18n::plural("kombo.ui.goal_count", a.chartCount)
         : i18n::plural("kombo.ui.chart_count", a.chartCount);
     label(assignments, quota.resolve() + " · " + i18n::plural("kombo.ui.reward", kombo::regularRoundPoints).resolve(), 18);
