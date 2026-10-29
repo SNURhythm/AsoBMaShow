@@ -47,10 +47,16 @@ class ChartGoalsSceneTests(unittest.TestCase):
 #include <string>
 #include <utility>
 #include <vector>
+#include "LongNoteModeUtils.h"
 struct ChartMetaRecord { struct { std::string SHA256, BmsPath; } meta; };
 struct Profile { std::string id="profile"; };
 struct Manager { Profile activeProfile() const { return {}; } };
-struct Context { Manager profileManager; };
+struct Context {
+  Manager profileManager;
+  struct { std::string selectedLnMode="LN"; } settings;
+  int saves=0;
+  bool saveSettings() { ++saves; return true; }
+};
 struct Base {
   Context context;
   std::optional<std::pair<ChartMetaRecord,int>> pendingGoalSelection_;
@@ -91,21 +97,28 @@ int main() {
             tests.append(f'''{{ {name} s; {set_selected}
   auto select=s.{entry}("profile"); select(target,2);
   assert(!s.pendingGoalSelection_ && s.pendingGoalProfile_.empty());
+  assert(s.context.settings.selectedLnMode=="CN" && s.context.saves==1);
+  select(target,2); // An unchanged mode needs no extra settings write.
+  select(target,0); // Goals without selectable LN mode keep the current preference.
+  assert(s.context.settings.selectedLnMode=="CN" && s.context.saves==1);
   target.meta.SHA256="different"; select(target,2);
   assert(s.pendingGoalSelection_ && s.pendingGoalSelection_->second==2);
   assert(s.pendingGoalProfile_=="profile");
+  assert(s.context.saves==1); // Other charts still apply their mode on resume.
   target.meta.SHA256="hash"; s.pendingGoalSelection_.reset(); s.pendingGoalProfile_.clear();
   {clear_selected} select(target,1); assert(s.pendingGoalSelection_);
   s.pendingGoalSelection_.reset(); s.pendingGoalProfile_.clear();
+  {set_selected}
   auto stale=s.{entry}("old-profile"); stale(target,1);
   assert(!s.pendingGoalSelection_ && s.pendingGoalProfile_.empty());
+  assert(s.context.settings.selectedLnMode=="CN" && s.context.saves==1);
 }}''')
         fixture = fixture.replace("CALLBACKS_MAIN", "").replace("CALLBACKS_SKIN", "")
         fixture = fixture.replace("METHODS", "\n".join(methods)).replace("TESTS", "\n".join(tests))
         with tempfile.TemporaryDirectory(prefix="goals-existing-selection-") as directory:
             source, binary = Path(directory) / "selection.cpp", Path(directory) / "selection"
             source.write_text(fixture)
-            FixtureCompiler.from_environment().build([source], binary, source.parent)
+            FixtureCompiler.from_environment().build([source], binary, source.parent, includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
     def test_picker_orders_unfinished_first_without_reordering_each_group(self):

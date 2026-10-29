@@ -5445,7 +5445,14 @@ void MainMenuScene::queueGoalSelection(const ChartMetaRecord &record, int mode, 
   // Check before resume reloads the selector, which may restore folders asynchronously.
   const auto selected = selectedRecordSnapshot();
   if (activeTab_ == Tab::Play && selected && !record.meta.SHA256.empty() &&
-      selected->meta.SHA256 == record.meta.SHA256) return;
+      selected->meta.SHA256 == record.meta.SHA256) {
+    // Resume refreshes mode-dependent scores and lamps while retaining the folder.
+    if (mode > 0 && context.settings.selectedLnMode != long_note_mode::idFromValue(mode)) {
+      context.settings.selectedLnMode = long_note_mode::idFromValue(mode);
+      (void)context.saveSettings();
+    }
+    return;
+  }
   pendingGoalSelection_ = std::pair{record, mode};
   pendingGoalProfile_ = profile;
 }

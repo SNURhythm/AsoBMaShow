@@ -3727,7 +3727,14 @@ void MusicSelectScene::queueGoalSelection(const ChartMetaRecord &record, int mod
   if (snapshot.selectedIndex < snapshot.rowCount()) {
     const auto &selected = snapshot.rowAt(snapshot.selectedIndex).chart;
     if (selected && !record.meta.SHA256.empty() &&
-        selected->meta.SHA256 == record.meta.SHA256) return;
+        selected->meta.SHA256 == record.meta.SHA256) {
+      // Resume refreshes mode-dependent scores and lamps while retaining the folder.
+      if (mode > 0 && context.settings.selectedLnMode != long_note_mode::idFromValue(mode)) {
+        context.settings.selectedLnMode = long_note_mode::idFromValue(mode);
+        (void)context.saveSettings();
+      }
+      return;
+    }
   }
   pendingGoalSelection_ = std::pair{record, mode};
   pendingGoalProfile_ = profile;
