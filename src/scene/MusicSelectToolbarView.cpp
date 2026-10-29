@@ -335,13 +335,13 @@ void MusicSelectToolbarView::setControlEnabled(MusicSelectToolbarControl control
 }
 
 void MusicSelectToolbarView::setGoalState(bool present, bool achieved, int lampRank,
-                                          std::string lamp, std::string score, bool recommended) {
+                                          std::string lamp, std::string score, bool recommended, std::string coverage) {
   recommended = !present && recommended;
   if (goalPresent_ == present && goalAchieved_ == achieved && goalLampRank_ == lampRank &&
-      goalLamp_ == lamp && goalScore_ == score && goalRecommended_ == recommended) return;
+      goalLamp_ == lamp && goalScore_ == score && goalCoverage_ == coverage && goalRecommended_ == recommended) return;
   goalPresent_ = present; goalAchieved_ = achieved; goalLampRank_ = lampRank;
   goalRecommended_ = recommended;
-  goalLamp_ = std::move(lamp); goalScore_ = std::move(score);
+  goalLamp_ = std::move(lamp); goalScore_ = std::move(score); goalCoverage_ = std::move(coverage);
   refreshGoalAppearance();
 }
 void MusicSelectToolbarView::refreshGoalAppearance() {
@@ -352,7 +352,7 @@ void MusicSelectToolbarView::refreshGoalAppearance() {
     if (control.control != MusicSelectToolbarControl::Goal || !control.icon) continue;
     control.icon->setThemedColor(goalPresent_ ? (goalAchieved_ ? app_theme::lime : app_theme::cyan)
                                               : app_theme::textMuted);
-    goalBubble_->setTarget(goalLampRank_, goalLamp_, goalScore_);
+    goalBubble_->setTarget(goalLampRank_, goalLamp_, goalScore_, goalCoverage_);
     goalBubble_->showFor(goalPresent_ && !goalAchieved_ && isControlEnabled(MusicSelectToolbarControl::Goal));
     placeGoalBubble();
     return;

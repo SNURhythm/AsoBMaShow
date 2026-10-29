@@ -17,7 +17,7 @@ public:
                bool expanded, uint32_t icon = 0, bool section = false);
   void setGoalAction(std::function<void()> action);
   void setGoalState(bool present, bool achieved = false);
-  void setGoalTarget(int lampRank, const std::string &lamp, const std::string &score);
+  void setGoalTarget(int lampRank, const std::string &lamp, const std::string &score, const std::string &coverage = {});
   void onSelected() override;
   void onUnselected() override;
 

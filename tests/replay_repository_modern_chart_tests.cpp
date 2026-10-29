@@ -1,4 +1,6 @@
 #include "repositories/ReplayRepository.h"
+#include "repositories/ReplayRepositoryInternal.h"
+#include "support/TestFlight166Fixture.h"
 
 #include "ir/IrSubmissionSnapshot.h"
 #include "FileChecksum.h"
@@ -176,33 +178,44 @@ void testLegacyLightAssistMigrationPreservesAuthenticatedResults() {
   {
     ReplayRepository repository(path);
     assert(repository.EnsureSchema());
-    assert(repository.StageModernChartResult(legacy, legacySnapshot, {}, {}).status ==
+    const std::vector drafts{draft(*legacySnapshot)};
+    const auto reserved=repository.ReserveModernReplayPath(legacy.attemptId,legacy.score.chartSha256,legacy.playedAtUnixMillis);
+    assert(reserved.reservation);
+    const auto file=attachment(*reserved.reservation);
+    assert(repository.RecordModernReplayInstallIntent(*reserved.reservation,
+        {.attemptToken=legacy.attemptId,.metadata=file.metadata}).status==ModernReplayOwnershipRecordStatus::Recorded);
+    assert(repository.StageModernChartResult(legacy, legacySnapshot, file, drafts, 123).status ==
            ModernChartStageStatus::Staged);
+    assert(repository.ReserveModernReplayPath(attemptId(92),repeated('e',64),legacy.playedAtUnixMillis).reservation);
   }
+  testflight166::install(path,"replays.sql");
+  testflight166::Rows original,expected;
   {
     auto db = openDatabase(path);
-    std::vector<std::string> definitions;
-    SqliteStatementHandle statement;
-    assert(prepareSqliteStatement(db.get(),
-        "SELECT sql FROM sqlite_master WHERE tbl_name='ir_remote_scores' AND sql IS NOT NULL "
-        "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END", statement) == SQLITE_OK);
-    while (sqlite3_step(statement.get()) == SQLITE_ROW)
-      definitions.push_back(sqliteColumnString(statement.get(), 0));
-    statement.reset();
-    assert(definitions.size() == 3);
-    const std::string canonical = "(0,50,100,200,300,400,500,600)";
-    const auto offset = definitions[0].find(canonical);
-    assert(offset != std::string::npos);
-    definitions[0].replace(offset, canonical.size(), "(0,100,150,200,300,400,500,600)");
-    exec(db.get(), "DROP TABLE ir_remote_scores");
-    for (const auto &definition : definitions) exec(db.get(), definition);
     exec(db.get(), "INSERT INTO ir_remote_scores(provider_id,server_origin,remote_score_id,"
         "remote_user_id,game,remote_chart_id,chart_md5,chart_sha256,title,artist,note_count,"
         "score,lamp_rank,service,time_added_ms,sync_generation) VALUES("
         "'tachi','https://boku.tachi.ac','legacy-light',42,'bms-7k','chart','" +
         repeated('b', 32) + "','" + repeated('a', 64) +
         "','Title','Artist',5,7,150,'Bokutachi',1700000000000,1)");
-    exec(db.get(), "PRAGMA user_version=20");
+    exec(db.get(),"INSERT INTO legacy_chart_result_summaries(legacy_replay_id,chart_title,clear_type,partial) "
+        "VALUES(166,'Legacy chart',150,1);"
+        "INSERT INTO ir_submission_receipts(provider_id,server_origin,modern_chart_result_id,attempt_id,"
+        "chart_sha256,confirmation_source,confirmed_at_ms) SELECT 'fake','https://example.invalid',id,"
+        "attempt_id,chart_sha256,0,1700000000000 FROM modern_chart_results;");
+    assert(queryInt(db.get(), "PRAGMA user_version")==19);
+    original=testflight166::snapshot(db.get()); expected=testflight166::snapshot(db.get(),true);
+    const auto schema=testflight166::schemaSnapshot(db.get());
+    // Fail after the remote-lamp table rebuild, then verify transactional rollback.
+    const auto deny=[](void *,int action,const char *name,const char *,const char *,const char *) {
+      return action==SQLITE_CREATE_TABLE && name && std::string_view(name)=="modern_pending_chart_gauge_evidence"
+          ? SQLITE_DENY : SQLITE_OK;
+    };
+    assert(sqlite3_set_authorizer(db.get(),deny,nullptr)==SQLITE_OK);
+    assert(!replay_repository_detail::MigrateSchema(db.get()));
+    assert(sqlite3_set_authorizer(db.get(),nullptr,nullptr)==SQLITE_OK);
+    assert(queryInt(db.get(), "PRAGMA user_version")==19);
+    assert(testflight166::snapshot(db.get())==original && testflight166::schemaSnapshot(db.get())==schema);
   }
   ReplayRepository upgraded(path);
   assert(upgraded.EnsureSchema());
@@ -210,6 +223,10 @@ void testLegacyLightAssistMigrationPreservesAuthenticatedResults() {
   assert(queryInt(db.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(db.get(), "SELECT lamp_rank FROM ir_remote_scores") == 50);
   assert(queryInt(db.get(), "SELECT clear_type FROM modern_chart_results") == 150);
+  testflight166::preserved(expected,testflight166::snapshot(db.get()));
+  const auto pending=upgraded.LoadPendingModernChartScore(legacy.attemptId);
+  assert(pending.status==result_persistence::PendingReadStatus::Found && !pending.value->gaugeEvidence.recorded);
+
   const auto loaded = upgraded.LoadModernChartResultByAttempt(legacy.attemptId);
   assert(loaded.status == ModernChartResultReadStatus::Loaded && loaded.record);
   assert(loaded.record->result.resultFingerprint == legacy.resultFingerprint);
@@ -220,7 +237,9 @@ void testLegacyLightAssistMigrationPreservesAuthenticatedResults() {
   canonical.resultFingerprint = result_persistence::modernResultFingerprint(canonical);
   assert(result_persistence::compareModernChartResultFacts(loaded.record->result, canonical).agrees());
   assert(result_persistence::describeChartScoreDifference(loaded.record->result.score, canonical.score).empty());
+  const auto rows=testflight166::snapshot(db.get());
   assert(upgraded.EnsureSchema());
+  assert(testflight166::snapshot(db.get())==rows);
 }
 
 void testPendingGaugeEvidenceRecoveryAndCleanup() {

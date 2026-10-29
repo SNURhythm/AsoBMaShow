@@ -10,8 +10,8 @@ namespace folder_goals {
 struct PendingTarget { Target target; double percent=0; };
 struct Status {
   bool present=false, achieved=false;
-  int pendingLampCount=0, pendingExCount=0;
-  std::optional<PendingTarget> pendingLamp, pendingEx;
+  int pendingLampCount=0, pendingExCount=0, pendingCoverageCount=0;
+  std::optional<PendingTarget> pendingLamp, pendingEx, pendingCoverage;
 };
 // Selection is deliberately absent from this key: cursor motion must never
 // scan score summaries or reaggregate large collections.
@@ -29,8 +29,10 @@ public:
       status.achieved=(!status.present || status.achieved) && row.progress.achieved;
       status.present=true;
       if (!row.progress.achieved) {
-        ++(row.goal.target.type==Type::Lamp ? status.pendingLampCount : status.pendingExCount);
-        auto &pending=row.goal.target.type==Type::Lamp ? status.pendingLamp : status.pendingEx;
+        ++(row.goal.target.type==Type::Lamp ? status.pendingLampCount :
+            row.goal.target.type==Type::AverageEx ? status.pendingExCount : status.pendingCoverageCount);
+        auto &pending=row.goal.target.type==Type::Lamp ? status.pendingLamp :
+            row.goal.target.type==Type::AverageEx ? status.pendingEx : status.pendingCoverage;
         if (!pending) pending=PendingTarget{row.goal.target,row.progress.percent};
       }
     }

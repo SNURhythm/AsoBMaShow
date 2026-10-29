@@ -12,6 +12,7 @@
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldPresentationEvents.h"
 #include "PlayfieldPresentationMetadata.h"
+#include "JudgementIndicatorColorizationSnapshot.h"
 #include "LaneEffects.h"
 #include "../../practice/PracticeConfiguration.h"
 
@@ -130,7 +131,7 @@ struct PlayfieldPresentationConfig {
   int judgementIndicatorLineThicknessPercent = 100;
   int judgementIndicatorEventHeightPercent = 100;
   int judgementIndicatorEventThicknessPercent = 100;
-  judgement_indicator::Colorization judgementIndicatorColorization;
+  judgement_indicator::SharedColorization judgementIndicatorColorization;
   bool judgementIndicatorHudMode = false;
   int judgementIndicatorRangeMilliseconds = 0;
   keybomb::Settings keybombs;

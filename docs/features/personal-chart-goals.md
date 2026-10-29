@@ -214,7 +214,8 @@ history. Source lists page in groups of 20.
 Folder flags follow chart-goal colors: neutral when unset, accent while active,
 and lime when all goals for the selected LN mode are achieved. Selecting an
 unfinished goal shows a bubble with current/target percentages, such as
-**HARD 60.00%/80.00%** and **Avg EX 72.50%/85.00%**. Each unfinished goal type
+**HARD 60.00%/80.00%**, **Avg EX 72.50%/85.00%**, and a separate EX coverage
+line. Each unfinished goal type
 has its own line; completed targets are omitted. If several unfinished goals
 share a type, the bubble shows the total unfinished goal count. Open the flag
 to view each target and its progress.

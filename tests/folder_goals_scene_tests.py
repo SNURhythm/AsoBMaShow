@@ -56,6 +56,7 @@ struct FolderGoalsScene {
  bool detail_=false,editing_=false,confirmRemove_=false,failed_=false,achieved_=false;
  bool picker_=false,newGoal_=false,sourceOrigin_=false;
  std::optional<folder_goals::Goal> editorReturn_;
+  int draftScoreRank_=0;
  std::string renderedPage_;
  ScrollView *scroll_=nullptr,*navigationScroll_=nullptr;
  int returnTarget_=0;
@@ -131,6 +132,10 @@ int main(){
  assert(ranks.context.scoreRepository.saved.target.scoreRank==0 && ranks.context.scoreRepository.saved.target.percent==8777);
  ranks.addGoal();ranks.changeScope(2,folder_goals::Type::AverageEx);ranks.selectScoreTarget("21");
  ranks.changeScope(2,folder_goals::Type::Lamp);assert(ranks.draft_.target.scoreRank==0);
+ ranks.changeScope(3,folder_goals::Type::AverageEx);assert(ranks.draft_.target.scoreRank==21);
+ ranks.changeScope(3,folder_goals::Type::ExCoverage);assert(ranks.draft_.target.scoreRank==21);
+ ranks.changeScope(3,folder_goals::Type::Lamp);
+ ranks.changeScope(3,folder_goals::Type::ExCoverage);assert(ranks.draft_.target.scoreRank==21);
  FolderGoalsScene coverage;
  coverage.choose({.source=source,.target={.type=folder_goals::Type::ExCoverage,.percent=8000}});
  coverage.selectScoreTarget("24");
@@ -174,7 +179,7 @@ namespace i18n {
  }
 }
 namespace folder_goals {
-struct BubbleLabels {int lampRank=-1;std::string lamp,score;};
+struct BubbleLabels {int lampRank=-1;std::string lamp,score,coverage;};
 METHOD
 }
 int main() {
@@ -194,9 +199,11 @@ int main() {
  assert(folder_goals::bubbleLabels(s).score=="folder_goals.ui.ex_bubble:72.50%/AAA");
  folder_goals::Goal goal{.target=s.pendingEx->target};
  assert(folder_goals::targetText(goal)=="folder_goals.ui.ex_target:AAA");
- s.pendingEx->target.type=folder_goals::Type::ExCoverage;s.pendingEx->target.percent=8000;s.pendingEx->percent=50;
- assert(folder_goals::bubbleLabels(s).score=="folder_goals.ui.ex_coverage_bubble:AAA:50.00%/80.00%");
- goal.target=s.pendingEx->target;
+ s.pendingCoverage=s.pendingEx;s.pendingCoverageCount=1;
+ s.pendingCoverage->target.type=folder_goals::Type::ExCoverage;s.pendingCoverage->target.percent=8000;s.pendingCoverage->percent=50;
+ assert(folder_goals::bubbleLabels(s).coverage=="folder_goals.ui.ex_coverage_bubble:AAA:50.00%/80.00%");
+ assert(folder_goals::bubbleLabels(s).score=="folder_goals.ui.ex_bubble:72.50%/AAA");
+ goal.target=s.pendingCoverage->target;
  assert(folder_goals::targetText(goal)=="folder_goals.ui.ex_coverage_target:80.00%:AAA");
 }
 '''.replace('METHOD',method)

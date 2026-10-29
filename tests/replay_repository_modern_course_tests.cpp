@@ -1,4 +1,5 @@
 #include "repositories/ReplayRepository.h"
+#include "support/TestFlight166Fixture.h"
 
 #include "repositories/SqliteRAII.h"
 #include "replay/ReplayProfileInventory.h"
@@ -171,6 +172,39 @@ ModernReplayPathReservation reserve(ReplayRepository &repository,
   assert(reserved.status == ModernReplayReservationStatus::Reserved &&
          reserved.reservation.has_value());
   return *reserved.reservation;
+}
+
+void testTestFlight166CourseMigration() {
+  TemporaryDirectory temporary;
+  const auto path=temporary.path/"release-course.db";
+  const auto completed=result(166);
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    const auto reservation=reserve(repository,completed);
+    const auto file=attachment(reservation);
+    assert(repository.RecordModernReplayInstallIntent(reservation,
+        {.attemptToken=completed.attemptId,.metadata=file.metadata}).status==ModernReplayOwnershipRecordStatus::Recorded);
+    assert(repository.StageModernCourseResult(completed,file,coursePathInput(completed)).status==ModernCourseStageStatus::Staged);
+  }
+  testflight166::install(path,"replays.sql");
+  auto db=openDatabase(path);
+  assert(queryInt(db.get(),"PRAGMA user_version")==19);
+  exec(db.get(),"INSERT INTO legacy_course_result_summaries(legacy_course_replay_id,course_name,clear_type,partial) "
+      "VALUES(166,'Legacy course',150,1)");
+  const auto before=testflight166::snapshot(db.get());
+  db.reset();
+  ReplayRepository upgraded(path);
+  assert(upgraded.EnsureSchema());
+  db=openDatabase(path);
+  testflight166::preserved(before,testflight166::snapshot(db.get()));
+  const auto loaded=upgraded.LoadModernCourseResultByAttempt(completed.attemptId);
+  assert(loaded.status==ModernCourseResultReadStatus::Loaded && loaded.record);
+  assert(loaded.record->result.resultFingerprint==completed.resultFingerprint);
+  assert(queryInt(db.get(),"SELECT count(*) FROM modern_pending_course_score_writes")==1);
+  const auto rows=testflight166::snapshot(db.get());
+  assert(upgraded.EnsureSchema());
+  assert(testflight166::snapshot(db.get())==rows);
 }
 
 void testAtomicCourseStageExactRetryAndStrictRead() {
@@ -604,6 +638,7 @@ void testExactRetryAttachesOnlyMissingCourseReplayAtomically() {
 
 int main() {
 #ifdef ASOBMASHOW_HAS_MODERN_COURSE_REPOSITORY
+  testTestFlight166CourseMigration();
   testAtomicCourseStageExactRetryAndStrictRead();
   testResultOnlyHistoryAndRollbackPreserveReservation();
   testReplayFileOwnerCheckRejectsBothAndNeither();

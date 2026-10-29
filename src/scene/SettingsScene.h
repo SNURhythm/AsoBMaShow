@@ -390,6 +390,7 @@ private:
   std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
   std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
   built_in_notes::SharedModeStyles previewNoteStyles;
+  judgement_indicator::SharedColorization previewIndicatorColors;
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;

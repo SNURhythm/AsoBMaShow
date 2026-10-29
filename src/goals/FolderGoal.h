@@ -2,6 +2,8 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <map>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -47,6 +49,14 @@ void validate(const Goal &);
 std::string sourceKey(const Source &);
 std::string scopeKey(const Goal &);
 std::string key(const Goal &);
+struct Aggregate {
+  Progress counts;
+  long double scoreSum = 0;
+  std::map<int, std::int64_t> lamps;
+  std::vector<std::pair<int,int>> scores; // Sorted rational EX rates.
+};
+Aggregate aggregate(std::span<const Member>);
+Progress evaluateAggregate(const Target &, const Aggregate &);
 Progress evaluate(const Target &, std::span<const Member>);
 std::string percentText(double percent);
 } // namespace folder_goals

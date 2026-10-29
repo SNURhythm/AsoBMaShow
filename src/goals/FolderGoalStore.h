@@ -17,11 +17,13 @@ public:
   explicit Projector(sqlite3 *charts) : charts_(charts) {}
   void refresh();
   Progress project(const Goal &, const Evidence &);
+  std::vector<Progress> projectAll(std::span<const Goal>, const Evidence &);
   bool contains(const Source &, std::string_view hash);
 private:
   struct Chart { std::string hash; bool available = false; int mode = 0, longNotes = 0, notes = 0; };
   struct Membership { bool exists = false; std::vector<Chart> charts; };
   const Membership &members(const Source &);
+  Aggregate summarize(const Goal &, const Evidence &);
   sqlite3 *charts_;
   int dataVersion_ = -1;
   std::map<std::string, Membership> cache_;

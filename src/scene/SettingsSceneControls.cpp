@@ -1563,8 +1563,10 @@ void SettingsScene::appendJudgementIndicatorColorizationSettings(
             return &context.settings.presentation().judgementIndicatorColorization.judgements[judge];
           },
           [this, judge](std::uint32_t rgb) {
-            appearanceColorPreview = [judge, rgb](auto &configuration) {
-              configuration.judgementIndicatorColorization.judgements[judge].color = rgb;
+            auto draft = context.settings.presentation().judgementIndicatorColorization;
+            draft.judgements[judge].color = rgb;
+            appearanceColorPreview = [colors = snapshotColorization(draft)](auto &configuration) {
+              configuration.judgementIndicatorColorization = colors;
             };
           });
     }
@@ -1620,9 +1622,10 @@ void SettingsScene::appendJudgementIndicatorColorizationSettings(
           return index < ranges.size() ? &ranges[index].style : nullptr;
         },
         [this, index](std::uint32_t rgb) {
-          appearanceColorPreview = [index, rgb](auto &configuration) {
-            auto &ranges = configuration.judgementIndicatorColorization.ranges;
-            if (index < ranges.size()) ranges[index].style.color = rgb;
+          auto draft = context.settings.presentation().judgementIndicatorColorization;
+          if (index < draft.ranges.size()) draft.ranges[index].style.color = rgb;
+          appearanceColorPreview = [colors = snapshotColorization(draft)](auto &configuration) {
+            configuration.judgementIndicatorColorization = colors;
           };
         });
   }
@@ -1631,8 +1634,10 @@ void SettingsScene::appendJudgementIndicatorColorizationSettings(
   appendStyle(settings.outerRange, Poor, "indicator-outer-range",
       [this] { return &context.settings.presentation().judgementIndicatorColorization.outerRange; },
       [this](std::uint32_t rgb) {
-        appearanceColorPreview = [rgb](auto &configuration) {
-          configuration.judgementIndicatorColorization.outerRange.color = rgb;
+        auto draft = context.settings.presentation().judgementIndicatorColorization;
+        draft.outerRange.color = rgb;
+        appearanceColorPreview = [colors = snapshotColorization(draft)](auto &configuration) {
+          configuration.judgementIndicatorColorization = colors;
         };
       }, false);
   auto *add = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,

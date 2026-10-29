@@ -1722,7 +1722,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           long_note_mode::valueFromId(this->context.settings.selectedLnMode)) : folder_goals::Status{};
       folderView->setGoalState(goalStatus.present, goalStatus.achieved);
       const auto goalLabels = folder_goals::bubbleLabels(goalStatus);
-      folderView->setGoalTarget(goalLabels.lampRank, goalLabels.lamp, goalLabels.score);
+      folderView->setGoalTarget(goalLabels.lampRank, goalLabels.lamp, goalLabels.score, goalLabels.coverage);
       folderView->setGoalAction(goalSource ? std::function<void()>([this,source=*goalSource] {
           const auto profile=this->context.profileManager.activeProfile().id;
           defer([this,source,profile] { if (profile==this->context.profileManager.activeProfile().id) openFolderGoals(source); return true; },0,true);

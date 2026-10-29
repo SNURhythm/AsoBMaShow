@@ -182,6 +182,16 @@ void testFolderGoalFlagStates() {
     row.applyYogaLayout();
     require(bubble->getWidth() > 150 && bubble->getWidth() <= 280,
             "folder progress bubbles widen for long lamp names and precise percentages");
+    row.setGoalTarget(400, "HARD 60%/80%", "Avg EX 72%/85%", "AAA coverage 50%/80%");
+    row.applyYogaLayout();
+    auto *coverage = bubble->findViewByName("chartGoalBubbleCoverage");
+    require(coverage && coverage->getVisible() && bubble->getHeight()==67,
+            "three independent folder target types each have a visible row");
+    require(coverage->getY()+coverage->getHeight()<=bubble->getY()+bubble->getHeight(),
+            "third row fits inside the expanded bubble");
+    row.setGoalTarget(400, "HARD 60%/80%", "Avg EX 72%/85%");
+    row.applyYogaLayout();
+    require(!coverage->getVisible() && bubble->getHeight()==48, "removing coverage restores two-row geometry");
   }
 }
 } // namespace
@@ -193,10 +203,11 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart list row");
 
+  for (int bubbleHeight : {48, 67})
   for (int bubbleWidth : {150, 280})
   for (const auto [x, y] : {std::pair{0, 0}, std::pair{310, 0}, std::pair{0, 190}, std::pair{310, 190}}) {
     const auto p = placeGoalBubble(x, y, 36, 48, 320, 200,
-                                   {.top=12, .right=14, .bottom=10, .left=16}, bubbleWidth);
+                                   {.top=12, .right=14, .bottom=10, .left=16}, bubbleWidth, bubbleHeight);
     require(p.x >= 20 && p.y >= 16 && p.x + p.width <= 302 && p.y + p.height <= 186,
             "goal bubble stays inside every safe-area edge");
   }

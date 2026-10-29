@@ -8,11 +8,11 @@ inline std::string rateTargetText(const Target &target) {
   return target.type!=Type::Lamp && target.scoreRank>0
       ? kombo::scoreRankLabel(target.scoreRank) : percentText(target.type==Type::Lamp ? targetPercent(target) : scoreTargetPercent(target));
 }
-struct BubbleLabels { int lampRank=-1; std::string lamp, score; };
+struct BubbleLabels { int lampRank=-1; std::string lamp, score, coverage; };
 inline BubbleLabels bubbleLabels(const Status &status) {
   BubbleLabels labels;
-  if (status.pendingLampCount>1 || status.pendingExCount>1) {
-    labels.score=i18n::format("goals.ui.count",{{"count",std::to_string(status.pendingLampCount+status.pendingExCount)}});
+  if (status.pendingLampCount>1 || status.pendingExCount>1 || status.pendingCoverageCount>1) {
+    labels.score=i18n::format("goals.ui.count",{{"count",std::to_string(status.pendingLampCount+status.pendingExCount+status.pendingCoverageCount)}});
     return labels;
   }
   const auto progress=[](const PendingTarget &value) {
@@ -24,10 +24,12 @@ inline BubbleLabels bubbleLabels(const Status &status) {
   }
   if (status.pendingEx) {
     const auto &value=*status.pendingEx;
-    labels.score=value.target.type==Type::ExCoverage
-        ? i18n::format("folder_goals.ui.ex_coverage_bubble",{{"score",rateTargetText(value.target)},
-            {"percent",percentText(value.percent)+"/"+percentText(targetPercent(value.target))}})
-        : i18n::format("folder_goals.ui.ex_bubble",{{"percent",progress(value)}});
+    labels.score=i18n::format("folder_goals.ui.ex_bubble",{{"percent",progress(value)}});
+  }
+  if (status.pendingCoverage) {
+    const auto &value=*status.pendingCoverage;
+    labels.coverage=i18n::format("folder_goals.ui.ex_coverage_bubble",{{"score",rateTargetText(value.target)},
+        {"percent",percentText(value.percent)+"/"+percentText(targetPercent(value.target))}});
   }
   return labels;
 }

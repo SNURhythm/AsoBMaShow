@@ -21,12 +21,16 @@ std::vector<folder_goals::GoalProgress> ScoreRepository::Impl::folderGoalsBefore
   std::vector<folder_goals::GoalProgress> out;
   if (goals.empty()) return out;
   auto &projection=folderProjector();
-  std::optional<folder_goals::Evidence> evidence;
-  for (const auto &g:goals) {
-    if (g.achievedAt || !projection.contains(g.source,hash)) continue;
-    if (!evidence) evidence=folder_goals::loadEvidence(sessionDatabase);
-    out.push_back({g,projection.project(g,*evidence)});
-  }
+  std::map<std::string,bool> contains;
+  std::erase_if(goals,[&](const auto &g) {
+    if (g.achievedAt) return true;
+    auto [it,inserted]=contains.try_emplace(folder_goals::sourceKey(g.source));
+    if (inserted) it->second=projection.contains(g.source,hash);
+    return !it->second;
+  });
+  if (goals.empty()) return out;
+  const auto progress=projection.projectAll(goals,folder_goals::loadEvidence(sessionDatabase));
+  for (std::size_t i=0;i<goals.size();++i) out.push_back({std::move(goals[i]),progress[i]});
   return out;
 }
 std::vector<folder_goals::Goal> ScoreRepository::Impl::folderGoalsAfterPlay(
@@ -41,8 +45,12 @@ std::vector<folder_goals::Goal> ScoreRepository::Impl::folderGoalsAfterPlay(
     throw std::runtime_error("Cannot read folder goal achievement time.");
   const auto timestamp=sqlite3_column_int64(time,0);
   // Use the same membership snapshot on both sides of this score write.
-  for (const auto &entry:before) {
-    if (!entry.progress.achieved && !folderGoalProjector->project(entry.goal,evidence).achieved) continue;
+  std::vector<folder_goals::Goal> goals;
+  for (const auto &entry:before) goals.push_back(entry.goal);
+  const auto progress=folderGoalProjector->projectAll(goals,evidence);
+  for (std::size_t i=0;i<before.size();++i) {
+    const auto &entry=before[i];
+    if (!entry.progress.achieved && !progress[i].achieved) continue;
     auto goal=entry.goal;
     goal.achievedAt=std::max<std::int64_t>(goal.setAt,timestamp);
     folder_goals::save(sessionDatabase,goal);
@@ -78,8 +86,10 @@ std::optional<std::vector<folder_goals::GoalProgress>> ScoreRepository::LoadFold
     if (!goals.empty()) {
       auto &projection=impl_->folderProjector();
       const auto evidence=folder_goals::loadEvidence(impl_->sessionDatabase);
-      for (auto &g:goals) {
-        auto progress=projection.project(g,evidence);
+      const auto projected=projection.projectAll(goals,evidence);
+      for (std::size_t i=0;i<goals.size();++i) {
+        auto &g=goals[i];
+        auto progress=projected[i];
         if (progress.achieved && !g.achievedAt) {
           g.achievedAt=std::max(g.setAt,chart_goals::nowUnixMillis());
           folder_goals::save(impl_->sessionDatabase,g); // History only, never play credit.

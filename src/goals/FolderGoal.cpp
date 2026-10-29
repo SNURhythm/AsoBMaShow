@@ -50,32 +50,48 @@ std::string scopeKey(const Goal &g) {
       std::to_string(static_cast<int>(g.target.type));
 }
 std::string key(const Goal &g) { return g.id; }
-Progress evaluate(const Target &t, std::span<const Member> members) {
-  validate(t);
-  Progress p;
+Aggregate aggregate(std::span<const Member> members) {
+  Aggregate result;
+  auto &p=result.counts;
   std::unordered_map<std::string, const Member *> unique;
+  unique.reserve(members.size());
   for (const auto &m : members) {
     auto [it, inserted] = unique.emplace(m.identity, &m);
     if (!inserted && !it->second->available && m.available) it->second = &m;
   }
-  long double sum = 0, compensation = 0;
+  long double compensation = 0;
   for (const auto &[id, row] : unique) {
     const auto &m = *row;
     if (!m.available) { ++p.missing; continue; }
     ++p.available;
-    if (t.type==Type::Lamp && clearLampOrder(m.lamp) >= clearLampOrder(t.lamp)) ++p.qualifying;
+    ++result.lamps[clearLampOrder(m.lamp)];
     if (m.maxScore <= 0) { ++p.unknownScore; continue; }
-    if (t.type==Type::ExCoverage) {
-      const int numerator=t.scoreRank>0 ? t.scoreRank : t.exPercent;
-      const int denominator=t.scoreRank>0 ? 27 : 10000;
-      if (static_cast<std::int64_t>(m.score)*denominator>=static_cast<std::int64_t>(m.maxScore)*numerator)
-        ++p.qualifying;
-    }
+    result.scores.emplace_back(m.score,m.maxScore);
     const long double value = std::clamp(static_cast<long double>(m.score) / m.maxScore, 0.L, 1.L);
     const long double adjusted = value - compensation;
-    const auto next = sum + adjusted;
-    compensation = (next - sum) - adjusted;
-    sum = next;
+    const auto next = result.scoreSum + adjusted;
+    compensation = (next - result.scoreSum) - adjusted;
+    result.scoreSum = next;
+  }
+  std::sort(result.scores.begin(),result.scores.end(),[](const auto &a,const auto &b) {
+    return static_cast<std::int64_t>(a.first)*b.second < static_cast<std::int64_t>(b.first)*a.second;
+  });
+  return result;
+}
+Progress evaluateAggregate(const Target &t, const Aggregate &aggregate) {
+  validate(t);
+  auto p=aggregate.counts;
+  const auto sum=aggregate.scoreSum;
+  if (t.type==Type::Lamp) {
+    for (const auto &[lamp,count]:aggregate.lamps) if (lamp>=clearLampOrder(t.lamp)) p.qualifying+=count;
+  } else if (t.type==Type::ExCoverage) {
+    const int numerator=t.scoreRank>0 ? t.scoreRank : t.exPercent;
+    const int denominator=t.scoreRank>0 ? 27 : 10000;
+    const auto first=std::lower_bound(aggregate.scores.begin(),aggregate.scores.end(),numerator,
+        [denominator](const auto &score,int value) {
+          return static_cast<std::int64_t>(score.first)*denominator < static_cast<std::int64_t>(score.second)*value;
+        });
+    p.qualifying=aggregate.scores.end()-first;
   }
   p.required = (p.available * t.percent + 9999) / 10000;
   if (!p.available) return p;
@@ -93,6 +109,9 @@ Progress evaluate(const Target &t, std::span<const Member> members) {
         8 * std::numeric_limits<long double>::epsilon() * p.available;
   }
   return p;
+}
+Progress evaluate(const Target &t, std::span<const Member> members) {
+  return evaluateAggregate(t,aggregate(members));
 }
 std::string percentText(double value) {
   std::ostringstream out;

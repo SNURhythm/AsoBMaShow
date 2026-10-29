@@ -116,6 +116,7 @@ void FolderGoalsScene::reload() {
 }
 void FolderGoalsScene::choose(folder_goals::Goal goal) {
   draft_=std::move(goal);
+  draftScoreRank_=0;
   const auto found=std::find_if(goals_.begin(),goals_.end(),[this](const auto &g){return folder_goals::key(g.goal)==folder_goals::key(draft_);});
   editing_=newGoal_=draft_.id.empty();
   editorReturn_.reset();
@@ -141,14 +142,19 @@ void FolderGoalsScene::addGoal() {
   const auto previous=detail_ ? std::optional(draft_) : std::nullopt;
   const auto source=detail_ ? draft_.source : *initial_;
   draft_={.source=source,.longNoteMode=long_note_mode::valueFromId(context.settings.selectedLnMode)};
+  draftScoreRank_=0;
   rate_=scoreRate_="100"; detail_=editing_=newGoal_=true; confirmRemove_=false; message_.clear();
   editorReturn_=previous;
   changeScope(draft_.longNoteMode,draft_.target.type);
 }
 void FolderGoalsScene::changeScope(int mode,folder_goals::Type type) {
   if (!newGoal_) return;
+  if (type!=draft_.target.type) {
+    if (type==folder_goals::Type::Lamp) {
+      draftScoreRank_=draft_.target.scoreRank; draft_.target.scoreRank=0;
+    } else if (draft_.target.type==folder_goals::Type::Lamp) draft_.target.scoreRank=draftScoreRank_;
+  }
   draft_.longNoteMode=std::clamp(mode,1,3); draft_.target.type=type;
-  if (type==folder_goals::Type::Lamp) draft_.target.scoreRank=0;
   auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
   progress_=preview ? std::optional(preview->progress) : std::nullopt;
 }

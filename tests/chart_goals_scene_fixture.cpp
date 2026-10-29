@@ -134,7 +134,11 @@ int main() {
   chartRecommendations.back(); chartRecommendations.flush();
   assert(!chartRecommendations.editing_ && chartRecommendations.recommendationChart_);
   chartRecommendations.back(); chartRecommendations.flush();
-  assert(chartRecommendations.manager.returned == 1); // Chart-specific recommendations return to their selector.
+  assert(chartRecommendations.manager.returned == 0 && !chartRecommendations.recommendationChart_);
+  assert(chartRecommendations.overviewTab_ == ChartGoalsScene::OverviewTab::Recommendations);
+  assert(chartRecommendations.recommendations_.contains(26));
+  chartRecommendations.back(); chartRecommendations.flush();
+  assert(chartRecommendations.manager.returned == 1);
   chartRecommendations.recommendationChart_ = Record{};
   chartRecommendations.context.profileManager.profile.id = "two";
   assert(!chartRecommendations.checkProfile() && !chartRecommendations.recommendationChart_);

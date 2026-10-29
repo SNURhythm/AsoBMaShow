@@ -175,7 +175,7 @@ bool Projector::contains(const Source &source,std::string_view hash) {
   const auto &m=members(source);
   return std::any_of(m.charts.begin(),m.charts.end(),[&](const auto &c){ return c.available && c.hash==hash; });
 }
-Progress Projector::project(const Goal &goal,const Evidence &evidence) {
+Aggregate Projector::summarize(const Goal &goal,const Evidence &evidence) {
   const auto &membership=members(goal.source);
   std::vector<Member> values;
   values.reserve(membership.charts.size());
@@ -192,8 +192,27 @@ Progress Projector::project(const Goal &goal,const Evidence &evidence) {
     if (m.maxScore<=0 && c.notes>0 && c.notes<=std::numeric_limits<int>::max()/2) m.maxScore=c.notes*2;
     values.push_back(std::move(m));
   }
-  auto p=evaluate(goal.target,values); p.sourceAvailable=membership.exists;
-  if (!membership.exists) p.achieved=false;
-  return p;
+  auto result=aggregate(values); result.counts.sourceAvailable=membership.exists;
+  return result;
+}
+Progress Projector::project(const Goal &goal,const Evidence &evidence) {
+  return projectAll(std::span(&goal,1),evidence).front();
+}
+std::vector<Progress> Projector::projectAll(std::span<const Goal> goals,const Evidence &evidence) {
+  // Evidence is one score snapshot. Keep only one scope aggregate in memory,
+  // and never retain it across operations.
+  std::map<std::pair<std::string,int>,std::vector<std::size_t>> groups;
+  for (std::size_t i=0;i<goals.size();++i)
+    groups[{sourceKey(goals[i].source),goals[i].longNoteMode}].push_back(i);
+  std::vector<Progress> out(goals.size());
+  for (const auto &[scope,indices]:groups) {
+    const auto summary=summarize(goals[indices.front()],evidence);
+    for (auto i:indices) {
+      auto progress=evaluateAggregate(goals[i].target,summary);
+      if (!progress.sourceAvailable) progress.achieved=false;
+      out[i]=progress;
+    }
+  }
+  return out;
 }
 } // namespace folder_goals

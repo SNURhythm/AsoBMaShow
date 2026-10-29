@@ -216,8 +216,8 @@ LibraryFolderItemView::~LibraryFolderItemView() {
   if (goalBubbleInOverlay_) delete goalBubble;
 }
 
-void LibraryFolderItemView::setGoalTarget(int lampRank, const std::string &lamp, const std::string &score) {
-  goalBubble->setTarget(lampRank, lamp, score);
+void LibraryFolderItemView::setGoalTarget(int lampRank, const std::string &lamp, const std::string &score, const std::string &coverage) {
+  goalBubble->setTarget(lampRank, lamp, score, coverage);
   refreshGoalButton();
 }
 

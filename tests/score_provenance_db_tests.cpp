@@ -1,4 +1,5 @@
 #include "support/SqliteInitializationTrace.h"
+#include "support/TestFlight166Fixture.h"
 #include "../src/CourseIdentity.h"
 #include "../src/CourseConstraintUtils.h"
 #include "../src/CoursePlaySession.h"
@@ -4232,12 +4233,80 @@ void testValidatedOpenCheckpointPolicy(const std::filesystem::path &root) {
 
 } // namespace
 
+void testTestFlight166ScoreMigration(const std::filesystem::path &root) {
+  const auto path=root/"testflight166-scores.db";
+  const auto meta=sampleMeta(root,"release166");
+  const auto provenance=sampleProvenance("release166");
+  {
+    ScoreRepository repository(path);
+    assert(repository.EnsureSchema());
+    assert(repository.SaveScore(meta,sampleState(90,10),provenance));
+    assert(repository.SaveScore(meta,sampleState(80,20),ScoreProvenance::Legacy()));
+    auto modified=provenance; modified.practice=true; modified.eligibility=ScoreEligibility::Modified;
+    assert(repository.SaveScore(meta,sampleState(95,5),modified));
+    CoursePlaySession course;
+    course.courseId=166; course.courseName="Release course"; course.constraintJson="{}";
+    course.longNoteMode=2; course.entries.push_back({.meta=meta});
+    course.courseKey=course_identity::makeCourseKey(course);
+    assert(repository.SaveCourseScore(course,sampleState(90,10),1,1,provenance));
+  }
+  testflight166::install(path,"scores.sql");
+  {
+    // Build 166's selector created this trigger through an attached score_db.
+    // Its stored ON score_db.scores must be repaired before schema mutations.
+    sqlite3 *memory=nullptr;
+    assert(sqlite3_open(":memory:",&memory)==SQLITE_OK);
+    SqliteConnectionHandle attached(memory);
+    SqliteStatementHandle attach;
+    assert(prepareSqliteStatement(attached.get(),"ATTACH DATABASE ? AS score_db",attach)==SQLITE_OK);
+    assert(bindSqliteText(attach,1,path.string()) && sqlite3_step(attach)==SQLITE_DONE);
+    attach.reset();
+    auto sql=queryText(attached.get(),"SELECT sql FROM score_db.sqlite_master WHERE name='score_sha256_summary_after_insert'");
+    sql.insert(std::string("CREATE TRIGGER ").size(),"score_db.");
+    const auto on=sql.find("AFTER INSERT ON scores"); assert(on!=std::string::npos);
+    sql.insert(on+std::string("AFTER INSERT ON ").size(),"score_db.");
+    execOrAbort(attached.get(),"DROP TRIGGER score_db.score_sha256_summary_after_insert");
+    execOrAbort(attached.get(),sql);
+  }
+  auto db=openDatabase(path);
+  assert(queryInt(db.get(),"PRAGMA user_version")==14);
+  execOrAbort(db.get(),"UPDATE scores SET clear_type=150 WHERE id=2; UPDATE course_scores SET clear_type=150;"
+      "CREATE TABLE profile_extension(key TEXT PRIMARY KEY,value BLOB);"
+      "INSERT INTO profile_extension VALUES('opaque',X'000102ff');");
+  const auto original=testflight166::snapshot(db.get());
+  const auto expected=testflight166::snapshot(db.get(),true);
+  const auto schema=testflight166::schemaSnapshot(db.get());
+  const auto deny=[](void *,int action,const char *name,const char *,const char *,const char *) {
+    return action==SQLITE_CREATE_TABLE && name && std::string_view(name)=="score_v15_migration_state"
+        ? SQLITE_DENY : SQLITE_OK;
+  };
+  assert(sqlite3_set_authorizer(db.get(),deny,nullptr)==SQLITE_OK);
+  assert(!score_repository_detail::EnsureSchemaOnConnection(db.get(),{}));
+  assert(sqlite3_set_authorizer(db.get(),nullptr,nullptr)==SQLITE_OK);
+  assert(queryInt(db.get(),"PRAGMA user_version")==14);
+  assert(testflight166::snapshot(db.get())==original && testflight166::schemaSnapshot(db.get())==schema);
+  db.reset();
+  ScoreRepository upgraded(path);
+  assert(upgraded.EnsureSchema());
+  db=openDatabase(path);
+  assert(queryInt(db.get(),"PRAGMA user_version")==ScoreRepository::kCurrentSchemaVersion);
+  testflight166::preserved(expected,testflight166::snapshot(db.get()),
+      {"score_sha256_clear_rank_cache","score_sha256_best_score_cache"});
+  assert(queryInt(db.get(),"SELECT count(*) FROM goal_combo_best WHERE combo_break=1")==1);
+  assert(upgraded.LoadBestScore(meta));
+  const auto rows=testflight166::snapshot(db.get());
+  const auto migratedSchema=testflight166::schemaSnapshot(db.get());
+  assert(upgraded.EnsureSchema());
+  assert(testflight166::snapshot(db.get())==rows && testflight166::schemaSnapshot(db.get())==migratedSchema);
+}
+
 int main() {
   const auto root = std::filesystem::temp_directory_path() /
                     "asobmashow_score_provenance_db_tests";
   std::filesystem::remove_all(root);
   std::filesystem::create_directories(root);
 
+  testTestFlight166ScoreMigration(root);
   testNullableLegacyScoreRepairSurvivesRebuild(root);
   testFreshScoreSchemaMatchesUpgradedColumnsAndIndexes(root);
   testExistingScoreRepairsCommitOnceAndRollbackTogether(root);

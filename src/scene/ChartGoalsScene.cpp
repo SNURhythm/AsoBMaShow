@@ -923,6 +923,21 @@ void ChartGoalsScene::back() {
   if ((editing_ || selected_) && (!pickerChart_ || sourcePicker_)) {
     later([this] { editing_ = false; selected_.reset(); message_.clear(); reload(); }); return;
   }
+  if (recommendationChart_) {
+    later([this] {
+      recommendationChart_.reset(); message_.clear();
+      recommendationRank_ = navigationState_->chartRecommendationRank;
+      recommendationTable_ = navigationState_->chartRecommendationTable;
+      recommendationSortTable_ = navigationState_->chartRecommendationSortTable;
+      recommendations_.clear();
+      for (const auto &[rank, offset] : navigationState_->chartRecommendationOffsets) recommendations_[rank].offset = offset;
+      reload();
+      if (!recommendationRank_ && !recommendations_.empty()) {
+        recommendationRank_ = recommendations_.begin()->first;
+        loadRecommendations(*recommendationRank_, recommendations_[*recommendationRank_].offset);
+      }
+    }); return;
+  }
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }
 void ChartGoalsScene::onPause() {

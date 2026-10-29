@@ -4131,7 +4131,7 @@ void MusicSelectScene::refreshToolbarGoal() {
         [this,&error]{return context.scoreRepository.LoadFolderGoals(error);});
     const auto status=toolbarFolderGoals_.status(*source,long_note_mode::valueFromId(context.settings.selectedLnMode));
     const auto labels=folder_goals::bubbleLabels(status);
-    toolbar_->setGoalState(status.present,status.achieved,labels.lampRank,labels.lamp,labels.score);
+    toolbar_->setGoalState(status.present,status.achieved,labels.lampRank,labels.lamp,labels.score,false,labels.coverage);
     return;
   }
 

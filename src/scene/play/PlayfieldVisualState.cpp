@@ -55,6 +55,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          graphGaugeState == other.graphGaugeState &&
          sameTarget(pacemakerTarget, other.pacemakerTarget) &&
          sameSnapshot(pacemakerStatus, other.pacemakerStatus) &&
+         goalPacemakerSelected == other.goalPacemakerSelected &&
          skinIrTarget == other.skinIrTarget &&
          player1RandomOption == other.player1RandomOption &&
          player2RandomOption == other.player2RandomOption &&

@@ -204,6 +204,20 @@ int main() {
   goal.longNoteMode=1;
   CHECK(projector.project(goal,evidence).achieved);
   CHECK(projector.contains(goal.source,"a") && !projector.contains(goal.source,"missing"));
+  // One snapshot can serve independent targets and LN modes without stale evidence.
+  auto average=goal;
+  auto coverage=goal; coverage.target={.type=Type::ExCoverage,.percent=5000,.scoreRank=24};
+  auto cn=coverage; cn.longNoteMode=2;
+  std::vector<Goal> batch{cn,average,coverage};
+  auto projected=projector.projectAll(batch,evidence);
+  CHECK(projected[1].achieved && projected[1].percent==70);
+  CHECK(projected[2].qualifying==1 && projected[2].achieved);
+  CHECK(projected[0].qualifying==0 && !projected[0].achieved);
+  auto improved=evidence; improved["a"][0].score=200;
+  projected=projector.projectAll(batch,improved);
+  CHECK(projected[1].percent==95 && projected[2].qualifying==2);
+  CHECK(projector.projectAll(batch,evidence)[2].qualifying==1);
+
   goal.source={.kind=SourceKind::Directory,.identity="/charts",.name="Charts"};
   CHECK(projector.project(goal,evidence).available==2);
   CHECK(sqlite3_exec(db,"INSERT INTO chart_meta(path,sha256,md5,ln_mode,total_long_notes,total_backspin_notes,total_notes) VALUES('C:\\charts\\nested\\a.bms','win','',0,0,0,100)",nullptr,nullptr,nullptr)==SQLITE_OK);
@@ -271,7 +285,14 @@ int main() {
   status=index.status(goal.source,goal.longNoteMode);
   CHECK(!status.achieved && status.pendingLampCount==1 && status.pendingExCount==0);
   CHECK(status.pendingLamp->target.percent==9500);
-  CHECK(index.refresh("other-profile",7,1,[]() -> std::optional<std::vector<GoalProgress>> { return {}; })==false);
+  auto coverageGoal=exGoal; coverageGoal.target.type=Type::ExCoverage;
+  CHECK(index.refresh("other-profile",7,1,[&]() -> std::optional<std::vector<GoalProgress>> {
+    return std::vector<GoalProgress>{{lampGoal,{}},{exGoal,{}},{coverageGoal,{}}};
+  }));
+  status=index.status(goal.source,goal.longNoteMode);
+  CHECK(status.pendingLampCount==1 && status.pendingExCount==1 && status.pendingCoverageCount==1);
+  CHECK(status.pendingEx && status.pendingCoverage);
+  CHECK(index.refresh("other-profile",8,1,[]() -> std::optional<std::vector<GoalProgress>> { return {}; })==false);
   CHECK(!index.status(goal.source,goal.longNoteMode).present);
   std::cout << "folder goal tests passed\n";
 }

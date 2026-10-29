@@ -532,7 +532,8 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.judgementIndicatorLineThicknessPercent == 75 &&
              configuration.judgementIndicatorEventHeightPercent == 150 &&
              configuration.judgementIndicatorEventThicknessPercent == 250 &&
-             configuration.judgementIndicatorColorization ==
+             configuration.judgementIndicatorColorization &&
+             *configuration.judgementIndicatorColorization ==
                  settings.presentation().judgementIndicatorColorization &&
              configuration.judgementIndicatorHudMode &&
              configuration.judgementIndicatorRangeMilliseconds == 123 &&

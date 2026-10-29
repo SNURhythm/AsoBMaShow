@@ -54,6 +54,7 @@ private:
   bool detail_=false,editing_=false,confirmRemove_=false,failed_=false,achieved_=false;
   bool picker_=false,newGoal_=false,sourceOrigin_=false;
   std::optional<folder_goals::Goal> editorReturn_;
+  int draftScoreRank_=0;
   std::string renderedPage_;
   int offset_=0,pickerOffset_=0;
   View *root_=nullptr;
