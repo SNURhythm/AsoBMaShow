@@ -22,6 +22,7 @@ void validate(const Goal &g) {
       g.source.identity.empty() || g.source.identity.size() > 16384 ||
       g.source.name.size() > 16384 || g.source.level.size() > 4096 ||
       g.source.identity.find('\0') != std::string::npos ||
+      g.id.size() > 32768 || g.id.find('\0') != std::string::npos ||
       (g.source.kind != SourceKind::Level && !g.source.level.empty()) ||
       g.longNoteMode < 1 || g.longNoteMode > 3 || g.revision < 1 ||
       g.setAt < 0 || g.achievedAt < 0 || g.setAt > 253402300799999LL ||
@@ -32,10 +33,11 @@ std::string sourceKey(const Source &s) {
   return std::to_string(static_cast<int>(s.kind)) + ":" + std::to_string(s.identity.size()) +
       ":" + s.identity + ":" + s.level;
 }
-std::string key(const Goal &g) {
+std::string scopeKey(const Goal &g) {
   return sourceKey(g.source) + ":" + std::to_string(g.longNoteMode) + ":" +
       std::to_string(static_cast<int>(g.target.type));
 }
+std::string key(const Goal &g) { return g.id; }
 Progress evaluate(const Target &t, std::span<const Member> members) {
   validate(t);
   Progress p;

@@ -23,6 +23,7 @@ struct Goal {
   int longNoteMode = 1;
   Target target;
   std::int64_t revision = 1, setAt = 0, achievedAt = 0;
+  std::string id; // Empty for a new draft; legacy rows retain their original key.
 };
 struct Member {
   std::string identity;
@@ -38,6 +39,7 @@ struct GoalProgress { Goal goal; Progress progress; };
 void validate(const Target &);
 void validate(const Goal &);
 std::string sourceKey(const Source &);
+std::string scopeKey(const Goal &);
 std::string key(const Goal &);
 Progress evaluate(const Target &, std::span<const Member>);
 std::string percentText(double percent);

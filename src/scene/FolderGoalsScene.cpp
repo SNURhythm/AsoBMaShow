@@ -77,7 +77,7 @@ bool FolderGoalsScene::checkProfile() {
   picker_=newGoal_=sourceOrigin_=false; editorReturn_.reset(); renderedPage_.clear();
   initial_.reset(); goals_.clear(); draft_={}; progress_.reset();
   *navigationState_={};
-  detail_=editing_=confirmRemove_=failed_=achieved_=false; offset_=0; rate_="100"; message_.clear();
+  detail_=editing_=confirmRemove_=failed_=achieved_=false; offset_=pickerOffset_=0; rate_="100"; message_.clear();
   return false;
 }
 void FolderGoalsScene::later(std::function<void()> f) {
@@ -113,12 +113,12 @@ void FolderGoalsScene::reload() {
     if (stored!=goals_.end() && !editing_) draft_=stored->goal;
   }
 }
-void FolderGoalsScene::choose(folder_goals::Source source,int mode,folder_goals::Type type) {
-  draft_={.source=std::move(source),.longNoteMode=std::clamp(mode,1,3),.target={.type=type}};
+void FolderGoalsScene::choose(folder_goals::Goal goal) {
+  draft_=std::move(goal);
   const auto found=std::find_if(goals_.begin(),goals_.end(),[this](const auto &g){return folder_goals::key(g.goal)==folder_goals::key(draft_);});
-  editing_=newGoal_=found==goals_.end();
+  editing_=newGoal_=draft_.id.empty();
   editorReturn_.reset();
-  if (!editing_) draft_=found->goal;
+  if (found!=goals_.end()) draft_=found->goal;
   detail_=true; confirmRemove_=false; message_.clear();
   rate_=folder_goals::percentText(draft_.target.percent/100.0); rate_.pop_back();
   auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
@@ -127,12 +127,12 @@ void FolderGoalsScene::choose(folder_goals::Source source,int mode,folder_goals:
 void FolderGoalsScene::openSource() {
   std::vector<const folder_goals::GoalProgress *> entries;
   for (const auto &g:goals_) if (folder_goals::sourceKey(g.goal.source)==folder_goals::sourceKey(*initial_)) entries.push_back(&g);
-  picker_=entries.size()>1;
+  picker_=entries.size()>1; pickerOffset_=0;
   if (entries.size()==1) {
     const auto goal=entries.front()->goal;
-    choose(goal.source,goal.longNoteMode,goal.target.type);
+    choose(goal);
   } else if (entries.empty()) {
-    choose(*initial_,long_note_mode::valueFromId(context.settings.selectedLnMode),folder_goals::Type::Lamp);
+    choose({.source=*initial_,.longNoteMode=long_note_mode::valueFromId(context.settings.selectedLnMode)});
   } else detail_=editing_=false;
 }
 void FolderGoalsScene::addGoal() {
@@ -149,14 +149,11 @@ void FolderGoalsScene::changeScope(int mode,folder_goals::Type type) {
   auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
   progress_=preview ? std::optional(preview->progress) : std::nullopt;
 }
-bool FolderGoalsScene::occupied() const {
-  return newGoal_ && std::any_of(goals_.begin(),goals_.end(),[this](const auto &g){return folder_goals::key(g.goal)==folder_goals::key(draft_);});
-}
 void FolderGoalsScene::cancelEditor() {
   if (editorReturn_) {
-    const auto goal=*editorReturn_; choose(goal.source,goal.longNoteMode,goal.target.type); return;
+    const auto goal=*editorReturn_; choose(goal); return;
   }
-  if (!newGoal_) { choose(draft_.source,draft_.longNoteMode,draft_.target.type); return; }
+  if (!newGoal_) { choose(draft_); return; }
   detail_=editing_=newGoal_=false; message_.clear(); progress_.reset();
 }
 void FolderGoalsScene::rememberScroll() {
@@ -166,7 +163,6 @@ void FolderGoalsScene::rememberScroll() {
   (achieved_ ? navigationState_->folderAchievedOffset : navigationState_->folderOffset)=offset_;
 }
 void FolderGoalsScene::saveGoal() {
-  if (occupied()) { message_=i18n::tr("folder_goals.ui.occupied"); return; }
   auto value=chart_goals::parseRate(rate_);
   if (!value || *value==0) { message_=i18n::tr("folder_goals.ui.invalid_percent"); return; }
   draft_.target.percent=*value;
@@ -286,9 +282,8 @@ void FolderGoalsScene::build() {
         },0,true);
       });
       panel->addView(input);
-      if (occupied()) text(panel,i18n::tr("folder_goals.ui.occupied"),18)->setThemedColor(app_theme::coral);
       auto *actions=row(panel);
-      button(actions,i18n::tr("goals.ui.save"),[this]{later([this]{saveGoal();});},true)->setEnabled(!occupied() && progress_ && progress_->sourceAvailable && progress_->available>0);
+      button(actions,i18n::tr("goals.ui.save"),[this]{later([this]{saveGoal();});},true)->setEnabled(progress_ && progress_->sourceAvailable && progress_->available>0);
       button(actions,i18n::tr("goals.ui.cancel"),[this]{back();});
       for (auto *child:actions->getChildren()) child->setFlex(1)->setMinWidth(0);
     } else {
@@ -319,28 +314,28 @@ void FolderGoalsScene::build() {
       text(body,i18n::format("goals.ui.source_counts",{{"active",std::to_string(entries.size()-done)},{"achieved",std::to_string(done)}}),18);
       button(body,i18n::tr("goals.ui.add"),[this]{later([this]{addGoal();});},true);
     }
-    int start=picker_ ? 0 : offset_;
+    int start=picker_ ? pickerOffset_ : offset_;
     start=std::min(start,entries.empty() ? 0 : static_cast<int>((entries.size()-1)/20*20));
-    if (!picker_) offset_=start;
+    (picker_ ? pickerOffset_ : offset_)=start;
     if (entries.empty()) {
       text(body,i18n::tr(goals_.empty() ? "folder_goals.ui.empty" : achieved_ ? "folder_goals.ui.empty_achieved" : "folder_goals.ui.empty_active"),19);
       if (!picker_ && !achieved_ && !goals_.empty()) button(body,i18n::tr("goals.ui.view_achieved"),[this]{later([this]{achieved_=true;offset_=navigationState_->folderAchievedOffset;});},true);
       button(body,i18n::tr("folder_goals.ui.browse"),[this]{browseFolders();});
     }
-    for (int i=start;i<std::min(static_cast<int>(entries.size()),picker_ ? static_cast<int>(entries.size()) : start+20);++i) {
+    for (int i=start;i<std::min(static_cast<int>(entries.size()),start+20);++i) {
       const auto &g=*entries[i];
-      auto *panel=goal_ui::clickableRow(body,[this,goal=g.goal]{later([this,goal]{choose(goal.source,goal.longNoteMode,goal.target.type);});});
+      auto *panel=goal_ui::clickableRow(body,[this,goal=g.goal]{later([this,goal]{choose(goal);});});
       target(panel,g.goal);
       text(panel,g.goal.source.name.empty() ? g.goal.source.identity : g.goal.source.name,18);
       text(panel,long_note_mode::idFromValue(g.goal.longNoteMode),17)->setThemedColor(app_theme::textSecondary);
       progress(panel,g.goal,g.progress,false);
       text(panel,std::string(i18n::tr("folder_goals.ui.details"))+"  ›",17)->setThemedColor(app_theme::textSecondary);
     }
-    if (!picker_ && offset_>0) button(body,i18n::tr("goals.ui.previous"),[this]{later([this]{offset_-=20;});});
-    if (!picker_ && offset_+20<static_cast<int>(entries.size())) button(body,i18n::tr("goals.ui.next"),[this]{later([this]{offset_+=20;});});
+    if (start>0) button(body,i18n::tr("goals.ui.previous"),[this]{later([this]{(picker_ ? pickerOffset_ : offset_)-=20;});});
+    if (start+20<static_cast<int>(entries.size())) button(body,i18n::tr("goals.ui.next"),[this]{later([this]{(picker_ ? pickerOffset_ : offset_)+=20;});});
   }
   if (!message_.empty()) text(body,message_,19)->setThemedColor(app_theme::coral);
-  renderedPage_=detail_ ? std::string(editing_ ? "edit:" : "detail:")+folder_goals::key(draft_) : picker_ ? "source:"+folder_goals::sourceKey(*initial_) : std::string(achieved_ ? "achieved:" : "active:")+std::to_string(offset_);
+  renderedPage_=detail_ ? std::string(editing_ ? "edit:" : "detail:")+(draft_.id.empty() ? "new:"+folder_goals::scopeKey(draft_) : draft_.id) : picker_ ? "source:"+folder_goals::sourceKey(*initial_)+":"+std::to_string(pickerOffset_) : std::string(achieved_ ? "achieved:" : "active:")+std::to_string(offset_);
   addView(portal_); layout();
   scroll_->setScrollOffset(navigationState_->folderScrollOffsets[renderedPage_]);
   if (navigationScroll_) navigationScroll_->setScrollOffset(navigationState_->folderNavigationOffset);

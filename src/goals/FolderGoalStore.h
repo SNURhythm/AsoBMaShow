@@ -7,7 +7,7 @@
 struct sqlite3;
 namespace folder_goals {
 std::vector<Goal> load(sqlite3 *);
-void save(sqlite3 *, const Goal &);
+void save(sqlite3 *, Goal &);
 void remove(sqlite3 *, const Goal &);
 struct EvidenceRow { int lamp = -1, score = 0, maxScore = 0; bool hasScore = false; };
 using Evidence = std::unordered_map<std::string, std::array<EvidenceRow, 4>>;

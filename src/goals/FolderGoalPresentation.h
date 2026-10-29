@@ -7,6 +7,10 @@ namespace folder_goals {
 struct BubbleLabels { int lampRank=-1; std::string lamp, score; };
 inline BubbleLabels bubbleLabels(const Status &status) {
   BubbleLabels labels;
+  if (status.pendingLampCount>1 || status.pendingExCount>1) {
+    labels.score=i18n::format("goals.ui.count",{{"count",std::to_string(status.pendingLampCount+status.pendingExCount)}});
+    return labels;
+  }
   const auto progress=[](const PendingTarget &value) {
     return percentText(value.percent)+"/"+percentText(value.target.percent/100.0);
   };

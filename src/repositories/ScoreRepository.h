@@ -112,7 +112,8 @@ public:
   bool RemoveChartGoal(const bms_parser::ChartMeta &, int selectedMode, std::string &error, std::int64_t goalId = 0);
   std::optional<folder_goals::GoalProgress> PreviewFolderGoal(const folder_goals::Goal &, std::string &error);
   std::optional<std::vector<folder_goals::GoalProgress>> LoadFolderGoals(std::string &error);
-  bool SaveFolderGoal(const folder_goals::Goal &, std::string &error);
+  // Returns the persisted ID and dates only after a successful commit.
+  bool SaveFolderGoal(folder_goals::Goal &, std::string &error);
   bool RemoveFolderGoal(const folder_goals::Goal &, std::string &error);
   std::vector<folder_goals::Goal> TakeFolderGoalAchievements(std::string_view attemptId);
   void Shutdown();

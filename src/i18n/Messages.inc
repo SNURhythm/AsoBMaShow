@@ -98,7 +98,6 @@
 {"folder_goals.ui.live_help", "Progress follows available charts. Missing charts are excluded; available unplayed charts count as 0% EX. Downloads and table updates can change progress.", "이용 가능한 채보로 진행도를 계산합니다. 미보유 채보는 제외하고 미플레이 채보는 EX 0%로 계산합니다. 다운로드나 난이도표 갱신으로 진행도가 달라질 수 있습니다.", "利用可能な譜面で計算します。未所持は除外し、未プレイはEX 0%です。ダウンロードや難易度表更新で達成率が変わる場合があります。", "进度按可用谱面计算。缺失谱面不计入，未游玩谱面计为 EX 0%。下载和难度表更新可能改变进度。", "進度按可用譜面計算。缺少譜面不計入，未遊玩譜面計為 EX 0%。下載和難度表更新可能改變進度。"},
 {"folder_goals.ui.minimum_lamp", "Minimum lamp", "최소 클리어 램프", "最低クリアランプ", "最低通关灯", "最低通關燈"},
 {"folder_goals.ui.missing", "{count} missing · excluded from progress", "미보유 {count}개 · 진행도에서 제외", "未所持{count}譜面 · 達成率から除外", "缺失 {count} 张 · 不计入进度", "缺少 {count} 張 · 不計入進度"},
-{"folder_goals.ui.occupied", "A goal already exists for this LN mode and goal type. Cancel and edit that goal, or choose another mode or type.", "이 LN 모드와 목표 유형에 이미 목표가 있습니다. 취소한 뒤 기존 목표를 수정하거나 다른 모드 또는 유형을 선택하세요.", "このLNモードと目標タイプには目標が既にあります。キャンセルして既存の目標を編集するか、別のモードやタイプを選んでください。", "此 LN 模式和目标类型已有目标。请取消后编辑现有目标，或选择其他模式或类型。", "此 LN 模式和目標類型已有目標。請取消後編輯現有目標，或選擇其他模式或類型。"},
 {"folder_goals.ui.open", "Open folder", "폴더 열기", "フォルダーを開く", "打开文件夹", "開啟資料夾"},
 {"folder_goals.ui.scope_help", "Includes the whole folder or level, regardless of selector filters.", "선곡 필터와 관계없이 폴더 또는 레벨 전체를 포함합니다.", "選曲フィルターに関係なくフォルダーやレベル全体が対象です。", "包含整个文件夹或等级，不受选曲筛选影响。", "包含整個資料夾或等級，不受選曲篩選影響。"},
 {"folder_goals.ui.target_marker", "Target marker: {percent}", "목표 표시: {percent}", "目標ライン: {percent}", "目标标记：{percent}", "目標標記：{percent}"},

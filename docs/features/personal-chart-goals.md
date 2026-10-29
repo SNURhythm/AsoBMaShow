@@ -205,17 +205,22 @@ one. In the custom selector, the toolbar flag supports folders, tables and level
 **Personal goals → Folder goals** lists all saved folder goals. Folder flags
 open a new editor when no goal exists, the saved goal directly when there is one
 (including an Average EX goal), or a source list when there are several.
-**Add goal** creates another target. New drafts retain entered values when
-switching LN mode or goal type. Editing keeps the existing source, LN mode, and
-goal type fixed; adding cannot overwrite an occupied mode/type slot.
+**Add goal** creates an independent target, including another goal of the same
+type and LN mode. New drafts retain entered values when switching LN mode or
+goal type. Editing keeps the existing source, LN mode, and goal type fixed, and
+changes only the selected goal. Each goal keeps its own dates and achievement
+history. Source lists page in groups of 20.
 
 Folder flags follow chart-goal colors: neutral when unset, accent while active,
 and lime when all goals for the selected LN mode are achieved. Selecting an
 unfinished goal shows a bubble with current/target percentages, such as
 **HARD 60.00%/80.00%** and **Avg EX 72.50%/85.00%**. Each unfinished goal type
-has its own line; completed targets are omitted.
+has its own line; completed targets are omitted. If several unfinished goals
+share a type, the bubble shows the total unfinished goal count. Open the flag
+to view each target and its progress.
 
-Two independent targets are available for each folder and selected LN mode:
+Two goal types are available for each folder and selected LN mode, with multiple
+independent targets allowed for either type:
 
 - **Lamp coverage:** a percentage of charts at a chosen lamp or better.
   **100% Failed or better** covers every available chart with an eligible play.
@@ -238,3 +243,9 @@ Eligible imported records contribute to progress. Only a newly completing local
 play grants the result celebration and Kombo goal credit. Imports, membership
 changes and revisiting a completed target do not award points. First-achieved
 history remains even when live progress subsequently drops.
+
+Folder goals retain their existing SQLite table and original keys when upgrading
+from the single-goal format. New goals receive separate stable IDs. Legacy
+payloads are read without rewriting them; only saved goals use the new payload
+version. This requires no table rename or rebuild, and keeps existing dates,
+first achievements, and Kombo credit identities intact.

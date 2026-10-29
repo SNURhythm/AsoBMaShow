@@ -33,7 +33,8 @@ std::vector<Goal> load(sqlite3 *db) {
   while ((rc=sqlite3_step(q))==SQLITE_ROW) {
     if (sqlite3_column_bytes(q,1)>65536) throw std::runtime_error("Invalid folder goal data size.");
     auto j=nlohmann::json::parse(sqliteColumnString(q,1));
-    if (integer(j,"version",1,2147483647)!=1) throw std::runtime_error("These folder goals need a different app version.");
+    const auto version=integer(j,"version",1,2147483647);
+    if (version!=1 && version!=2) throw std::runtime_error("These folder goals need a different app version.");
     Goal g;
     g.source={static_cast<SourceKind>(integer(j,"kind",0,2)), j.at("identity").get<std::string>(),
         j.at("level").get<std::string>(), j.at("name").get<std::string>()};
@@ -43,24 +44,46 @@ std::vector<Goal> load(sqlite3 *db) {
     g.revision=integer(j,"revision",1,std::numeric_limits<std::int64_t>::max());
     g.setAt=integer(j,"setAt",0,253402300799999LL);
     g.achievedAt=integer(j,"achievedAt",0,253402300799999LL);
+    g.id=sqliteColumnString(q,0);
     validate(g);
-    if (key(g)!=sqliteColumnString(q,0)) throw std::runtime_error("Invalid folder goal identity.");
+    if (g.id.empty() || (version==1 ? scopeKey(g) : j.at("id").get<std::string>())!=g.id)
+      throw std::runtime_error("Invalid folder goal identity.");
     out.push_back(std::move(g));
   }
   require(rc==SQLITE_DONE,db);
   return out;
 }
-void save(sqlite3 *db, const Goal &g) {
+void save(sqlite3 *db, Goal &g) {
   validate(g);
-  require(sqlite3_exec(db,"CREATE TABLE IF NOT EXISTS folder_goals(id TEXT PRIMARY KEY,body TEXT NOT NULL) WITHOUT ROWID",nullptr,nullptr,nullptr)==SQLITE_OK,db);
-  nlohmann::json j={{"version",1},{"kind",static_cast<int>(g.source.kind)}, {"identity",g.source.identity},
+  const bool creating=g.id.empty();
+  if (!exists(db)) {
+    if (!creating) throw std::runtime_error("This folder goal no longer exists.");
+    require(sqlite3_exec(db,"CREATE TABLE folder_goals(id TEXT PRIMARY KEY,body TEXT NOT NULL) WITHOUT ROWID",nullptr,nullptr,nullptr)==SQLITE_OK,db);
+  }
+  // Keep the existing table and legacy keys. A table rename would reparse
+  // unrelated triggers, including old ON score_db.scores definitions.
+  auto id=g.id;
+  if (creating) {
+    SqliteStatementHandle generated;
+    require(prepareSqliteStatement(db,"SELECT 'goal:' || lower(hex(randomblob(16)))",generated)==SQLITE_OK &&
+        sqlite3_step(generated)==SQLITE_ROW,db);
+    id=sqliteColumnString(generated,0);
+  }
+  nlohmann::json j={{"version",2},{"id",id},{"kind",static_cast<int>(g.source.kind)}, {"identity",g.source.identity},
       {"level",g.source.level},{"name",g.source.name},{"mode",g.longNoteMode},{"type",static_cast<int>(g.target.type)},
       {"lamp",g.target.lamp},{"percent",g.target.percent},{"revision",g.revision},{"setAt",g.setAt},{"achievedAt",g.achievedAt}};
+  const auto body=j.dump();
+  if (body.size()>65536) throw std::runtime_error("Invalid folder goal data size.");
   SqliteStatementHandle q;
-  require(prepareSqliteStatement(db,"INSERT INTO folder_goals(id,body) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET body=excluded.body",q)==SQLITE_OK,db);
-  require(bindSqliteText(q,1,key(g)) && bindSqliteText(q,2,j.dump()) && sqlite3_step(q)==SQLITE_DONE,db);
+  require(prepareSqliteStatement(db,creating ? "INSERT INTO folder_goals(id,body) VALUES(?1,?2)"
+      : "UPDATE folder_goals SET body=?2 WHERE id=?1",q)==SQLITE_OK,db);
+  require(bindSqliteText(q,1,id) && bindSqliteText(q,2,body) && sqlite3_step(q)==SQLITE_DONE,db);
+  if (sqlite3_changes(db)!=1) throw std::runtime_error("This folder goal no longer exists.");
+  g.id=std::move(id);
 }
 void remove(sqlite3 *db,const Goal &g) {
+  validate(g);
+  if (g.id.empty()) throw std::runtime_error("Choose a saved folder goal.");
   if (!exists(db)) return;
   SqliteStatementHandle q;
   require(prepareSqliteStatement(db,"DELETE FROM folder_goals WHERE id=?",q)==SQLITE_OK,db);

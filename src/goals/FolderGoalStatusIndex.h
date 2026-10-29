@@ -10,6 +10,7 @@ namespace folder_goals {
 struct PendingTarget { Target target; double percent=0; };
 struct Status {
   bool present=false, achieved=false;
+  int pendingLampCount=0, pendingExCount=0;
   std::optional<PendingTarget> pendingLamp, pendingEx;
 };
 // Selection is deliberately absent from this key: cursor motion must never
@@ -28,7 +29,9 @@ public:
       status.achieved=(!status.present || status.achieved) && row.progress.achieved;
       status.present=true;
       if (!row.progress.achieved) {
-        (row.goal.target.type==Type::Lamp ? status.pendingLamp : status.pendingEx)=PendingTarget{row.goal.target,row.progress.percent};
+        ++(row.goal.target.type==Type::Lamp ? status.pendingLampCount : status.pendingExCount);
+        auto &pending=row.goal.target.type==Type::Lamp ? status.pendingLamp : status.pendingEx;
+        if (!pending) pending=PendingTarget{row.goal.target,row.progress.percent};
       }
     }
     revision_=revision;

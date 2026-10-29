@@ -7,7 +7,85 @@
 #include <iostream>
 #define CHECK(x) do { if (!(x)) { std::cerr << __LINE__ << ": " #x "\n"; std::exit(1); } } while(false)
 using namespace folder_goals;
+std::string queryText(sqlite3 *db,const char *sql) {
+  SqliteStatementHandle q;
+  CHECK(prepareSqliteStatement(db,sql,q)==SQLITE_OK && sqlite3_step(q)==SQLITE_ROW);
+  return sqliteColumnString(q,0);
+}
+void testIndependentStorage() {
+  sqlite3 *db=nullptr;
+  CHECK(sqlite3_open(":memory:",&db)==SQLITE_OK);
+  Goal first{.source={.kind=SourceKind::Level,.identity="https://table",.level="1"},
+      .longNoteMode=2,.target={.type=Type::Lamp,.lamp=200,.percent=8000},.setAt=100};
+  auto second=first; second.target.percent=9000;
+  save(db,first); save(db,second);
+  CHECK(load(db).size()==2);
+  CHECK(key(first)!=key(second));
+  first.target.percent=8500; save(db,first);
+  auto rows=load(db);
+  CHECK(rows.size()==2);
+  for (const auto &g:rows) CHECK(g.target.percent==(key(g)==key(first) ? 8500 : 9000));
+  remove(db,first);
+  CHECK(load(db).size()==1 && key(load(db).front())==key(second));
+  bool rejected=false; try { save(db,first); } catch (...) { rejected=true; }
+  CHECK(rejected && load(db).size()==1);
+  sqlite3_close(db);
+}
+void testLegacyStorageWithAttachedTrigger() {
+  for (bool editFirst:{false,true}) {
+    sqlite3 *source=nullptr,*db=nullptr;
+    CHECK(sqlite3_open(":memory:",&source)==SQLITE_OK);
+    CHECK(sqlite3_open(":memory:",&db)==SQLITE_OK);
+    // Reproduce the persisted, connection-specific ON score_db.scores from
+    // the old selector. Copying that schema keeps it invalid in main.
+    CHECK(sqlite3_exec(source,
+        "ATTACH DATABASE ':memory:' AS score_db;"
+        "CREATE TABLE score_db.scores(id INTEGER);"
+        "CREATE TRIGGER score_db.score_cache_summary_insert AFTER INSERT ON score_db.scores BEGIN SELECT 1; END;"
+        "CREATE TABLE score_db.folder_goals(id TEXT PRIMARY KEY,body TEXT NOT NULL) WITHOUT ROWID;"
+        R"(INSERT INTO score_db.folder_goals VALUES('2:13:https://table:1:2:0',
+        '{"version":1,"kind":2,"identity":"https://table","level":"1","name":"Old level","mode":2,"type":0,"lamp":200,"percent":8000,"revision":7,"setAt":100,"achievedAt":200}');)",
+        nullptr,nullptr,nullptr)==SQLITE_OK);
+    auto *backup=sqlite3_backup_init(db,"main",source,"score_db");
+    CHECK(backup && sqlite3_backup_step(backup,-1)==SQLITE_DONE);
+    CHECK(sqlite3_backup_finish(backup)==SQLITE_OK); sqlite3_close(source);
+    // Prove this fixture catches the earlier rename-trigger failure.
+    char *error=nullptr;
+    CHECK(sqlite3_exec(db,"ALTER TABLE folder_goals RENAME TO replaced",nullptr,nullptr,&error)!=SQLITE_OK);
+    CHECK(error && std::string(error).find("score_db")!=std::string::npos);
+    sqlite3_free(error);
+    const auto oldBody=queryText(db,"SELECT body FROM folder_goals");
+    const auto schema=queryText(db,"PRAGMA schema_version");
+    auto original=load(db).front();
+    CHECK(queryText(db,"SELECT body FROM folder_goals")==oldBody);
+    const auto oldKey=key(original);
+    CHECK(oldKey=="2:13:https://table:1:2:0");
+    Goal added{.source=original.source,.longNoteMode=2,
+        .target={.type=Type::Lamp,.lamp=400,.percent=9000},.setAt=300};
+    if (editFirst) save(db,original);
+    save(db,added);
+    if (!editFirst) {
+      CHECK(queryText(db,"SELECT body FROM folder_goals WHERE id='2:13:https://table:1:2:0'")==oldBody);
+      save(db,original);
+    }
+    CHECK(queryText(db,"PRAGMA schema_version")==schema);
+    const auto rows=load(db);
+    CHECK(rows.size()==2 && key(added)!=oldKey);
+    bool found=false;
+    for (const auto &g:rows) if (key(g)==oldKey) {
+      found=true;
+      CHECK(g.revision==7 && g.setAt==100 && g.achievedAt==200);
+      CHECK(g.target.percent==8000 && g.source.name=="Old level");
+    }
+    CHECK(found);
+    remove(db,added);
+    CHECK(load(db).size()==1 && key(load(db).front())==oldKey);
+    sqlite3_close(db);
+  }
+}
 int main() {
+  testIndependentStorage();
+  testLegacyStorageWithAttachedTrigger();
   Target lamp{.type=Type::Lamp, .lamp=200, .percent=7500};
   std::vector<Member> members{
       {.identity="a", .lamp=200}, {.identity="b", .lamp=300},
@@ -127,7 +205,19 @@ int main() {
   status=index.status(goal.source,goal.longNoteMode);
   CHECK(status.present && !status.achieved && !status.pendingLamp && status.pendingEx);
   CHECK(status.pendingEx->percent==80);
-  CHECK(index.refresh("other-profile",5,1,[]() -> std::optional<std::vector<GoalProgress>> { return {}; })==false);
+  auto harderLamp=lampGoal; harderLamp.id="harder"; harderLamp.target.percent=9500;
+  CHECK(index.refresh("other-profile",5,1,[&]() -> std::optional<std::vector<GoalProgress>> {
+    return std::vector<GoalProgress>{{lampGoal,{.percent=60}},{harderLamp,{.percent=60}},{exGoal,{.percent=80}}};
+  }));
+  status=index.status(goal.source,goal.longNoteMode);
+  CHECK(!status.achieved && status.pendingLampCount==2 && status.pendingExCount==1);
+  CHECK(index.refresh("other-profile",6,1,[&]() -> std::optional<std::vector<GoalProgress>> {
+    return std::vector<GoalProgress>{{lampGoal,{.percent=80,.achieved=true}},{harderLamp,{.percent=80}},{exGoal,{.percent=85,.achieved=true}}};
+  }));
+  status=index.status(goal.source,goal.longNoteMode);
+  CHECK(!status.achieved && status.pendingLampCount==1 && status.pendingExCount==0);
+  CHECK(status.pendingLamp->target.percent==9500);
+  CHECK(index.refresh("other-profile",7,1,[]() -> std::optional<std::vector<GoalProgress>> { return {}; })==false);
   CHECK(!index.status(goal.source,goal.longNoteMode).present);
   std::cout << "folder goal tests passed\n";
 }

@@ -1,6 +1,7 @@
 #include "ScoreRepositoryInternal.h"
 #include "../goals/ChartGoal.h"
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 folder_goals::Projector &ScoreRepository::Impl::folderProjector() {
@@ -90,7 +91,7 @@ std::optional<std::vector<folder_goals::GoalProgress>> ScoreRepository::LoadFold
     return out;
   } catch (const std::exception &e) { error=e.what(); return {}; }
 }
-bool ScoreRepository::SaveFolderGoal(const folder_goals::Goal &input,std::string &error) {
+bool ScoreRepository::SaveFolderGoal(folder_goals::Goal &input,std::string &error) {
   profile_database_activity::WriteGuard guard;
   std::lock_guard lock(impl_->sessionMutex);
   error.clear();
@@ -102,7 +103,12 @@ bool ScoreRepository::SaveFolderGoal(const folder_goals::Goal &input,std::string
     if (!tx.active()) return false;
     const auto goals=folder_goals::load(impl_->sessionDatabase);
     auto previous=std::find_if(goals.begin(),goals.end(),[&](const auto &g){ return folder_goals::key(g)==folder_goals::key(goal); });
+    if (!goal.id.empty() && previous==goals.end()) throw std::runtime_error("This folder goal no longer exists.");
+    if (previous!=goals.end() && folder_goals::scopeKey(*previous)!=folder_goals::scopeKey(goal))
+      throw std::runtime_error("A saved folder goal cannot change its source, LN mode, or goal type.");
     const bool unchanged=previous!=goals.end() && previous->target==goal.target;
+    if (previous!=goals.end() && !unchanged && previous->revision==std::numeric_limits<std::int64_t>::max())
+      throw std::runtime_error("Folder goal revision limit reached.");
     auto progress=impl_->folderProjector().project(goal,folder_goals::loadEvidence(impl_->sessionDatabase));
     if (!progress.sourceAvailable || !progress.available) throw std::runtime_error("This folder has no available charts.");
     if (!unchanged && progress.achieved) throw std::runtime_error("Choose a target above your current progress.");
@@ -111,6 +117,7 @@ bool ScoreRepository::SaveFolderGoal(const folder_goals::Goal &input,std::string
     goal.achievedAt=unchanged ? previous->achievedAt : 0;
     folder_goals::save(impl_->sessionDatabase,goal);
     if (!tx.commit(error)) return false;
+    input=std::move(goal);
     score_repository_detail::IncrementRevision();
     return true;
   } catch (const std::exception &e) { error=e.what(); return false; }

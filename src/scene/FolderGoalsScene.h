@@ -27,11 +27,10 @@ private:
   void later(std::function<void()>);
   void reload();
   void switchGoalKind();
-  void choose(folder_goals::Source,int,folder_goals::Type);
+  void choose(folder_goals::Goal);
   void openSource();
   void addGoal();
   void changeScope(int,folder_goals::Type);
-  bool occupied() const;
   void cancelEditor();
   void rememberScroll();
   void saveGoal();
@@ -55,7 +54,7 @@ private:
   bool picker_=false,newGoal_=false,sourceOrigin_=false;
   std::optional<folder_goals::Goal> editorReturn_;
   std::string renderedPage_;
-  int offset_=0;
+  int offset_=0,pickerOffset_=0;
   View *root_=nullptr;
   View *content_=nullptr;
   ScrollView *navigationScroll_=nullptr;
