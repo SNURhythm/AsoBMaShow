@@ -13,6 +13,10 @@ a goal containing both lamp and score targets counts once when both are met.
 
 ## Recommendations
 
+A small red dot on a chart's flag indicates available lamp or score
+recommendations when that chart has no configured goal. Both selectors use this
+badge; saving a goal removes it, including when that goal is already achieved.
+
 The Personal goals screen offers expandable **Near E** through **Near MAX**
 groups for best scores within 2 percentage points below their next rank. Empty
 groups are hidden. Candidates are ordered by EX points remaining, nearest first, with 20 per

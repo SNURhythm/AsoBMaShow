@@ -20,6 +20,7 @@
 #include <stop_token>
 #include <stdexcept>
 #include <vector>
+#include <unordered_set>
 
 class ScoreRepository;
 
@@ -420,6 +421,7 @@ public:
     SelectChartMetaByHash(const std::string &sha256,
                           const std::string &md5, std::stop_token stop = {});
     std::map<int, int> GoalRecommendationCounts(int tableId = 0);
+    std::unordered_set<std::string> GoalRecommendationHashes();
     std::vector<GoalRecommendation> GoalRecommendations(int target, int offset, int tableId = 0, bool sortTable = false);
     int CountChartMeta(const ChartMetaQuery &query);
     int FindChartMetaIndex(const ChartMetaQuery &query,

@@ -18,6 +18,7 @@
 #include "../replay/ReplayFileActionSelection.h"
 #include "../repositories/ScoreRepository.h"
 #include "../goals/FolderGoalStatusIndex.h"
+#include "../goals/GoalRecommendationIndex.h"
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
@@ -127,6 +128,7 @@ private:
   std::optional<std::pair<folder_goals::Source,int>> pendingFolderGoalSelection_;
   std::string pendingFolderGoalProfile_;
   chart_goals::Index chartGoalIndex;
+  chart_goals::RecommendationIndex chartGoalRecommendations;
   std::vector<std::string> chartGoalHashes;
   void resumeGoalNavigation();
   void applyGoalSelection(const ChartMetaRecord &, int mode);

@@ -79,4 +79,11 @@ inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = 
       "gap,death_notes,chart_sha256 LIMIT 20 OFFSET ?";
 }
 
+inline std::string recommendationChartHashesSql() {
+  // The selector separately hides the badge for any configured chart goal.
+  return "SELECT sha256 FROM (" + recommendationCandidatesSql() +
+      " SELECT sha256 FROM candidates) UNION SELECT chart_sha256 FROM (" +
+      gaugeRecommendationCandidatesSql() + " SELECT chart_sha256 FROM candidates)";
+}
+
 }

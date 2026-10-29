@@ -3,6 +3,7 @@
 #include "Button.h"
 #include "ClearLampColors.h"
 #include "GoalTargetBubble.h"
+#include "GoalRecommendationBadge.h"
 #include "IconText.h"
 #include "UiTheme.h"
 #include "AppTheme.h"
@@ -193,6 +194,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   goalOutlineView->setVAlign(TextView::MIDDLE);
   goalContent->addView(goalIconView);
   goalContent->addView(goalOutlineView);
+  goalRecommendationBadge = makeGoalRecommendationBadge();
+  goalContent->addView(goalRecommendationBadge);
   goalButton->setContentView(goalContent);
   goalButton->setOnClickListener([this]() {
     if (currentRecord.courseStart || solidArchive || unavailable ||
@@ -258,6 +261,7 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   solidArchive = record.solidArchive;
   goal = false;
   goalAchieved = false;
+  goalRecommended = false;
   goalBubble->setTarget(-1, {}, {});
   goalBubble->showFor(false);
   const bool random = record.randomSelect.has_value();
@@ -361,9 +365,10 @@ void ChartListItemView::setGoalHandler(std::function<void(const ChartMetaRecord 
   goalHandler = std::move(handler);
 }
 
-void ChartListItemView::setGoalState(bool nextGoal, bool achieved) {
+void ChartListItemView::setGoalState(bool nextGoal, bool achieved, bool recommended) {
   goalAchieved = nextGoal && achieved;
   goal = nextGoal;
+  goalRecommended = !nextGoal && recommended;
   refreshGoalButton();
 }
 
@@ -381,6 +386,7 @@ void ChartListItemView::refreshGoalButton() {
   goalIconView->setDisplay(goal ? YGDisplayFlex : YGDisplayNone);
   goalOutlineView->setVisible(!goal);
   goalOutlineView->setDisplay(goal ? YGDisplayNone : YGDisplayFlex);
+  goalRecommendationBadge->setVisible(goalRecommended);
   goalOutlineView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::secondary);
   goalIconView->setThemedColor(goal
       ? (goalAchieved ? app_theme::lime : (selected ? main_menu_theme::selectedAccent : main_menu_theme::accent))

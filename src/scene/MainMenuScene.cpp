@@ -1541,7 +1541,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
       goalAchieved = achieved != chartGoalIndex.achievedModes.end() &&
           (achieved->second & (1u << *goalMode));
     }
-    chartListItemView->setGoalState(goalMode.has_value(), goalAchieved);
+    chartListItemView->setGoalState(goalMode.has_value(), goalAchieved,
+        chartGoalRecommendations.contains(item.meta.SHA256));
     if (isSelected && !goalAchieved) updateSelectedGoalBubble(chartListItemView, item);
     chartListItemView->setGoalHandler([this](const ChartMetaRecord &record) {
       openChartGoal(record);
@@ -2952,6 +2953,13 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   chartGoalIndex = goals.value_or(chart_goals::Index{});
   chartGoalHashes = chartGoalIndex.activeHashes();
   if (!goals) SDL_Log("Unable to load goal folders: %s", goalError.c_str());
+  try {
+    chartGoalRecommendations.refresh(context.profileManager.activeProfile().id,
+        context.scoreRepository.GetRevision(), currentLibraryRevision,
+        [this] { return chartSession->GoalRecommendationHashes(); });
+  } catch (const std::exception &failure) {
+    SDL_Log("Unable to load chart goal recommendations: %s", failure.what());
+  }
   assignmentDayId = kombo::today();
   assignmentDay = {};
   assignmentCharts.reset();

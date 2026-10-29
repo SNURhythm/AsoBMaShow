@@ -4086,7 +4086,7 @@ void MusicSelectScene::refreshToolbarGoal() {
   }
   const int mode = scoreLongNoteModeForClearLamp(chart->meta, long_note_mode::valueFromId(context.settings.selectedLnMode));
   const auto key = context.profileManager.activeProfile().id + ":" + chart->meta.SHA256 + ":" +
-      std::to_string(mode) + ":" + std::to_string(context.scoreRepository.GetRevision());
+      std::to_string(mode) + ":" + std::to_string(context.scoreRepository.GetRevision()) + ":" + std::to_string(libraryRevision_);
   if (toolbarGoalKey_ == key) return;
   toolbarGoalKey_ = key;
   std::string error;
@@ -4096,7 +4096,19 @@ void MusicSelectScene::refreshToolbarGoal() {
     if (goal || !error.empty()) break;
   }
   if (!error.empty()) SDL_Log("Cannot load toolbar goal: %s", error.c_str());
-  if (!goal) { toolbar_->setGoalState(false, false, -1, {}, {}); return; }
+  if (!goal) {
+    bool recommended = false;
+    if (error.empty() && chartSession_) try {
+      toolbarGoalRecommendations_.refresh(context.profileManager.activeProfile().id,
+          context.scoreRepository.GetRevision(), libraryRevision_,
+          [this] { return chartSession_->GoalRecommendationHashes(); });
+      recommended = toolbarGoalRecommendations_.contains(chart->meta.SHA256);
+    } catch (const std::exception &failure) {
+      SDL_Log("Cannot load toolbar recommendations: %s", failure.what());
+    }
+    toolbar_->setGoalState(false, false, -1, {}, {}, recommended);
+    return;
+  }
   const auto labels = chart_goals::targetLabels(goal->goal.target);
   toolbar_->setGoalState(true, goal->progress.achieved, labels.lampRank, labels.lamp, labels.score);
 }

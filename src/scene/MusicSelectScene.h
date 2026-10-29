@@ -14,6 +14,7 @@
 #include "../replay/ReplayExportJob.h"
 #include "Scene.h"
 #include "../goals/FolderGoalStatusIndex.h"
+#include "../goals/GoalRecommendationIndex.h"
 #include "../audio/SkinSystemSoundService.h"
 #include "../music_select/MusicSelectBarManager.h"
 #include "../music_select/MusicSelectFolderStatusLoader.h"
@@ -182,6 +183,7 @@ private:
   void refreshToolbarGoal();
   std::string toolbarGoalKey_;
   folder_goals::StatusIndex toolbarFolderGoals_;
+  chart_goals::RecommendationIndex toolbarGoalRecommendations_;
   void openPlayOptions();
   void openIrUploads();
   void openKombo();

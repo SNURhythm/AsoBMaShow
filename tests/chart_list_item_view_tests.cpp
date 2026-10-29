@@ -372,6 +372,23 @@ int main() {
     const int wideDifficultyWidth = difficulty->getWidth();
     auto *goal = row.findViewByName("chartListGoal");
     require(goal && goal->getVisible(), "playable rows retain their goal action");
+    auto *recommendationBadge = dynamic_cast<Button *>(goal)->getContentView()->findViewByName("goalRecommendationBadge");
+    require(recommendationBadge && !recommendationBadge->getVisible(),
+            "a chart flag has a hidden recommendation badge until recommendations are available");
+    row.setGoalState(false, false, true);
+    row.applyYogaLayout();
+    require(recommendationBadge->getVisible() && recommendationBadge->getWidth() == 8 &&
+                recommendationBadge->getHeight() == 8 &&
+                recommendationBadge->getX() >= goal->getX() &&
+                recommendationBadge->getX() + 8 <= goal->getX() + goal->getWidth(),
+            "recommended charts show a small notification dot inside the flag button");
+    row.setGoalState(true, false, true);
+    require(!recommendationBadge->getVisible(), "a configured goal suppresses the recommendation badge");
+    row.setGoalState(true, true, true);
+    require(!recommendationBadge->getVisible(), "an achieved configured goal suppresses the recommendation badge");
+    row.setGoalState(false, false, true);
+    row.setMeta(record);
+    require(!recommendationBadge->getVisible(), "recycled rows discard the previous chart's recommendation badge");
     std::string openedPath;
     row.setGoalHandler([&](const ChartMetaRecord &clicked) { openedPath = clicked.meta.BmsPath; });
     row.setGoalState(true);

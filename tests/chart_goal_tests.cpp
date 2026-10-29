@@ -1,6 +1,7 @@
 #include "goals/ChartGoal.h"
 #include "goals/ChartGoalStore.h"
 #include "goals/GoalRecommendationQuery.h"
+#include "goals/GoalRecommendationIndex.h"
 #include "goals/GoalResultPresentation.h"
 #include "repositories/SqliteRAII.h"
 #include <chrono>
@@ -92,6 +93,17 @@ int main() {
     CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="closest");
     CHECK(sqlite3_step(query)==SQLITE_DONE);
     query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "INSERT INTO chart_meta VALUES('lamp-only','lamp',0,0,0);"
+        "INSERT INTO score_db.goal_combo_best VALUES('lamp-only',0,1);", nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations, recommendationChartHashesSql(), query)==SQLITE_OK);
+    std::unordered_set<std::string> recommendedHashes;
+    while (sqlite3_step(query)==SQLITE_ROW) CHECK(recommendedHashes.insert(sqliteColumnString(query,0)).second);
+    CHECK((recommendedHashes==std::unordered_set<std::string>{"closest","smaller-percent","farther","lamp-only"}));
+    query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "DELETE FROM chart_meta WHERE sha256='lamp-only'; DELETE FROM score_db.goal_combo_best WHERE chart_sha256='lamp-only';",
+        nullptr,nullptr,nullptr)==SQLITE_OK);
     CHECK(sqlite3_exec(recommendations,"INSERT INTO score_db.score_sha256_clear_rank_cache VALUES('closest',0,400)",nullptr,nullptr,nullptr)==SQLITE_OK);
     CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationCandidatesSql()+" SELECT COUNT(*) FROM candidates",query)==SQLITE_OK);
     CHECK(sqlite3_step(query)==SQLITE_ROW && sqlite3_column_int(query,0)==1); // Reached lamps, including easier lamps, disappear.
@@ -174,6 +186,29 @@ int main() {
     query.reset();
     sqlite3_close(recommendations);
   }
+  RecommendationIndex recommendations;
+  int recommendationLoads = 0;
+  const std::string recommendedHash(64, 'a');
+  auto loadRecommendations = [&] {
+    ++recommendationLoads;
+    return std::unordered_set<std::string>{recommendedHash};
+  };
+  for (int selection=0; selection<100; ++selection) {
+    recommendations.refresh("profile", 1, 1, loadRecommendations);
+    CHECK(recommendations.contains(recommendedHash));
+  }
+  CHECK(recommendationLoads==1 && recommendations.contains(std::string(64,'A')));
+  CHECK(!recommendations.contains("") && !recommendations.contains(std::string(64,'z')));
+  recommendations.refresh("profile", 2, 1, loadRecommendations);
+  recommendations.refresh("profile", 2, 2, loadRecommendations);
+  CHECK(recommendationLoads==3);
+  recommendations.refresh("other-profile", 2, 2, [] { return std::unordered_set<std::string>{}; });
+  CHECK(!recommendations.contains(recommendedHash));
+  recommendations.refresh("profile", 2, 2, loadRecommendations);
+  CHECK(rejects([&] { recommendations.refresh("profile", 3, 2, []() -> std::unordered_set<std::string> {
+    throw std::runtime_error("unavailable");
+  }); }));
+  CHECK(!recommendations.contains(recommendedHash));
   GoalResultPresentation celebration;
   CHECK(!celebration.arm(false) && !celebration.active());
   CHECK(celebration.arm(true) && celebration.active());

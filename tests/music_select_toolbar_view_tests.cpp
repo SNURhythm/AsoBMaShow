@@ -225,6 +225,35 @@ void testGoalBubbleStaysOnScreen() {
          "missing goals do not show the bubble");
 }
 
+void testGoalRecommendationBadge() {
+  std::vector<std::string> actions;
+  std::vector<MusicSelectToolbarState> saved;
+  auto toolbar = MusicSelectToolbarView::Create({.mode=MusicSelectToolbarMode::Expanded}, callbacks(actions, saved), 800, 300);
+  const auto badge = [&]() -> View * {
+    for (const auto &control : toolbar->controls())
+      if (control.control == MusicSelectToolbarControl::Goal && control.button)
+        return control.button->getContentView()->findViewByName("goalRecommendationBadge");
+    return nullptr;
+  };
+  expect(badge() && !badge()->getVisible(), "the toolbar recommendation badge starts hidden");
+  toolbar->setGoalState(false, false, -1, {}, {}, true);
+  expect(badge() && badge()->getVisible(), "recommended charts without a goal show a toolbar badge");
+  expect(!toolbar->findViewByName("chartGoalBubble")->getVisible(), "a recommendation badge does not show a configured-goal bubble");
+  toolbar->applyState(toolbar->state());
+  expect(badge() && badge()->getVisible(), "toolbar rebuilds preserve recommendation availability");
+  toolbar->setControlEnabled(MusicSelectToolbarControl::Goal, false);
+  expect(badge() && !badge()->getVisible(), "disabled goal actions hide recommendations");
+  toolbar->setControlEnabled(MusicSelectToolbarControl::Goal, true);
+  expect(badge() && badge()->getVisible(), "enabled goal actions restore recommendations");
+  for (bool achieved : {false, true}) {
+    toolbar->setGoalState(true, achieved, 400, "HARD", {}, true);
+    expect(badge() && !badge()->getVisible(), "configured goals suppress the toolbar badge regardless of progress");
+  }
+  toolbar->setGoalState(false, false, -1, {}, {}, true);
+  toolbar->setGoalState(false, false, -1, {}, {});
+  expect(badge() && !badge()->getVisible(), "switching to a chart without recommendations clears the badge");
+}
+
 void testActionsModesAndDragPersist() {
   std::vector<std::string> actions;
   std::vector<MusicSelectToolbarState> saved;
@@ -407,6 +436,7 @@ int main() {
   testExpandedToolbarWrapsWithinANarrowViewport();
   testControlsFitInsideToolbar();
   testGoalBubbleStaysOnScreen();
+  testGoalRecommendationBadge();
   testActionsModesAndDragPersist();
   testPersistedSettingsStateAppliesToAnExistingToolbar();
   testDisabledChildReleaseFinishesToolbarDrag();

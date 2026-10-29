@@ -3965,6 +3965,20 @@ std::map<int, int> ChartRepository::Session::GoalRecommendationCounts(int tableI
   if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
   return counts;
 }
+std::unordered_set<std::string> ChartRepository::Session::GoalRecommendationHashes() {
+  ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
+  if (prepared.error()) throw std::runtime_error(*prepared.error());
+  auto *db = impl_->database();
+  SqliteStatementHandle query;
+  if (prepareSqliteStatement(db, chart_goals::recommendationChartHashesSql(), query) != SQLITE_OK)
+    throw std::runtime_error(sqliteDatabaseError(db));
+  std::unordered_set<std::string> hashes;
+  int rc;
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW)
+    hashes.insert(sqliteColumnString(query, 0));
+  if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
+  return hashes;
+}
 std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(int target, int offset, int tableId, bool sortTable) {
   target = normalizeClearLamp(target);
   ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
