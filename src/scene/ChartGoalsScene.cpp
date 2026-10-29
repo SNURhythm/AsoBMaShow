@@ -170,6 +170,7 @@ void lamp(View *parent, const std::string &text, int rank, bool target = false) 
     bar->setBackgroundColor(clearLampColorForRank(rank)); row->addView(bar);
   }
   auto *caption = label(row, text, target ? 28 : 18);
+  caption->setVAlign(TextView::MIDDLE);
   caption->setFlex(1)->setMinWidth(0);
   caption->setThemedColor(target ? app_theme::cyan : app_theme::textSecondary);
   parent->addView(row);

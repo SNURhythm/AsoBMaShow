@@ -80,7 +80,9 @@ void lampLabel(View *parent, const std::string &text, int rank, int size = 19) {
     bar->setBackgroundColor(clearLampColorForRank(rank));
     row->addView(bar);
   }
-  label(row, text, size)->setFlex(1)->setMinWidth(0);
+  auto *caption = label(row, text, size);
+  caption->setVAlign(TextView::MIDDLE);
+  caption->setFlex(1)->setMinWidth(0);
   parent->addView(row);
 }
 Button *action(View *parent, const std::string &value, std::function<void()> click,
