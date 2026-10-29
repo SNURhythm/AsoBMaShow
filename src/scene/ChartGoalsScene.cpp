@@ -443,6 +443,8 @@ void ChartGoalsScene::navigate(bool practice) {
 std::string ChartGoalsScene::scrollKey() const {
   if (selected_ || editing_)
     return std::string(editing_ ? "edit:" : "detail:") + draft_.chart.SHA256 + ":" + std::to_string(draft_.longNoteMode);
+  if (recommendationChart_) return "chart-recommend:" + recommendationChart_->meta.SHA256 + ":" +
+      std::to_string(recommendationRank_.value_or(-1));
   if (overviewTab_ == OverviewTab::Recommendations) {
     const int rank = recommendationRank_.value_or(-1);
     const auto found = recommendations_.find(rank);
@@ -483,17 +485,19 @@ void ChartGoalsScene::build() {
       }); },
           overviewTab_ == value ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
     };
-    action(navigation, i18n::tr("folder_goals.ui.title"), [this] {
-      const auto profile=profileId_;
-      defer([this,profile] {
-        if (profile!=context.profileManager.activeProfile().id) return true;
-        context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,
-            returnTarget_,std::nullopt,onSelectFolder_));
-        return false;
-      },0,true);
-    });
-    tab(i18n::tr("goals.ui.in_progress"), OverviewTab::Ongoing);
-    tab(i18n::tr("goals.ui.recommendations"), OverviewTab::Recommendations);
+    if (!recommendationChart_) {
+      action(navigation, i18n::tr("folder_goals.ui.title"), [this] {
+        const auto profile=profileId_;
+        defer([this,profile] {
+          if (profile!=context.profileManager.activeProfile().id) return true;
+          context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,
+              returnTarget_,std::nullopt,onSelectFolder_));
+          return false;
+        },0,true);
+      });
+      tab(i18n::tr("goals.ui.in_progress"), OverviewTab::Ongoing);
+      tab(i18n::tr("goals.ui.recommendations"), OverviewTab::Recommendations);
+    }
     if (overviewTab_ == OverviewTab::Recommendations) {
       for (const auto &[rank, group] : recommendations_) {
         auto *sub = action(navigation, i18n::format("goals.ui.near_rank", {
@@ -506,7 +510,7 @@ void ChartGoalsScene::build() {
           sub->addView(new GoalLampTabAccent(rank));
       }
     }
-    tab(i18n::tr("goals.ui.achieved"), OverviewTab::Achieved);
+    if (!recommendationChart_) tab(i18n::tr("goals.ui.achieved"), OverviewTab::Achieved);
     navigationScroll_->setContentView(navigation);
   }
   scroll_ = new ScrollView(); scroll_->setFlex(1)->setMinWidth(0)->setMinHeight(0); content->addView(scroll_);
@@ -616,23 +620,25 @@ void ChartGoalsScene::build() {
       if (recommendationChart_) goalIdentity(body, recommendationChart_->meta, &*recommendationChart_, 24);
       label(body, i18n::tr("goals.ui.near_help"), 18);
       label(body, i18n::tr("goals.ui.gauge_near_help"), 18);
-      std::vector<DropdownView::Option> tables{{"0", i18n::tr("goals.ui.all_tables")}};
-      for (const auto &table : recommendationTables_)
-        tables.push_back({std::to_string(table.id), table.name});
-      select(body, portal_, i18n::tr("goals.ui.table_filter"), std::move(tables),
-          std::to_string(recommendationTable_), [this](const std::string &id) { later([this, id] {
-            recommendationTable_ = std::stoi(id); reload();
-          }); });
-      if (recommendationTable_ != 0) {
-        auto *sorting = new View();
-        sorting->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
-        body->addView(sorting);
-        for (const bool byTable : {false, true}) {
-          auto *button = action(sorting, i18n::tr(byTable ? "goals.ui.sort_table" : "goals.ui.sort_nearness"),
-              [this, byTable] { later([this, byTable] { recommendationSortTable_ = byTable;
-                if (recommendationRank_ && recommendations_.contains(*recommendationRank_)) loadRecommendations(*recommendationRank_, 0);
-              }); }, recommendationSortTable_ == byTable ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
-          button->setFlex(1);
+      if (!recommendationChart_) {
+        std::vector<DropdownView::Option> tables{{"0", i18n::tr("goals.ui.all_tables")}};
+        for (const auto &table : recommendationTables_)
+          tables.push_back({std::to_string(table.id), table.name});
+        select(body, portal_, i18n::tr("goals.ui.table_filter"), std::move(tables),
+            std::to_string(recommendationTable_), [this](const std::string &id) { later([this, id] {
+              recommendationTable_ = std::stoi(id); reload();
+            }); });
+        if (recommendationTable_ != 0) {
+          auto *sorting = new View();
+          sorting->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+          body->addView(sorting);
+          for (const bool byTable : {false, true}) {
+            auto *button = action(sorting, i18n::tr(byTable ? "goals.ui.sort_table" : "goals.ui.sort_nearness"),
+                [this, byTable] { later([this, byTable] { recommendationSortTable_ = byTable;
+                  if (recommendationRank_ && recommendations_.contains(*recommendationRank_)) loadRecommendations(*recommendationRank_, 0);
+                }); }, recommendationSortTable_ == byTable ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
+            button->setFlex(1);
+          }
         }
       }
       if (recommendationRank_ && recommendations_.contains(*recommendationRank_)) {
@@ -729,6 +735,18 @@ void ChartGoalsScene::back() {
   if (editing_ && selected_) { later([this] { editing_ = false; message_.clear(); reload(); }); return; }
   if (editing_ || selected_) {
     later([this] { editing_ = false; selected_.reset(); message_.clear(); reload(); }); return;
+  }
+  if (recommendationChart_) {
+    later([this] {
+      recommendationChart_.reset(); recommendations_.clear(); recommendationRank_.reset();
+      overviewTab_ = OverviewTab::Recommendations;
+      navigationOffset_ = 0; navigationScroll_ = nullptr; message_.clear(); reload();
+      if (!recommendations_.empty()) {
+        recommendationRank_ = recommendations_.begin()->first;
+        loadRecommendations(*recommendationRank_, 0);
+      }
+    });
+    return;
   }
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }

@@ -13,7 +13,7 @@ class ChartGoalsSceneTests(unittest.TestCase):
         scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()
         methods = "\n".join(extract(scene, signature) for signature in (
             "std::string rateText(", "void ChartGoalsScene::init(", "void ChartGoalsScene::showGoal(",
-            "bool ChartGoalsScene::checkProfile(", "void ChartGoalsScene::later(",
+            "bool ChartGoalsScene::checkProfile(", "void ChartGoalsScene::later(", "void ChartGoalsScene::back(",
             "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal(", "void ChartGoalsScene::recommendGoal(", "void ChartGoalsScene::changeDraftMode("))
         fixture = (root / "tests/chart_goals_scene_fixture.cpp").read_text()
         fixture = fixture.replace("PRODUCTION_METHODS", methods)
@@ -40,6 +40,8 @@ struct ChartGoalsScene {
  OverviewTab overviewTab_ = OverviewTab::Ongoing;
  struct { struct { std::string SHA256; } chart; int longNoteMode=0; } draft_;
  std::optional<int> selected_, recommendationRank_;
+ struct Record { struct { std::string SHA256; } meta; };
+ std::optional<Record> recommendationChart_;
  bool editing_=false, recommendationSortTable_=false;
  int recommendationTable_=0, offset_=0, achievedOffset_=0;
  struct Group { int offset=0; }; std::map<int, Group> recommendations_;
@@ -50,6 +52,8 @@ int main() {
  ChartGoalsScene s; auto ongoing=s.scrollKey(); s.offset_=20; assert(s.scrollKey()!=ongoing);
  s.overviewTab_=ChartGoalsScene::OverviewTab::Recommendations; s.recommendationRank_=24;
  s.recommendations_[24].offset=20; auto page=s.scrollKey(); s.recommendations_[24].offset=0; assert(page!=s.scrollKey());
+ auto ordinary=s.scrollKey(); s.recommendationChart_=ChartGoalsScene::Record{{"chart"}};
+ assert(s.scrollKey()!=ordinary); s.recommendationChart_.reset(); assert(s.scrollKey()==ordinary);
  s.selected_=1; s.draft_.chart.SHA256="chart"; auto detail=s.scrollKey(); s.editing_=true; assert(s.scrollKey()!=detail);
  s.draft_.longNoteMode=2; assert(s.scrollKey()!=detail);
 }

@@ -30,9 +30,13 @@ struct Scores {
     ++removals; if (fail) error = "storage failure"; return !fail;
   }
 };
+struct Manager { int returned = 0; };
+bool returnToScene(Manager &manager, int) { ++manager.returned; return true; }
 struct ChartGoalsScene {
-  struct { Profiles profileManager; Scores scoreRepository;
-    struct { std::string selectedLnMode = "HCN"; } settings; } context;
+  Manager manager;
+  int returnTarget_ = 0;
+  struct { Manager *sceneManager; Profiles profileManager; Scores scoreRepository;
+    struct { std::string selectedLnMode = "HCN"; } settings; } context{.sceneManager=&manager};
   std::string profileId_ = "one", message_, customRate_;
   bool editing_ = true, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
   bool initialRecommendations_ = false;
@@ -56,7 +60,13 @@ struct ChartGoalsScene {
   std::vector<std::function<bool()>> queued;
   void defer(std::function<bool()> action, int, bool) { queued.push_back(action); }
   void build() { ++builds; }
-  void reload() { ++reloads; }
+  bool trackRecommendationScope = false;
+  void reload() {
+    ++reloads;
+    if (trackRecommendationScope) recommendations_ = recommendationChart_
+        ? std::map<int,int>{{24,1}} : std::map<int,int>{{26,2}};
+  }
+  void back();
   void init();
   void showGoal(chart_goals::Goal);
   void recommendGoal(const ChartMetaRecord &, int, int);
@@ -83,6 +93,7 @@ int main() {
   assert(noRecommendations.loadedRank == -1);
   ChartGoalsScene chartRecommendations;
   chartRecommendations.editing_ = false;
+  chartRecommendations.trackRecommendationScope = true;
   chartRecommendations.initial_ = Record{};
   chartRecommendations.initial_->meta.SHA256 = std::string(64, 'c');
   chartRecommendations.initialRecommendations_ = true;
@@ -92,6 +103,18 @@ int main() {
   assert(!chartRecommendations.editing_ && !chartRecommendations.selected_);
   assert(chartRecommendations.recommendationChart_->meta.SHA256 == std::string(64, 'c'));
   assert(!chartRecommendations.initial_ && chartRecommendations.loadedRank == 24);
+  chartRecommendations.recommendGoal(*chartRecommendations.recommendationChart_, 2, 24);
+  assert(chartRecommendations.editing_);
+  chartRecommendations.back(); chartRecommendations.flush();
+  assert(!chartRecommendations.editing_ && chartRecommendations.recommendationChart_);
+  chartRecommendations.back(); chartRecommendations.flush();
+  assert(!chartRecommendations.recommendationChart_ && chartRecommendations.manager.returned == 0);
+  assert(chartRecommendations.overviewTab_ == ChartGoalsScene::OverviewTab::Recommendations);
+  assert(chartRecommendations.recommendations_.contains(26) && !chartRecommendations.recommendations_.contains(24));
+  assert(chartRecommendations.loadedRank == 26);
+  chartRecommendations.back(); chartRecommendations.flush();
+  assert(chartRecommendations.manager.returned == 1);
+  chartRecommendations.recommendationChart_ = Record{};
   chartRecommendations.context.profileManager.profile.id = "two";
   assert(!chartRecommendations.checkProfile() && !chartRecommendations.recommendationChart_);
   ChartGoalsScene existing;

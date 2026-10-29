@@ -16,8 +16,11 @@ a goal containing both lamp and score targets counts once when both are met.
 A small red dot on a chart's flag indicates available lamp or score
 recommendations when that chart has no configured goal. Both selectors use this
 badge; saving a goal removes it, including when that goal is already achieved.
-Tapping a red-dot flag opens recommendations for that chart. Target groups and
-page counts use the same chart scope; selecting a recommendation opens its editor.
+Tapping a red-dot flag opens a dedicated recommendation view for that chart.
+Selecting a recommendation opens its editor; Back from the editor returns to
+that chart-specific view. Back again opens the ordinary Recommendations tab
+with all charts. The chart-specific view has its own target navigation and does
+not show the overview tabs or table filters.
 
 The Personal goals screen offers expandable **Near E** through **Near MAX**
 groups for best scores within 2 percentage points below their next rank. Empty
