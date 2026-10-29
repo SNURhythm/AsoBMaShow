@@ -146,6 +146,7 @@
 {"goals.ui.best_lamp", "Best lamp: {value}", "최고 램프: {value}", "ベストランプ: {value}", "最佳灯：{value}", "最佳燈：{value}"},
 {"goals.ui.best_score", "Best score: {value}", "최고 점수: {value}", "ベストスコア: {value}", "最高分：{value}", "最高分：{value}"},
 {"goals.ui.cancel", "Cancel", "취소", "キャンセル", "取消", "取消"},
+{"goals.ui.chart_goals", "Chart goals", "채보 목표", "譜面の目標", "谱面目标", "譜面目標"},
 {"goals.ui.combo_breaks", "Combo breaks: {count}", "콤보 끊김: {count}", "コンボ切れ: {count}", "断连次数：{count}", "斷連次數：{count}"},
 {"goals.ui.congratulations", "Goal achieved!", "목표 달성!", "目標達成！", "目标达成！", "目標達成！"},
 {"goals.ui.date_unknown", "Not recorded", "기록 없음", "記録なし", "未记录", "未記錄"},

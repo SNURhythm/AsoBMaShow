@@ -9212,6 +9212,8 @@ void MainMenuScene::openFolderGoals(std::optional<folder_goals::Source> source) 
   context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,SceneReturnTarget::Retained(this),std::move(source),
       [this,profile](const folder_goals::Source &source,int mode) {
         pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
+      },[this,profile](const ChartMetaRecord &record,int mode) {
+        pendingGoalSelection_=std::pair{record,mode}; pendingGoalProfile_=profile;
       }),true);
 }
 void MainMenuScene::applyFolderGoalSelection(const folder_goals::Source &source,int mode) {

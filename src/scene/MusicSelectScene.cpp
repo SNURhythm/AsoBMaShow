@@ -4897,7 +4897,8 @@ void MusicSelectScene::openFolderGoals(const folder_goals::Source &source) {
   if (context.storageMaintenanceActive || launching_ || failed_) return;
   const auto profile=context.profileManager.activeProfile().id;
   context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,SceneReturnTarget::Retained(this),source,
-      [this,profile](const folder_goals::Source &target,int mode){pendingFolderGoalSelection_=std::pair{target,mode};pendingFolderGoalProfile_=profile;}),true);
+      [this,profile](const folder_goals::Source &target,int mode){pendingFolderGoalSelection_=std::pair{target,mode};pendingFolderGoalProfile_=profile;},
+      [this,profile](const ChartMetaRecord &record,int mode){pendingGoalSelection_=std::pair{record,mode};pendingGoalProfile_=profile;}),true);
 }
 void MusicSelectScene::applyFolderGoalSelection(const folder_goals::Source &source,int mode) {
   if (!chartSession_ || !repositoryMetadata_) return;

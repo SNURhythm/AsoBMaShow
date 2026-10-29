@@ -1,5 +1,6 @@
 #include "FolderGoalsScene.h"
 #include "SceneManager.h"
+#include "ChartGoalsScene.h"
 #include "../goals/ChartGoal.h"
 #include "../goals/FolderGoalPresentation.h"
 #include "../LongNoteModeUtils.h"
@@ -8,6 +9,7 @@
 #include "../view/Button.h"
 #include "../view/DropdownView.h"
 #include "../view/GoalProgressBar.h"
+#include "../view/GoalKindCycleButton.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
@@ -57,13 +59,16 @@ void progress(View *parent,const folder_goals::Goal &goal,const folder_goals::Pr
 }
 }
 FolderGoalsScene::FolderGoalsScene(ApplicationContext &c,SceneReturnTarget target,
-    std::optional<folder_goals::Source> initial,SelectFolder select)
-    : Scene(c),returnTarget_(std::move(target)),onSelect_(std::move(select)),initial_(std::move(initial)),
-      profile_(c.profileManager.activeProfile().id) {}
+    std::optional<folder_goals::Source> initial,SelectFolder select,SelectChart selectChart,
+    std::shared_ptr<goal_navigation::State> navigationState)
+    : Scene(c),returnTarget_(std::move(target)),onSelect_(std::move(select)),onSelectChart_(std::move(selectChart)),
+      navigationState_(navigationState ? std::move(navigationState) : std::make_shared<goal_navigation::State>()),initial_(std::move(initial)),
+      profile_(c.profileManager.activeProfile().id),achieved_(navigationState_->folderAchieved) {}
 bool FolderGoalsScene::checkProfile() {
   if (profile_==context.profileManager.activeProfile().id) return true;
   profile_=context.profileManager.activeProfile().id;
   initial_.reset(); goals_.clear(); draft_={}; progress_.reset();
+  *navigationState_={};
   detail_=editing_=confirmRemove_=failed_=achieved_=false; offset_=0; rate_="100"; message_.clear();
   return false;
 }
@@ -78,6 +83,16 @@ void FolderGoalsScene::init() {
   reload();
   if (initial_ && !failed_) choose(*initial_,long_note_mode::valueFromId(context.settings.selectedLnMode),folder_goals::Type::Lamp);
   build();
+}
+void FolderGoalsScene::switchGoalKind() {
+  const auto profile=context.profileManager.activeProfile().id;
+  defer([this,profile] {
+    if (profile!=context.profileManager.activeProfile().id) return true;
+    navigationState_->folderAchieved=achieved_;
+    context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
+        returnTarget_,std::nullopt,onSelectChart_,std::nullopt,false,onSelect_,navigationState_));
+    return false;
+  },0,true);
 }
 void FolderGoalsScene::reload() {
   auto loaded=context.scoreRepository.LoadFolderGoals(message_);
@@ -126,7 +141,22 @@ void FolderGoalsScene::build() {
   root_->setFlexDirection(FlexDirection::Column)->setGap(12)->setPadding(Edge::All,18)->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(root_);
   button(root_,i18n::tr("kombo.ui.back"),[this]{back();})->setWidth(140);
-  scroll_=new ScrollView(); scroll_->setFlex(1)->setMinHeight(0); root_->addView(scroll_);
+  content_=new View(); content_->setFlexDirection(FlexDirection::Row)->setGap(goal_navigation::columnGap)->setFlex(1)->setMinHeight(0);
+  root_->addView(content_);
+  navigationScroll_=nullptr;
+  if (!detail_) {
+    navigationScroll_=new ScrollView(); navigationScroll_->setWidth(280)->setMinHeight(0)->setFlexShrink(0);
+    content_->addView(navigationScroll_);
+    auto *navigation=new View(); navigation->setFlexDirection(FlexDirection::Column)->setGap(6);
+    navigation->addView(makeGoalKindCycleButton(true,[this]{switchGoalKind();}));
+    for (bool achieved:{false,true}) {
+      auto *tab=button(navigation,i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),
+          [this,achieved]{later([this,achieved]{achieved_=achieved;offset_=0;});},achieved_==achieved);
+      if (auto *label=dynamic_cast<TextView *>(tab->getContentView())) label->setWrap(true);
+    }
+    navigationScroll_->setContentView(navigation);
+  }
+  scroll_=new ScrollView(); scroll_->setFlex(1)->setMinWidth(0)->setMinHeight(0); content_->addView(scroll_);
   auto *outer=new View(); outer->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignCenter);
   auto *body=new View(); body->setWidthPercent(100)->setGap(16)->setFlexDirection(FlexDirection::Column)->setPadding(Edge::Bottom,24);
   YGNodeStyleSetMaxWidth(body->getNode(),960); outer->addView(body); scroll_->setContentView(outer);
@@ -197,9 +227,6 @@ void FolderGoalsScene::build() {
     text(body,i18n::tr("folder_goals.ui.live_help"),17)->setThemedColor(app_theme::textSecondary);
   } else {
     text(body,i18n::tr("folder_goals.ui.intro"),19);
-    auto *tabs=row(body);
-    for (bool achieved:{false,true}) button(tabs,i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),
-        [this,achieved]{later([this,achieved]{achieved_=achieved;offset_=0;});},achieved_==achieved)->setFlex(1);
     std::vector<const folder_goals::GoalProgress *> entries;
     for (const auto &g:goals_) if (g.progress.achieved==achieved_) entries.push_back(&g);
     offset_=std::min(offset_,entries.empty() ? 0 : static_cast<int>((entries.size()-1)/20*20));
@@ -220,12 +247,18 @@ void FolderGoalsScene::build() {
 void FolderGoalsScene::layout() {
   if (!root_) return;
   root_->setSize(rendering::window_width,rendering::window_height); portal_->setSize(rendering::window_width,rendering::window_height);
+  float contentWidth=rendering::window_width-36;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   const auto safe=GetIOSSafeAreaInsetsNormalized();
+  contentWidth-=(safe.left+safe.right)*rendering::window_width;
   root_->setPadding(Edge::Top,18+safe.top*rendering::window_height)->setPadding(Edge::Bottom,18+safe.bottom*rendering::window_height)
       ->setPadding(Edge::Left,18+safe.left*rendering::window_width)->setPadding(Edge::Right,18+safe.right*rendering::window_width);
 #endif
+  const auto columns=goal_navigation::columns(contentWidth,navigationScroll_!=nullptr);
+  content_->setPadding(Edge::Left,columns.leftPadding)->setPadding(Edge::Right,columns.rightPadding);
+  if (navigationScroll_) navigationScroll_->setWidth(columns.navigationWidth);
   root_->applyYogaLayout(); scroll_->refreshContentLayout();
+  if (navigationScroll_) navigationScroll_->refreshContentLayout();
 }
 void FolderGoalsScene::back() {
   if (confirmRemove_) { later([this]{confirmRemove_=false;}); return; }
@@ -251,4 +284,4 @@ EventHandleResult FolderGoalsScene::handleEvents(SDL_Event &e) {
   if (e.type==SDL_EVENT_KEY_DOWN && e.key.key==SDLK_ESCAPE) back();
   return {};
 }
-void FolderGoalsScene::cleanupScene() {root_=nullptr;scroll_=nullptr;portal_=nullptr;progressPanel_=nullptr;}
+void FolderGoalsScene::cleanupScene() {root_=nullptr;content_=nullptr;navigationScroll_=nullptr;scroll_=nullptr;portal_=nullptr;progressPanel_=nullptr;}

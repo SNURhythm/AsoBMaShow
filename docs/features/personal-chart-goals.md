@@ -86,6 +86,13 @@ backfill gauge evidence.
 
 ## Using goals
 
+Use the cycling button above the sidebar to switch between **Chart goals** and
+**Folder goals**. Chart goals has vertical In progress, Recommended goals, and
+Achieved tabs; Folder goals has In progress and Achieved. Each section remembers
+its selected tab while switching. The selector uses the shared compact cycle
+button, and the sidebar sits close to the main view. On wide screens, the main
+view stays centered in the safe area; narrower screens use the remaining space.
+
 - In PLAY, tap the small flag on a chart row in the built-in selector or the flag
   in the custom selector toolbar. The row flag is filled when that chart has a goal.
   It opens the existing goal for the current LN mode, or another configured mode if none exists for the current

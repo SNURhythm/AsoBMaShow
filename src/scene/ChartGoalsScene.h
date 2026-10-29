@@ -3,6 +3,7 @@
 #include "SceneReturnTarget.h"
 #include "../goals/ChartGoal.h"
 #include "FolderGoalsScene.h"
+#include "../goals/GoalNavigation.h"
 
 class ScrollView;
 class OverlayPortal;
@@ -11,7 +12,8 @@ public:
   using SelectChart = std::function<void(const ChartMetaRecord &, int)>;
   ChartGoalsScene(ApplicationContext &, SceneReturnTarget,
                   std::optional<ChartMetaRecord> initial = {}, SelectChart = {},
-                  std::optional<int> initialMode = {}, bool initialRecommendations = false, FolderGoalsScene::SelectFolder = {});
+                  std::optional<int> initialMode = {}, bool initialRecommendations = false, FolderGoalsScene::SelectFolder = {},
+                  std::shared_ptr<goal_navigation::State> = {});
   void init() override;
   void onPause() override;
   void onResume() override;
@@ -27,6 +29,7 @@ private:
   bool checkProfile();
   void later(std::function<void()>);
   void reload();
+  void switchGoalKind();
   void loadRecommendations(int rank, int offset);
   void recommendGoal(const ChartMetaRecord &, int mode, int rank);
   void changeDraftMode(int mode);
@@ -39,7 +42,8 @@ private:
   std::vector<DifficultyTableInfo> recommendationTables_;
   int recommendationTable_ = 0;
   bool recommendationSortTable_ = false;
-  enum class OverviewTab { Ongoing, Recommendations, Achieved };
+  std::shared_ptr<goal_navigation::State> navigationState_;
+  using OverviewTab = goal_navigation::ChartTab;
   OverviewTab overviewTab_ = OverviewTab::Ongoing;
   std::optional<int> recommendationRank_;
   ScrollView *navigationScroll_ = nullptr;
@@ -68,6 +72,7 @@ private:
   bool editing_ = false, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
   int offset_ = 0, achievedOffset_ = 0;
   View *root_ = nullptr;
+  View *content_ = nullptr;
   ScrollView *scroll_ = nullptr;
   OverlayPortal *portal_ = nullptr;
 };

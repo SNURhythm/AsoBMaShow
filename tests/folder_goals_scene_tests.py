@@ -16,6 +16,8 @@ class FolderGoalsSceneTests(unittest.TestCase):
         fixture=r'''
 #include "goals/FolderGoal.h"
 #include "goals/ChartGoal.h"
+#include "goals/GoalNavigation.h"
+#include <memory>
 #include <algorithm>
 #include <cassert>
 #include <optional>
@@ -35,6 +37,7 @@ struct FolderGoalsScene {
    bool RemoveFolderGoal(const folder_goals::Goal &,std::string &){++removes;return true;}
   } scoreRepository;
  } context;
+ std::shared_ptr<goal_navigation::State> navigationState_=std::make_shared<goal_navigation::State>();
  std::optional<folder_goals::Source> initial_;
  std::vector<folder_goals::GoalProgress> goals_;
  folder_goals::Goal draft_;

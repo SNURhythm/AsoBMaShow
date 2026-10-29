@@ -234,6 +234,51 @@ int main() {
             FixtureCompiler.from_environment().build([path], binary, path.parent)
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_goal_kind_cycle_preserves_tabs_selector_callbacks_and_profile_guard(self):
+        root = Path(__file__).resolve().parents[1]
+        methods = "\n".join(extract((root / f"src/scene/{scene}.cpp").read_text(),
+            f"void {scene}::switchGoalKind(") for scene in ("ChartGoalsScene", "FolderGoalsScene"))
+        fixture = (root / "tests/goal_kind_navigation_fixture.cpp").read_text().replace("METHODS", methods)
+        with tempfile.TemporaryDirectory(prefix="goal-kind-navigation-") as directory:
+            path = Path(directory) / "navigation.cpp"
+            binary = Path(directory) / "navigation"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent, includes=(root / "src",))
+            subprocess.run([str(binary)], check=True, timeout=5)
+
+    def test_goal_columns_keep_tabs_close_and_center_main_when_space_allows(self):
+        root = Path(__file__).resolve().parents[1]
+        fixture = r'''
+#include "goals/GoalNavigation.h"
+#include <cassert>
+#include <cmath>
+int main() {
+  for (float width : {1884.0f, 2524.0f}) {
+    const auto c = goal_navigation::columns(width, true);
+    const float mainLeft = c.leftPadding + c.navigationWidth + goal_navigation::columnGap;
+    assert(c.navigationWidth < width * 0.2f);
+    assert(goal_navigation::columnGap <= 8);
+    assert(std::abs(mainLeft + c.bodyWidth / 2 - width / 2) < 0.01f);
+    assert(std::abs(mainLeft + c.bodyWidth + c.rightPadding - width) < 0.01f);
+  }
+  for (float width : {1044.0f, 552.0f}) {
+    const auto c = goal_navigation::columns(width, true);
+    assert(c.leftPadding == 0 && c.rightPadding == 0);
+    assert(c.bodyWidth > c.navigationWidth);
+    assert(std::abs(c.navigationWidth + goal_navigation::columnGap + c.bodyWidth - width) < 0.01f);
+  }
+  const auto detail = goal_navigation::columns(1884, false);
+  assert(detail.navigationWidth == 0 && detail.bodyWidth == 960);
+  assert(detail.leftPadding == detail.rightPadding);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="goal-columns-") as directory:
+            path = Path(directory) / "columns.cpp"
+            binary = Path(directory) / "columns"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent, includes=(root / "src",))
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_same_orientation_resize_refreshes_layout(self):
         root = Path(__file__).resolve().parents[1]
         scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()

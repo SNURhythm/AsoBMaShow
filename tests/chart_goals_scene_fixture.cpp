@@ -1,4 +1,6 @@
 #include "goals/ChartGoal.h"
+#include "goals/GoalNavigation.h"
+#include <memory>
 #include "LongNoteModeUtils.h"
 #include <sstream>
 #include <iomanip>
@@ -40,6 +42,7 @@ struct ChartGoalsScene {
   std::string profileId_ = "one", message_, customRate_;
   bool editing_ = true, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
   bool initialRecommendations_ = false;
+  std::shared_ptr<goal_navigation::State> navigationState_ = std::make_shared<goal_navigation::State>();
   enum class OverviewTab { Ongoing, Recommendations, Achieved };
   OverviewTab overviewTab_ = OverviewTab::Ongoing;
   std::map<int, int> recommendations_;
@@ -117,6 +120,11 @@ int main() {
   chartRecommendations.recommendationChart_ = Record{};
   chartRecommendations.context.profileManager.profile.id = "two";
   assert(!chartRecommendations.checkProfile() && !chartRecommendations.recommendationChart_);
+  ChartGoalsScene rememberedOverview;
+  rememberedOverview.overviewTab_ = ChartGoalsScene::OverviewTab::Recommendations;
+  rememberedOverview.recommendations_[26] = 2;
+  rememberedOverview.init();
+  assert(rememberedOverview.loadedRank == 26 && !rememberedOverview.initialRecommendations_);
   ChartGoalsScene existing;
   chart_goals::Goal saved;
   saved.chart.SHA256 = std::string(64, 'a'); saved.longNoteMode = 2;

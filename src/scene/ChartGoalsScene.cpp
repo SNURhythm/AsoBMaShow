@@ -13,6 +13,7 @@
 #include "../ClearLampOrder.h"
 #include "../view/DropdownView.h"
 #include "../view/GoalLampTabAccent.h"
+#include "../view/GoalKindCycleButton.h"
 #include "../view/IconText.h"
 #include "../view/ImageView.h"
 #include "../view/OverlayPortal.h"
@@ -206,14 +207,17 @@ void select(View *parent, OverlayPortal *portal, const std::string &caption,
 }
 ChartGoalsScene::ChartGoalsScene(ApplicationContext &context, SceneReturnTarget target,
                                std::optional<ChartMetaRecord> initial, SelectChart onSelect,
-                               std::optional<int> initialMode, bool initialRecommendations, FolderGoalsScene::SelectFolder onSelectFolder)
-    : Scene(context), returnTarget_(std::move(target)), onSelectChart_(std::move(onSelect)), onSelectFolder_(std::move(onSelectFolder)),
+                               std::optional<int> initialMode, bool initialRecommendations, FolderGoalsScene::SelectFolder onSelectFolder,
+                               std::shared_ptr<goal_navigation::State> navigationState)
+    : Scene(context), navigationState_(navigationState ? std::move(navigationState) : std::make_shared<goal_navigation::State>()),
+      overviewTab_(navigationState_->chartTab), returnTarget_(std::move(target)), onSelectChart_(std::move(onSelect)), onSelectFolder_(std::move(onSelectFolder)),
       initial_(std::move(initial)), initialMode_(initialMode), initialRecommendations_(initialRecommendations), profileId_(context.profileManager.activeProfile().id) {}
 bool ChartGoalsScene::checkProfile() {
   if (profileId_ == context.profileManager.activeProfile().id) return true;
   profileId_ = context.profileManager.activeProfile().id;
   initial_.reset(); initialMode_.reset(); resolved_.reset(); selected_.reset();
   recommendationChart_.reset(); initialRecommendations_ = false;
+  *navigationState_ = {}; overviewTab_ = OverviewTab::Ongoing;
   draft_ = {}; page_ = {}; offset_ = achievedOffset_ = 0;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
@@ -240,8 +244,8 @@ void ChartGoalsScene::init() {
     initialMode_.reset();
   } else {
     reload();
-    if (initialRecommendations_) {
-      overviewTab_ = OverviewTab::Recommendations;
+    if (initialRecommendations_) overviewTab_ = OverviewTab::Recommendations;
+    if (overviewTab_ == OverviewTab::Recommendations) {
       if (!recommendations_.empty()) {
         recommendationRank_ = recommendations_.begin()->first;
         loadRecommendations(*recommendationRank_, 0);
@@ -250,6 +254,16 @@ void ChartGoalsScene::init() {
   }
   initialRecommendations_ = false;
   build();
+}
+void ChartGoalsScene::switchGoalKind() {
+  const auto profile = context.profileManager.activeProfile().id;
+  defer([this, profile] {
+    if (profile != context.profileManager.activeProfile().id) return true;
+    navigationState_->chartTab = overviewTab_;
+    context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,
+        returnTarget_, std::nullopt, onSelectFolder_, onSelectChart_, navigationState_));
+    return false;
+  }, 0, true);
 }
 void ChartGoalsScene::reload() {
   std::map<int, int> previousOffsets;
@@ -465,13 +479,13 @@ void ChartGoalsScene::build() {
       ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(root_);
   action(root_, i18n::tr("kombo.ui.back"), [this] { back(); })->setWidth(140);
-  auto *content = new View();
-  content->setFlexDirection(FlexDirection::Row)->setGap(12)->setFlex(1)->setMinHeight(0);
+  auto *content = content_ = new View();
+  content->setFlexDirection(FlexDirection::Row)->setGap(goal_navigation::columnGap)->setFlex(1)->setMinHeight(0);
   root_->addView(content);
   navigationScroll_ = nullptr;
   if (!editing_ && !selected_) {
     navigationScroll_ = new ScrollView();
-    navigationScroll_->setWidthPercent(30)->setMinHeight(0);
+    navigationScroll_->setWidth(280)->setMinHeight(0)->setFlexShrink(0);
     content->addView(navigationScroll_);
     auto *navigation = new View();
     navigation->setFlexDirection(FlexDirection::Column)->setGap(6);
@@ -486,15 +500,7 @@ void ChartGoalsScene::build() {
           overviewTab_ == value ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
     };
     if (!recommendationChart_) {
-      action(navigation, i18n::tr("folder_goals.ui.title"), [this] {
-        const auto profile=profileId_;
-        defer([this,profile] {
-          if (profile!=context.profileManager.activeProfile().id) return true;
-          context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,
-              returnTarget_,std::nullopt,onSelectFolder_));
-          return false;
-        },0,true);
-      });
+      navigation->addView(makeGoalKindCycleButton(false, [this] { switchGoalKind(); }));
       tab(i18n::tr("goals.ui.in_progress"), OverviewTab::Ongoing);
       tab(i18n::tr("goals.ui.recommendations"), OverviewTab::Recommendations);
     }
@@ -511,6 +517,9 @@ void ChartGoalsScene::build() {
       }
     }
     if (!recommendationChart_) tab(i18n::tr("goals.ui.achieved"), OverviewTab::Achieved);
+    for (auto *child : navigation->getChildren())
+      if (auto *button = dynamic_cast<Button *>(child))
+        if (auto *text = dynamic_cast<TextView *>(button->getContentView())) text->setWrap(true);
     navigationScroll_->setContentView(navigation);
   }
   scroll_ = new ScrollView(); scroll_->setFlex(1)->setMinWidth(0)->setMinHeight(0); content->addView(scroll_);
@@ -717,13 +726,18 @@ void ChartGoalsScene::layout() {
   if (!root_) return;
   root_->setSize(rendering::window_width, rendering::window_height);
   portal_->setSize(rendering::window_width, rendering::window_height);
+  float contentWidth = rendering::window_width - 36;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   const auto safe = GetIOSSafeAreaInsetsNormalized();
+  contentWidth -= (safe.left + safe.right) * rendering::window_width;
   root_->setPadding(Edge::Top, 18 + safe.top * rendering::window_height)
       ->setPadding(Edge::Bottom, 18 + safe.bottom * rendering::window_height)
       ->setPadding(Edge::Left, 18 + safe.left * rendering::window_width)
       ->setPadding(Edge::Right, 18 + safe.right * rendering::window_width);
 #endif
+  const auto columns = goal_navigation::columns(contentWidth, navigationScroll_ != nullptr);
+  content_->setPadding(Edge::Left, columns.leftPadding)->setPadding(Edge::Right, columns.rightPadding);
+  if (navigationScroll_) navigationScroll_->setWidth(columns.navigationWidth);
   root_->applyYogaLayout(); scroll_->refreshContentLayout();
   if (navigationScroll_) {
     navigationScroll_->refreshContentLayout();
@@ -770,4 +784,4 @@ EventHandleResult ChartGoalsScene::handleEvents(SDL_Event &event) {
   if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) back();
   return {};
 }
-void ChartGoalsScene::cleanupScene() { root_ = nullptr; scroll_ = nullptr; navigationScroll_ = nullptr; portal_ = nullptr; }
+void ChartGoalsScene::cleanupScene() { root_ = nullptr; content_ = nullptr; scroll_ = nullptr; navigationScroll_ = nullptr; portal_ = nullptr; }
