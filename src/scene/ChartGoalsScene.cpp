@@ -15,6 +15,7 @@
 #include "../view/GoalLampTabAccent.h"
 #include "../view/GoalKindCycleButton.h"
 #include "../view/GoalListRow.h"
+#include "../view/GoalTargetPanel.h"
 #include "../view/IconText.h"
 #include "../view/ImageView.h"
 #include "../view/OverlayPortal.h"
@@ -61,6 +62,11 @@ Button *action(View *parent, const std::string &value, std::function<void()> cli
   if (glyph) {
     auto *content = action_button::makeInlineContent(text, glyph);
     content->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
+    text->setAlign(TextView::CENTER);
+    // Balance the leading icon so the caption centers on the entire button.
+    auto *balance = new View();
+    balance->setWidth(24)->setFlexShrink(0);
+    content->addView(balance);
     button->setContentView(content);
   } else button->setContentView(text);
   button->setCornerRadius(16);
@@ -155,7 +161,7 @@ std::map<std::string, ChartMetaRecord> loadGoalArtwork(
   }
   return result;
 }
-void lamp(View *parent, const std::string &text, int rank) {
+void lamp(View *parent, const std::string &text, int rank, bool target = false) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Row)->setGap(10)->setAlignItems(YGAlignCenter)->setFlexShrink(0);
   if (hasClearLampColor(rank)) {
@@ -163,7 +169,9 @@ void lamp(View *parent, const std::string &text, int rank) {
     bar->setWidth(5)->setHeight(26)->setCornerRadius(2)->setFlexShrink(0);
     bar->setBackgroundColor(clearLampColorForRank(rank)); row->addView(bar);
   }
-  label(row, text)->setFlex(1)->setMinWidth(0);
+  auto *caption = label(row, text, target ? 28 : 18);
+  caption->setFlex(1)->setMinWidth(0);
+  caption->setThemedColor(target ? app_theme::cyan : app_theme::textSecondary);
   parent->addView(row);
 }
 std::string rateText(const chart_goals::Target &target) {
@@ -188,15 +196,16 @@ std::string scope(const chart_goals::Goal &goal) {
   return goal.longNoteMode == 0 ? i18n::tr("goals.ui.shared_scope") : long_note_mode::idFromValue(goal.longNoteMode);
 }
 void targets(View *parent, const chart_goals::Target &target) {
+  parent = goal_ui::targetPanel(parent);
   if (target.lamp >= 0) {
     const auto value = kombo::lampLabel(target.lamp);
     lamp(parent, target.lamp >= kClearTypeFullComboRank ? value
-        : i18n::format("kombo.ui.at_least", {{"value", value}}), target.lamp);
+        : i18n::format("kombo.ui.at_least", {{"value", value}}), target.lamp, true);
   }
   if (target.scoreNumerator > 0) {
     const auto value = scoreTarget(target);
     label(parent, target.scoreNumerator >= target.scoreDenominator ? value
-        : i18n::format("kombo.ui.at_least", {{"value", value}}));
+        : i18n::format("kombo.ui.at_least", {{"value", value}}), 28)->setThemedColor(app_theme::cyan);
   }
 }
 void orderGoalRows(std::vector<chart_goals::GoalProgress> &rows) {
@@ -214,7 +223,7 @@ void goalSummary(View *parent, const chart_goals::GoalProgress &entry) {
         entry.progress.bestClear ? entry.progress.bestClear->clearType : -1)}}),
         entry.progress.bestClear ? entry.progress.bestClear->clearType : -1);
   if (entry.goal.target.scoreNumerator > 0) {
-    label(parent, i18n::format("goals.ui.best_score", {{"value", bestScoreText(entry.progress.bestScore)}}), 18);
+    label(parent, i18n::format("goals.ui.best_score", {{"value", bestScoreText(entry.progress.bestScore)}}), 18)->setThemedColor(app_theme::textSecondary);
     label(parent, entry.progress.remainingEx ? i18n::format("goals.ui.ex_remaining", {{"count", std::to_string(*entry.progress.remainingEx)}})
         : i18n::tr("goals.ui.unknown_gap"), 18);
   }
@@ -632,7 +641,7 @@ void ChartGoalsScene::build() {
         lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", kombo::lampLabel(
             progress.bestClear ? progress.bestClear->clearType : -1)}}),
             progress.bestClear ? progress.bestClear->clearType : -1);
-        label(detail, i18n::format("goals.ui.best_score", {{"value", bestScoreText(progress.bestScore)}}));
+        label(detail, i18n::format("goals.ui.best_score", {{"value", bestScoreText(progress.bestScore)}}), 18)->setThemedColor(app_theme::textSecondary);
       } else label(detail, i18n::tr("goals.ui.storage_error"));
       label(detail, i18n::tr("goals.ui.target_help"), 18);
       std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("goals.ui.no_target")}};
@@ -667,7 +676,7 @@ void ChartGoalsScene::build() {
       lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", kombo::lampLabel(
           progress.bestClear ? progress.bestClear->clearType : -1)}}),
           progress.bestClear ? progress.bestClear->clearType : -1);
-      label(detail, i18n::format("goals.ui.best_score", {{"value", bestScoreText(progress.bestScore)}}));
+      label(detail, i18n::format("goals.ui.best_score", {{"value", bestScoreText(progress.bestScore)}}), 18)->setThemedColor(app_theme::textSecondary);
       if (draft_.target.scoreNumerator > 0)
         label(detail, progress.remainingEx ? i18n::format("goals.ui.ex_remaining", {{"count", std::to_string(*progress.remainingEx)}})
                                           : i18n::tr("goals.ui.unknown_gap"));

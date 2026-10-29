@@ -136,13 +136,15 @@ int main() {
 #include <vector>
 #include <initializer_list>
 #include <utility>
-struct View {};
+struct View { void setThemedColor(int) {} };
+namespace goal_ui { View *targetPanel(View *v) { return v; } }
+namespace app_theme { constexpr int cyan=1; }
 namespace chart_goals { struct Target { int lamp, scoreNumerator, scoreDenominator; }; }
 namespace kombo { std::string lampLabel(int n) { return n == 600 ? "FULL COMBO" : "HARD"; } }
 constexpr int kClearTypeFullComboRank = 600;
 std::vector<std::string> labels;
-void lamp(View *, const std::string &s, int) { labels.push_back(s); }
-void label(View *, const std::string &s) { labels.push_back(s); }
+void lamp(View *, const std::string &s, int, bool) { labels.push_back(s); }
+View *label(View *v, const std::string &s, int) { labels.push_back(s); return v; }
 std::string scoreTarget(const chart_goals::Target &t) { return t.scoreDenominator == 10000 ? "100.00% EX" : (t.scoreNumerator == t.scoreDenominator ? "MAX" : "AAA"); }
 namespace i18n { std::string format(const char *, std::initializer_list<std::pair<std::string,std::string>> values) { return values.begin()->second + " or above"; } }
 METHOD

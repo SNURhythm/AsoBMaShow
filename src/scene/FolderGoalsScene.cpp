@@ -11,6 +11,7 @@
 #include "../view/GoalProgressBar.h"
 #include "../view/GoalKindCycleButton.h"
 #include "../view/GoalListRow.h"
+#include "../view/GoalTargetPanel.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
@@ -38,12 +39,15 @@ View *card(View *parent) {
       ->setCornerRadius(24)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panel);
   parent->addView(v); return v;
 }
+void target(View *parent,const folder_goals::Goal &goal) {
+  text(goal_ui::targetPanel(parent),folder_goals::targetText(goal),28)->setThemedColor(app_theme::cyan);
+}
 void progress(View *parent,const folder_goals::Goal &goal,const folder_goals::Progress &p,bool showTarget=true) {
-  if (showTarget) text(parent,folder_goals::targetText(goal),21);
+  if (showTarget) target(parent,goal);
   if (!p.sourceAvailable) { text(parent,i18n::tr("folder_goals.ui.unavailable")); return; }
   auto *numbers=row(parent);
-  auto *value=text(numbers,folder_goals::percentText(p.percent),36); value->setFlex(1)->setMinWidth(0);
-  value->setThemedColor(p.achieved ? app_theme::lime : app_theme::textPrimary);
+  auto *value=text(numbers,folder_goals::percentText(p.percent),22); value->setFlex(1)->setMinWidth(0);
+  value->setThemedColor(app_theme::textSecondary);
   auto *state=text(numbers,i18n::tr(p.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),18);
   state->setVAlign(TextView::MIDDLE);
   parent->addView(new GoalProgressBar(p.percent,goal.target.percent/100.0,
@@ -326,7 +330,7 @@ void FolderGoalsScene::build() {
     for (int i=start;i<std::min(static_cast<int>(entries.size()),picker_ ? static_cast<int>(entries.size()) : start+20);++i) {
       const auto &g=*entries[i];
       auto *panel=goal_ui::clickableRow(body,[this,goal=g.goal]{later([this,goal]{choose(goal.source,goal.longNoteMode,goal.target.type);});});
-      text(panel,folder_goals::targetText(g.goal),23);
+      target(panel,g.goal);
       text(panel,g.goal.source.name.empty() ? g.goal.source.identity : g.goal.source.name,18);
       text(panel,long_note_mode::idFromValue(g.goal.longNoteMode),17)->setThemedColor(app_theme::textSecondary);
       progress(panel,g.goal,g.progress,false);
