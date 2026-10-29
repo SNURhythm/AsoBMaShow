@@ -1528,7 +1528,7 @@ void SettingsScene::appendJudgementIndicatorColorizationSettings(
     };
     auto *visibility = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
         makeText(i18n::message(style.visible ? "records.show.label" : "records.hide.label"),
-                 metrics.smallTextSize, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+                 metrics.smallTextSize, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE), true);
     visibility->setOnClickListener([getStyle, refresh] {
       if (auto *target = getStyle()) target->visible = !target->visible;
       refresh();
