@@ -402,6 +402,7 @@ private:
   void updateGoalAchievement();
   GoalResultPresentation goalPresentation_;
   std::vector<chart_goals::Goal> goalAchievements_;
+  std::vector<folder_goals::Goal> folderGoalAchievements_;
   std::string goalProfileId_;
   View *goalAchievementView_ = nullptr;
   float goalAchievementUnit_ = 0;

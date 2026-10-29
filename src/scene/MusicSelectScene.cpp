@@ -9,6 +9,8 @@
 #include "MusicSelectScene.h"
 #include "KomboScene.h"
 #include "ChartGoalsScene.h"
+#include "FolderGoalsScene.h"
+#include "../repositories/ChartStorageIdentity.h"
 #include "../goals/GoalTargetPresentation.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
@@ -1855,6 +1857,7 @@ bool MusicSelectScene::loadDirectoryChildren(
     ChartMetaQuery query;
     query.tableId = directory.tableId;
     query.tableLevel = directory.tableLevel;
+    query.exactTableLevel = true;
     query.selectedLongNoteMode = selectedLongNoteMode;
     table.levels.front().records.clear();
     chartSession_->QueryChartMeta(query, table.levels.front().records);
@@ -3663,6 +3666,10 @@ void MusicSelectScene::openMusicPlayer() {
 }
 
 void MusicSelectScene::resumeGoalNavigation() {
+  if (auto goal=std::exchange(pendingFolderGoalSelection_,{})) {
+    if (pendingFolderGoalProfile_==context.profileManager.activeProfile().id) applyFolderGoalSelection(goal->first,goal->second);
+    pendingFolderGoalProfile_.clear();
+  }
   if (auto goal = std::exchange(pendingGoalSelection_, {})) {
     if (pendingGoalProfile_ == context.profileManager.activeProfile().id)
       applyGoalSelection(goal->first, goal->second);
@@ -3677,15 +3684,17 @@ void MusicSelectScene::resumeGoalNavigation() {
 }
 
 void MusicSelectScene::openChartGoalForSelection() {
-  const auto snapshot = bars_.readView();
-  if (snapshot.selectedIndex >= snapshot.rowCount()) return;
-  const auto record = snapshot.rowAt(snapshot.selectedIndex).chart;
+  const auto snapshot=bars_.readView();
+  if (snapshot.selectedIndex>=snapshot.rowCount()) return;
+  const auto &row=snapshot.rowAt(snapshot.selectedIndex);
+  const auto profile=context.profileManager.activeProfile().id;
+  if (auto source=folderGoalSource(row)) {
+    defer([this,source,profile]{if(profile==context.profileManager.activeProfile().id) openFolderGoals(*source); return true;},0,true);
+    return;
+  }
+  const auto record=row.chart;
   if (!record) return;
-  const auto profile = context.profileManager.activeProfile().id;
-  defer([this, record, profile] {
-    if (profile == context.profileManager.activeProfile().id) openChartGoals(record);
-    return true;
-  }, 0, true);
+  defer([this,record,profile]{if(profile==context.profileManager.activeProfile().id) openChartGoals(record); return true;},0,true);
 }
 
 void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial, bool recommendations) {
@@ -3703,7 +3712,9 @@ void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial, bo
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
         pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
-      }, goalMode, recommendations), true);
+      }, goalMode, recommendations,[this,profile](const folder_goals::Source &source,int mode) {
+        pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
+      }), true);
 }
 
 void MusicSelectScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
@@ -4014,7 +4025,7 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
   case MusicSelectToolbarControl::ChartViewer:
     return present && !chart->solidArchive;
   case MusicSelectToolbarControl::Goal:
-    return present && !chart->solidArchive && context.sceneManager;
+    return context.sceneManager && ((present && !chart->solidArchive) || (selected && folderGoalSource(*selected)));
   case MusicSelectToolbarControl::ChartRecords:
     return modalLayer_ && selected && musicSelectRecordsTarget(*selected).has_value();
   case MusicSelectToolbarControl::Rankings:
@@ -4053,6 +4064,19 @@ void MusicSelectScene::refreshToolbarGoal() {
   const auto snapshot = bars_.readView();
   const auto *row = snapshot.selectedIndex < snapshot.rowCount() ? &snapshot.rowAt(snapshot.selectedIndex) : nullptr;
   const auto *chart = row && row->kind == skin::MusicSelectBarKind::Song && row->chart ? &*row->chart : nullptr;
+  if (row) if (auto source=folderGoalSource(*row)) {
+    const auto key=context.profileManager.activeProfile().id+folder_goals::sourceKey(*source)+context.settings.selectedLnMode+
+        std::to_string(context.scoreRepository.GetRevision())+":"+std::to_string(libraryRevision_);
+    if (toolbarGoalKey_==key) return;
+    toolbarGoalKey_=key;
+    std::string error;
+    toolbarFolderGoals_.refresh(context.profileManager.activeProfile().id,context.scoreRepository.GetRevision(),libraryRevision_,
+        [this,&error]{return context.scoreRepository.LoadFolderGoals(error);});
+    const auto status=toolbarFolderGoals_.status(*source,long_note_mode::valueFromId(context.settings.selectedLnMode));
+    toolbar_->setGoalState(status.present,status.achieved,-1,{},{});
+    return;
+  }
+
   if (!chart || chart->unavailable || chart->solidArchive || chart->meta.BmsPath.empty() || chart->meta.SHA256.empty()) {
     toolbarGoalKey_.clear();
     toolbar_->setGoalState(false, false, -1, {}, {});
@@ -4815,4 +4839,53 @@ void MusicSelectScene::onInputQueueOverflow() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinTouchGesture_.cancel();
 #endif
+}
+
+std::optional<folder_goals::Source> MusicSelectScene::folderGoalSource(const MusicSelectBar &bar) const {
+  if (bar.kind==skin::MusicSelectBarKind::Folder && !bar.directoryPath.empty())
+    return folder_goals::Source{.kind=folder_goals::SourceKind::Directory,
+        .identity=chart_storage_identity::StoredFolderPathText(bar.directoryPath),.name=bar.title};
+  if ((bar.kind!=skin::MusicSelectBarKind::Table && bar.kind!=skin::MusicSelectBarKind::Hash) || bar.tableId<=0) return {};
+  std::string url=bar.tableUrl;
+  if (url.empty() && repositoryMetadata_) for(const auto &table:repositoryMetadata_->tables)
+    if (table.info.id==bar.tableId) {url=table.info.sourceUrl;break;}
+  if (url.empty()) return {};
+  return folder_goals::Source{.kind=bar.kind==skin::MusicSelectBarKind::Table ? folder_goals::SourceKind::Table : folder_goals::SourceKind::Level,
+      .identity=url,.level=bar.tableLevel,.name=bar.title};
+}
+void MusicSelectScene::openFolderGoals(const folder_goals::Source &source) {
+  if (context.storageMaintenanceActive || launching_ || failed_) return;
+  const auto profile=context.profileManager.activeProfile().id;
+  context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,SceneReturnTarget::Retained(this),source,
+      [this,profile](const folder_goals::Source &target,int mode){pendingFolderGoalSelection_=std::pair{target,mode};pendingFolderGoalProfile_=profile;}),true);
+}
+void MusicSelectScene::applyFolderGoalSelection(const folder_goals::Source &source,int mode) {
+  if (!chartSession_ || !repositoryMetadata_) return;
+  context.settings.selectedLnMode=long_note_mode::idFromValue(mode);
+  context.settings.skinModeFilterName="ALL"; context.settings.skinDifficultyFilterName="ALL";
+  (void)context.saveSettings();
+  bars_.configure({.modeFilter="ALL",.difficultyFilter="ALL",.sortId=context.settings.skinSortId});
+  cancelDirectoryLoad();
+  if (source.kind==folder_goals::SourceKind::Directory) {
+    auto path=std::filesystem::path(utf8_to_path_t(source.identity)); chart_storage_identity::ToAbsolutePath(path);
+    MusicSelectBar directory{.id={"folder-goal:"+source.identity},.kind=skin::MusicSelectBarKind::Folder,
+        .title=source.name,.directoryPath=path,.presentation={.kind=skin::MusicSelectBarKind::Folder,.title=source.name,.exists=true},
+        .selectable=true,.sortable=true};
+    auto content=loadMusicSelectPhysicalDirectory(context.chartRepository,*repositoryMetadata_,directory,scoreCache_,clearRankCache_,
+        context.replayRepository.GetResolvedProfileRoot(),{.modeFilter="ALL",.difficultyFilter="ALL",.sortId=context.settings.skinSortId},mode);
+    if (bars_.openTransient(directory,std::move(content.children),std::move(content.provider))) syncResolvedFilters();
+  } else {
+    int tableId=0;
+    for(const auto &table:repositoryMetadata_->tables) if(table.info.sourceUrl==source.identity) {tableId=table.info.id;break;}
+    if (!tableId) return;
+    while(bars_.close()) {}
+    if (!bars_.select({"table:"+std::to_string(tableId)})) return;
+    auto view=bars_.readView(); auto directory=view.rowAt(view.selectedIndex);
+    if (!openDirectory(directory)) return;
+    if (source.kind==folder_goals::SourceKind::Level && bars_.select({"hash:table:"+std::to_string(tableId)+":"+source.level})) {
+      view=bars_.readView(); directory=view.rowAt(view.selectedIndex); (void)openDirectory(directory);
+    }
+    syncResolvedFilters();
+  }
+  selectedBarMoved();
 }

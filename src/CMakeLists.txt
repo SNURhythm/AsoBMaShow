@@ -93,3 +93,6 @@ target_sources(main PRIVATE repositories/ScoreRepositoryKombo.cpp
 
 target_sources(main PRIVATE goals/ChartGoal.cpp goals/ChartGoalStore.cpp
     repositories/ScoreRepositoryGoals.cpp)
+
+target_sources(main PRIVATE goals/FolderGoal.cpp goals/FolderGoalStore.cpp
+    repositories/ScoreRepositoryFolderGoals.cpp)

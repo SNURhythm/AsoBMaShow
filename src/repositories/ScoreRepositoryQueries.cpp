@@ -1067,6 +1067,12 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   if (!transaction.active())
     return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
 
+  std::vector<folder_goals::GoalProgress> folderGoalsBefore;
+  try { folderGoalsBefore=impl_->folderGoalsBeforePlay(pending.score.chartSha256); }
+  catch (const std::exception &error) {
+    return {.status=ProjectionStatus::StorageFailure,.diagnostic=error.what()};
+  }
+
   const score_repository_detail::ScoreWriteOutcome inserted =
       score_repository_detail::InsertScoreWriteOnConnection(
           db, pending.score, pending.attemptId, pending.createdAt,
@@ -1077,11 +1083,15 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = "could not update gauge recommendations"};
     kombo::PlayProgress komboProgress;
     std::vector<chart_goals::Goal> goalAchievements;
+    std::vector<folder_goals::Goal> folderAchievements;
     try {
       const auto &score = pending.score;
       goalAchievements = score_repository_detail::RecordChartGoalAchievementsOnConnection(
           db, score.chartSha256, pending.createdAt, pending.attemptId, true);
+      folderAchievements=impl_->folderGoalsAfterPlay(folderGoalsBefore,pending.createdAt);
       std::vector<std::string> achievedGoals;
+      for (const auto &goal:folderAchievements)
+        achievedGoals.push_back("folder:"+folder_goals::key(goal)+":"+std::to_string(goal.setAt)+":"+std::to_string(goal.revision));
       for (const auto &goal : goalAchievements)
         achievedGoals.push_back(goal.chart.SHA256 + ":" + std::to_string(goal.longNoteMode) + ":" + pending.attemptId);
       // Bound eligibility to history before this attempt, including timestamp
@@ -1152,6 +1162,8 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
     impl_->chartGoalAchievementAttempt = pending.attemptId;
     impl_->chartGoalAchievements = std::move(goalAchievements);
+    impl_->folderGoalAchievementAttempt=pending.attemptId;
+    impl_->folderGoalAchievements=std::move(folderAchievements);
     impl_->komboProgress.reset();
     if (!komboProgress.assignments.empty()) impl_->komboProgress = std::move(komboProgress);
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);

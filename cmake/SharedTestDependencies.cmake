@@ -109,6 +109,9 @@ asobmashow_share_test_sources(dependencies
         src/repositories/ScoreRepositoryGoals.cpp
         src/goals/ChartGoal.cpp
         src/goals/ChartGoalStore.cpp
+        src/repositories/ScoreRepositoryFolderGoals.cpp
+        src/goals/FolderGoal.cpp
+        src/goals/FolderGoalStore.cpp
         src/kombo/KomboModel.cpp
         src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp

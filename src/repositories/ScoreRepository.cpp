@@ -148,6 +148,10 @@ bool ScoreRepository::BindDatabasePath(std::filesystem::path databasePath,
   impl_->komboProgress.reset();
   impl_->chartGoalAchievementAttempt.clear();
   impl_->chartGoalAchievements.clear();
+  impl_->folderGoalAchievementAttempt.clear();
+  impl_->folderGoalAchievements.clear();
+  impl_->folderGoalProjector.reset();
+  impl_->folderGoalCharts.reset();
   impl_->sessionDatabase = candidate.release();
   closeSqliteDatabase(previous);
   score_repository_detail::IncrementRevision();
@@ -167,6 +171,10 @@ void ScoreRepository::CloseSessionDatabaseLocked() {
   impl_->komboProgress.reset();
   impl_->chartGoalAchievementAttempt.clear();
   impl_->chartGoalAchievements.clear();
+  impl_->folderGoalAchievementAttempt.clear();
+  impl_->folderGoalAchievements.clear();
+  impl_->folderGoalProjector.reset();
+  impl_->folderGoalCharts.reset();
   closeSqliteDatabase(impl_->sessionDatabase);
   impl_->sessionDatabase = nullptr;
 }

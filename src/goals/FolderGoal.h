@@ -1,0 +1,44 @@
+#pragma once
+#include <cstdint>
+#include <span>
+#include <string>
+#include <vector>
+
+namespace folder_goals {
+enum class SourceKind { Directory, Table, Level };
+enum class Type { Lamp, AverageEx };
+struct Source {
+  SourceKind kind = SourceKind::Directory;
+  std::string identity, level, name;
+  bool operator==(const Source &) const = default;
+};
+struct Target {
+  Type type = Type::Lamp;
+  int lamp = 200;
+  int percent = 10000; // Hundredths of one percent.
+  bool operator==(const Target &) const = default;
+};
+struct Goal {
+  Source source;
+  int longNoteMode = 1;
+  Target target;
+  std::int64_t revision = 1, setAt = 0, achievedAt = 0;
+};
+struct Member {
+  std::string identity;
+  bool available = true;
+  int lamp = -1, score = 0, maxScore = 0;
+};
+struct Progress {
+  std::int64_t available = 0, missing = 0, qualifying = 0, required = 0, unknownScore = 0;
+  double percent = 0;
+  bool achieved = false, sourceAvailable = true;
+};
+struct GoalProgress { Goal goal; Progress progress; };
+void validate(const Target &);
+void validate(const Goal &);
+std::string sourceKey(const Source &);
+std::string key(const Goal &);
+Progress evaluate(const Target &, std::span<const Member>);
+std::string percentText(double percent);
+} // namespace folder_goals

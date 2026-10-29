@@ -2,6 +2,7 @@
 #include "view/ChartListItemView.h"
 #include "view/GoalTargetBubble.h"
 #include "view/GoalLampTabAccent.h"
+#include "view/GoalProgressBar.h"
 #include "view/Button.h"
 #include "view/LibraryFolderItemView.h"
 #include "view/ImageView.h"
@@ -78,6 +79,26 @@ void testGoalLampAccentDrawsAfterParentLayoutAndScroll() {
   }
 }
 
+void testFolderGoalProgressGeometry() {
+  for (int width : {220, 720}) for (double current : {0.0, 37.5, 100.0}) {
+    View root(20, 30, width, 100);
+    auto *bar = new GoalProgressBar(current, 100, 200, current == 100);
+    bar->setWidthPercent(100);
+    root.addView(bar); root.applyYogaLayout();
+    const auto &children = bar->getChildren();
+    require(children.size() == 2, "progress has a track and a distinct target marker");
+    auto *track = children[0], *marker = children[1];
+    const auto *fill = track->getChildren().front();
+    require(track->getWidth() == width && track->getHeight() > 0,
+            "progress track stays visible at zero on compact and desktop layouts");
+    require(std::abs(fill->getWidth() - width * current / 100) <= 1,
+            "progress fill displays the actual metric instead of target-relative completion");
+    require(marker->getX() >= track->getX() && marker->getX() + marker->getWidth() <= track->getX() + track->getWidth(),
+            "100 percent target marker remains inside the visible track");
+    require(marker->getHeight() > track->getHeight(), "the target remains distinguishable from the fill");
+  }
+}
+
 void testFolderBindingOnlyMaterializesVisibleLabel() {
   LibraryFolderItemView row(0, 0, 350, 50);
   std::vector<TextView *> labels;
@@ -137,6 +158,7 @@ int main() {
           "goal bubble is centered above the flag with a four-pixel gap");
   testFolderBindingOnlyMaterializesVisibleLabel();
   testGoalLampAccentDrawsAfterParentLayoutAndScroll();
+  testFolderGoalProgressGeometry();
 
   {
     ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);

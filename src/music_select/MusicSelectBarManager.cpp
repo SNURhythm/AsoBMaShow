@@ -603,7 +603,8 @@ bool MusicSelectBarManager::installChildren(
 }
 
 bool MusicSelectBarManager::openTransient(
-    MusicSelectBar directory, std::vector<MusicSelectBar> children) {
+    MusicSelectBar directory, std::vector<MusicSelectBar> children,
+    std::shared_ptr<MusicSelectRowProvider> provider) {
   const auto *source = selected();
   if (source == nullptr) return false;
   const MusicSelectBarId sourceId = source->id;
@@ -614,7 +615,7 @@ bool MusicSelectBarManager::openTransient(
       directory.children, [&](const MusicSelectBarId &id) {
         return find(id) != nullptr || childIds.contains(id.value);
       });
-  if (!hasChild) return false;
+  if (provider ? provider->size()==0 : !hasChild) return false;
   const auto install = [&](MusicSelectBar bar) {
     const auto [found, inserted] =
         projectionIndex_.try_emplace(bar.id.value, projection_.bars.size());
@@ -626,7 +627,8 @@ bool MusicSelectBarManager::openTransient(
   };
   for (auto &child : children) install(std::move(child));
   install(std::move(directory));
-  rowProviders_.erase(directoryId.value);
+  if (provider) rowProviders_[directoryId.value]={.provider=std::move(provider)};
+  else rowProviders_.erase(directoryId.value);
   sourceBars_.push_back(sourceId);
   directory_.push_back(directoryId);
   rebuildRows();

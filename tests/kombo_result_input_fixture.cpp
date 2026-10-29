@@ -1,3 +1,4 @@
+#include "goals/FolderGoal.h"
 #include "kombo/KomboModel.h"
 #include "goals/ChartGoal.h"
 #include "goals/GoalResultPresentation.h"
@@ -103,6 +104,8 @@ struct ResultScene {
     struct {
       int loads=0;
       std::vector<chart_goals::Goal> achievements;
+      std::vector<folder_goals::Goal> folderAchievements;
+      std::vector<folder_goals::Goal> TakeFolderGoalAchievements(std::string_view) { return std::exchange(folderAchievements,{}); }
       std::vector<chart_goals::Goal> TakeChartGoalAchievements(std::string_view attempt) {
         assert(attempt == "test"); return std::exchange(achievements, {});
       }
@@ -144,6 +147,7 @@ struct ResultScene {
   void prepareGoalAchievement();
   GoalResultPresentation goalPresentation_;
   std::vector<chart_goals::Goal> goalAchievements_;
+  std::vector<folder_goals::Goal> folderGoalAchievements_;
   std::string goalProfileId_;
   void prepareKomboProgress();
   void dismissKomboProgress(bool swallowRelease=false);
@@ -186,6 +190,15 @@ int main() {
     ticks += 3000;
     cue.updateKomboProgress();
     assert(cue.komboSounds_.played.size() == 1);
+  }
+  {
+    ResultScene folder;
+    folder.local.persistenceOptions.chartOutcome->saved_=true;
+    folder.context.scoreRepository.folderAchievements.push_back({});
+    folder.prepareGoalAchievement();
+    assert(folder.goalPresentation_.active() && folder.folderGoalAchievements_.size()==1);
+    folder.goalPresentation_.dismiss(); folder.prepareGoalAchievement();
+    assert(!folder.goalPresentation_.active());
   }
   ResultScene scene;
   kombo::Day day;

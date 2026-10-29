@@ -79,7 +79,8 @@ public:
   void installFolderStatus(const MusicSelectBarId &,
                            const skin::MusicSelectBarFrame &);
   [[nodiscard]] bool openTransient(MusicSelectBar directory,
-                                   std::vector<MusicSelectBar> children);
+                                   std::vector<MusicSelectBar> children,
+                                   std::shared_ptr<MusicSelectRowProvider> provider = {});
   [[nodiscard]] bool close();
   void move(bool increase, int movementDirection,
             std::int64_t movementEndMillis);

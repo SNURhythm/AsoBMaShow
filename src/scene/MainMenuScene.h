@@ -121,6 +121,10 @@ private:
   void openKomboAssignment(const std::string &id);
   void openChartGoals(std::optional<ChartMetaRecord> initial = {}, std::optional<int> mode = {}, bool recommendations = false);
   void openChartGoal(const ChartMetaRecord &record);
+  void openFolderGoals(std::optional<folder_goals::Source> source = {});
+  void applyFolderGoalSelection(const folder_goals::Source &,int);
+  std::optional<std::pair<folder_goals::Source,int>> pendingFolderGoalSelection_;
+  std::string pendingFolderGoalProfile_;
   chart_goals::Index chartGoalIndex;
   std::vector<std::string> chartGoalHashes;
   void resumeGoalNavigation();
@@ -220,6 +224,7 @@ private:
     LibraryFolderItem folder;
     std::optional<ChartMetaRecord> selected;
     std::optional<std::filesystem::path> temporaryFolder;
+    bool temporaryFolderRecursive = false;
     std::string search;
     float songScroll = 0;
     float folderScroll = 0;
@@ -407,6 +412,7 @@ private:
   std::optional<std::vector<MusicSelectAssignmentChart>> assignmentCharts;
   std::map<std::string, std::vector<std::string>> assignmentChartHashes;
   std::optional<std::filesystem::path> temporaryChartFolder;
+  bool temporaryChartFolderRecursive_ = false;
   std::optional<ChartMetaRecord> selectedChartRecord;
   ChartRecordFilters chartRecordFilters;
   bool chartFilterPanelVisible = false;

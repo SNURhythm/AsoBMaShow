@@ -177,6 +177,7 @@ asobmashow_label_tests(area_practice
 
 asobmashow_label_tests(area_results
     chart_goal_tests
+    folder_goal_tests
     reminder_plan_tests
     kombo_model_tests
     kombo_store_tests
@@ -342,6 +343,7 @@ asobmashow_label_tests(area_downloads
 
 asobmashow_label_tests(area_profiles
     chart_goal_tests
+    folder_goal_tests
     durable_payload_contract_tests
     foundation_profile_archive_faults
     foundation_profile_archive_portable
@@ -378,6 +380,7 @@ asobmashow_label_tests(area_settings
 
 asobmashow_label_tests(area_music_select
     chart_goals_scene_tests
+    folder_goals_scene_tests
     beatoraja_music_select_skin_ledger
     beatoraja_music_select_skin_ledger_evidence_contract
     chart_details_view_tests
@@ -554,6 +557,7 @@ asobmashow_label_tests(area_rendering
 
 asobmashow_label_tests(area_ui
     chart_goals_scene_tests
+    folder_goals_scene_tests
     kombo_scene_tests
     android_locale_tests
     button_disabled_metal_tests

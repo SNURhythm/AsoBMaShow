@@ -8,6 +8,7 @@
 #include "ScoreRepositoryModels.h"
 #include "../kombo/KomboModel.h"
 #include "../goals/ChartGoal.h"
+#include "../goals/FolderGoal.h"
 
 #include <array>
 #include <cstdint>
@@ -106,6 +107,11 @@ public:
       const bms_parser::ChartMeta &, int selectedMode, std::string &error);
   bool SaveChartGoal(const chart_goals::Goal &, std::string &error);
   bool RemoveChartGoal(const bms_parser::ChartMeta &, int selectedMode, std::string &error);
+  std::optional<folder_goals::GoalProgress> PreviewFolderGoal(const folder_goals::Goal &, std::string &error);
+  std::optional<std::vector<folder_goals::GoalProgress>> LoadFolderGoals(std::string &error);
+  bool SaveFolderGoal(const folder_goals::Goal &, std::string &error);
+  bool RemoveFolderGoal(const folder_goals::Goal &, std::string &error);
+  std::vector<folder_goals::Goal> TakeFolderGoalAchievements(std::string_view attemptId);
   void Shutdown();
   bool SaveScore(const bms_parser::ChartMeta &chartMeta,
                  const RhythmState &state,

@@ -2,6 +2,7 @@
 #include "../view/ProgressMotionView.h"
 #include "../view/KomboFlameView.h"
 #include "../view/GoalAchievementView.h"
+#include "../goals/FolderGoalPresentation.h"
 #include "../LongNoteModeUtils.h"
 #include "../view/AssignmentProgressView.h"
 #include "../view/ActionButtonStyle.h"
@@ -4639,21 +4640,22 @@ void ResultScene::renderScene() {
 }
 
 void ResultScene::prepareGoalAchievement() {
-  if (!goalAchievements_.empty()) return;
+  if (!goalAchievements_.empty() || !folderGoalAchievements_.empty()) return;
   const auto *local = localSource();
   if (!local || local->autoPlayResult || local->replayResult || local->practiceOptions.enabled ||
       isCourseStageResult() || isCourseFinalResult() || local->courseOptions.savedResultBrowsing) return;
   const auto &persistence = local->persistenceOptions;
   if (!persistence.chartAttempt || !persistence.chartOutcome || !persistence.chartOutcome->saved()) return;
   goalAchievements_ = context.scoreRepository.TakeChartGoalAchievements(persistence.chartAttempt->result.attemptId);
-  if (goalPresentation_.arm(!goalAchievements_.empty())) {
+  folderGoalAchievements_=context.scoreRepository.TakeFolderGoalAchievements(persistence.chartAttempt->result.attemptId);
+  if (goalPresentation_.arm(!goalAchievements_.empty() || !folderGoalAchievements_.empty())) {
     goalProfileId_ = context.profileManager.activeProfile().id;
     ui::invalidate();
   }
 }
 
 void ResultScene::buildGoalAchievement() {
-  if (!viewportLayout || !goalPresentation_.visible() || goalAchievements_.empty()) return;
+  if (!viewportLayout || !goalPresentation_.visible() || (goalAchievements_.empty() && folderGoalAchievements_.empty())) return;
   if (goalAchievementView_) goalAchievementView_->clearChildren();
   else {
     goalAchievementView_ = new View();
@@ -4662,7 +4664,8 @@ void ResultScene::buildGoalAchievement() {
   }
   goalAchievementView_->setVisible(true);
   goalAchievementLayout_ = {};
-  const auto &goal = goalAchievements_.front();
+  const auto title=goalAchievements_.empty() ? folderGoalAchievements_.front().source.name :
+      goalAchievements_.front().chart.Title + (goalAchievements_.front().chart.SubTitle.empty() ? "" : " "+goalAchievements_.front().chart.SubTitle);
   std::string target;
   for (const auto &entry : goalAchievements_) {
     if (!target.empty()) target += " / ";
@@ -4678,10 +4681,14 @@ void ResultScene::buildGoalAchievement() {
       }
     }
   }
+  for (const auto &goal:folderGoalAchievements_) {
+    if (!target.empty()) target+=" / ";
+    target+=goal.source.name+" · "+folder_goals::targetText(goal);
+  }
   goalAchievementUnit_ = rendering::displayPixelScale > 0 && rendering::ui_scale_x > 0
       ? rendering::displayPixelScale / rendering::ui_scale_x : 1;
   goalAchievementView_->addView((new GoalAchievementView(goalPresentation_.startedAt(),
-      goal.chart.Title + (goal.chart.SubTitle.empty() ? "" : " " + goal.chart.SubTitle), target, goalAchievementUnit_))
+      title, target, goalAchievementUnit_))
       ->setWidthPercent(100));
 }
 

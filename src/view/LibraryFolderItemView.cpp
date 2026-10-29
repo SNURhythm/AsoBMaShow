@@ -1,4 +1,5 @@
 #include "LibraryFolderItemView.h"
+#include "Button.h"
 #include "ClearLampColors.h"
 #include "IconText.h"
 #include "UiTheme.h"
@@ -79,6 +80,12 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   countView->setOverflow(TextView::TextOverflow::Hidden);
   countView->setWidth(kCountWidth);
   contentCard->addView(countView);
+  goalButton=new Button();
+  goalButton->setWidth(36)->setHeight(36)->setFlexShrink(0)->setCornerRadius(10);
+  auto *flag=new TextView(ui_icons::kFontAwesomeSolidPath,17);
+  flag->setText(ui_icons::textForCodepoint(0xf024)); flag->setAlign(TextView::CENTER); flag->setVAlign(TextView::MIDDLE);
+  flag->setThemedColor(main_menu_theme::accent); goalButton->setContentView(flag);
+  contentCard->addView(goalButton); setGoalAction({});
 }
 
 void LibraryFolderItemView::setItem(const std::string &label, int depth,
@@ -156,4 +163,10 @@ void LibraryFolderItemView::onUnselected() {
     (rootItem ? groupLabelView : labelView)->setThemedColor(main_menu_theme::ink);
   }
   countView->setThemedColor(main_menu_theme::muted);
+}
+
+void LibraryFolderItemView::setGoalAction(std::function<void()> action) {
+  goalButton->setVisible(bool(action));
+  goalButton->setDisplay(action ? YGDisplayFlex : YGDisplayNone);
+  goalButton->setOnClickListener(std::move(action));
 }

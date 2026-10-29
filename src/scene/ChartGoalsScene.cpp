@@ -206,8 +206,8 @@ void select(View *parent, OverlayPortal *portal, const std::string &caption,
 }
 ChartGoalsScene::ChartGoalsScene(ApplicationContext &context, SceneReturnTarget target,
                                std::optional<ChartMetaRecord> initial, SelectChart onSelect,
-                               std::optional<int> initialMode, bool initialRecommendations)
-    : Scene(context), returnTarget_(std::move(target)), onSelectChart_(std::move(onSelect)),
+                               std::optional<int> initialMode, bool initialRecommendations, FolderGoalsScene::SelectFolder onSelectFolder)
+    : Scene(context), returnTarget_(std::move(target)), onSelectChart_(std::move(onSelect)), onSelectFolder_(std::move(onSelectFolder)),
       initial_(std::move(initial)), initialMode_(initialMode), initialRecommendations_(initialRecommendations), profileId_(context.profileManager.activeProfile().id) {}
 bool ChartGoalsScene::checkProfile() {
   if (profileId_ == context.profileManager.activeProfile().id) return true;
@@ -476,6 +476,15 @@ void ChartGoalsScene::build() {
       }); },
           overviewTab_ == value ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
     };
+    action(navigation, i18n::tr("folder_goals.title"), [this] {
+      const auto profile=profileId_;
+      defer([this,profile] {
+        if (profile!=context.profileManager.activeProfile().id) return true;
+        context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,
+            returnTarget_,std::nullopt,onSelectFolder_));
+        return false;
+      },0,true);
+    });
     tab(i18n::tr("goals.ui.in_progress"), OverviewTab::Ongoing);
     tab(i18n::tr("goals.ui.recommendations"), OverviewTab::Recommendations);
     if (overviewTab_ == OverviewTab::Recommendations) {

@@ -164,3 +164,35 @@ visible goal pages is resolved from chart metadata and loaded asynchronously.
 Target bubbles center above the flag, with the lamp bar and label centered
 together and the score centered beneath them. The native
 selector draws its bubble above the list clip; safe-area edges remain respected.
+
+## Folder goals
+
+Use a folder or difficulty-table flag to set a goal for the entire indexed
+folder subtree, table, or level. In the built-in selector, table and level rows
+have flags; **Folder goals** also opens the current physical folder when browsing
+one. In the custom selector, the toolbar flag supports folders, tables and levels.
+**Personal goals → Folder goals** lists all saved folder goals.
+
+Two independent targets are available for each folder and selected LN mode:
+
+- **Lamp coverage:** a percentage of charts at a chosen lamp or better.
+  **100% Failed or better** covers every available chart with an eligible play.
+- **Average EX rate:** the average of each available chart's best EX percentage,
+  with equal chart weights. Available unplayed charts count as 0%.
+
+Missing charts are excluded from both denominators and shown separately.
+Duplicate installations count once. Membership is live, so downloading charts,
+rescanning, or updating a table can change progress. Selector search and filters
+do not change a saved goal's scope. Empty or unavailable folders cannot complete
+a goal. Goals keep their source identity if the table is reimported.
+
+Cards and details show a progress bar, the current percentage, a target marker,
+and available/missing counts. Lamp goals also show the qualifying count and the
+number needed. Edit the percentage to preview its target marker; use **Open
+folder** to return to the goal's collection. New targets must exceed current
+progress. The two goal types and LN modes have separate targets.
+
+Eligible imported records contribute to progress. Only a newly completing local
+play grants the result celebration and Kombo goal credit. Imports, membership
+changes and revisiting a completed target do not award points. First-achieved
+history remains even when live progress subsequently drops.

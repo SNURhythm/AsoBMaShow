@@ -1,6 +1,6 @@
 # Folder goals
 
-Status: proposed design, awaiting user approval.
+Status: approved for implementation, with missing charts excluded and progress bars requested.
 
 ## Intent and agreed behavior
 
@@ -53,12 +53,14 @@ the table hashes against indexed metadata; otherwise use their declared SHA-256
 or MD5 identity, avoiding duplicate entries with the same known identity.
 Do not infer identity from title or path when chart hashes disagree.
 
-All current table members count, including unavailable charts. Eligible records
-count when identity and LN scope can be resolved even if playback is unavailable.
-Unresolved members contribute no qualifying lamp and 0% EX. Show the unavailable
-count. Ordinary directories include their currently indexed descendant charts.
-An unavailable source retains its goal but shows unavailable progress; it must
-not silently resolve to another source. An empty source is not achieved.
+Only currently available indexed charts count in either goal denominator.
+Show missing/unavailable table members separately; exclude them even if they
+have historical scores. Available unplayed charts contribute 0% EX and no lamp.
+Newly available charts join the live denominator, so progress can drop after
+a download or scan. Ordinary directories include their currently indexed
+available descendants. An unavailable source retains its goal but shows
+unavailable progress; it must not resolve to another source. An empty available
+membership is not achieved.
 
 Goals are profile-specific and store a selected LN/CN/HCN scope. Use the existing
 chart rules for authored modes and charts without long notes. Switching the
@@ -103,6 +105,14 @@ The two distinct goal types use separate choice buttons, consistent with the
 settings-control convention. Reuse existing UI components and visual language;
 exact layout is left to implementation.
 
+Cards and details include a polished progress bar showing the actual 0–100%
+metric, a target marker, accessible numeric current/target labels, and distinct
+achieved styling. Lamp bars use the selected lamp color; EX bars use the app's
+accent. Keep the unfilled track visible, use rounded ends, and avoid relying on
+color alone. Missing counts sit beside the progress summary. Layout must fit
+compact/touch and desktop canvases. Respect idle presentation; no perpetual
+animation is needed.
+
 Personal goals exposes folder goals alongside chart goals with active and
 achieved groups and bounded pagination. Details show set and first-achieved
 dates, current counts/rate, target, missing-data counts, and a short explanation
@@ -127,8 +137,9 @@ achievement IDs distinct from chart goals and persist deduplication atomically.
 
 ## Architecture and constraints
 
-Add versioned folder-goal rows to the profile score database, through existing
-migrations, activity guards, repository locking and transaction conventions.
+Add versioned folder-goal rows to the profile score database, using the existing
+versioned-row storage convention, activity guards, repository locking and
+transactions. Like chart goals, the table is created lazily on the first save.
 Persist source identity/display data, LN mode, goal type, target, revision and
 dates. Do not persist a frozen member list as the authoritative membership.
 Corrupt/future-version goal data must report an error rather than be overwritten.

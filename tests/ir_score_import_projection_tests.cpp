@@ -893,7 +893,82 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
 }
 
+void testFolderGoalPersistenceAndPlayCredit() {
+  const auto root=testRoot("folder-goals");
+  bms_parser::ChartMeta chart;
+  chart.BmsPath=root/"charts"/"a.bms"; chart.Folder=chart.BmsPath.parent_path();
+  chart.SHA256=std::string(64,'e'); chart.MD5=std::string(32,'e'); chart.TotalNotes=100;
+  sqlite3 *db=nullptr;
+  assert(sqlite3_open((root/"chart.db").string().c_str(),&db)==SQLITE_OK);
+  const std::string fixture="CREATE TABLE chart_meta(path TEXT,sha256 TEXT,md5 TEXT,ln_mode INTEGER,total_long_notes INTEGER,total_backspin_notes INTEGER,total_notes INTEGER);"
+      "CREATE TABLE difficulty_tables(id INTEGER,source_url TEXT);"
+      "CREATE TABLE difficulty_table_entries(table_id INTEGER,level TEXT,sha256 TEXT,md5 TEXT);"
+      "INSERT INTO difficulty_tables VALUES(1,'https://folder-test');"
+      "INSERT INTO chart_meta VALUES('/charts/a','"+chart.SHA256+"','"+chart.MD5+"',0,0,0,100);"
+      "INSERT INTO difficulty_table_entries VALUES(1,'1','"+chart.SHA256+"',''),(1,'1','missing','');";
+  assert(sqlite3_exec(db,fixture.c_str(),nullptr,nullptr,nullptr)==SQLITE_OK);
+  sqlite3_close(db);
+  ScoreRepository scores(root/"score.db"); scores.SetChartDatabasePath(root/"chart.db");
+  assert(scores.EnsureSchema());
+  folder_goals::Goal goal{.source={.kind=folder_goals::SourceKind::Level,
+      .identity="https://folder-test",.level="1",.name="Test 1"},
+      .target={.type=folder_goals::Type::Lamp,.lamp=200,.percent=10000}};
+  std::string error;
+  assert(scores.SaveFolderGoal(goal,error));
+  auto rows=scores.LoadFolderGoals(error);
+  assert(rows && rows->size()==1 && rows->front().progress.available==1 && rows->front().progress.missing==1);
+  const auto first=rows->front().goal;
+  assert(scores.SaveFolderGoal(first,error));
+  assert(scores.LoadFolderGoals(error)->front().goal.setAt==first.setAt);
+  result_persistence::PendingChartScoreWrite pending;
+  pending.attemptId="123e4567-e89b-42d3-a456-426614174060";
+  pending.replayId=1; pending.createdAt="2026-10-29 12:00:00.000";
+  pending.score.chartSha256=chart.SHA256; pending.score.chartMd5=chart.MD5;
+  pending.score.chartPath=chart.BmsPath.string(); pending.score.score=100; pending.score.maxScore=200;
+  pending.score.clearType=200; pending.score.comboBreak=1; pending.score.provenance=ScoreProvenance::Legacy();
+  assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeFolderGoalAchievements(pending.attemptId).size()==1);
+  assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
+  assert(scores.LoadFolderGoals(error)->front().progress.achieved);
+  pending.attemptId.back()='1';
+  assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
+  // Adding an available, unplayed member drops progress, but never resets its first achievement.
+  assert(sqlite3_open((root/"chart.db").string().c_str(),&db)==SQLITE_OK);
+  const auto added="INSERT INTO chart_meta VALUES('/charts/b','"+std::string(64,'f')+"','"+std::string(32,'f')+"',0,0,0,100);"
+      "UPDATE difficulty_table_entries SET sha256='"+std::string(64,'f')+"' WHERE sha256='missing';"
+      "UPDATE difficulty_tables SET id=2; UPDATE difficulty_table_entries SET table_id=2;";
+  assert(sqlite3_exec(db,added.c_str(),nullptr,nullptr,nullptr)==SQLITE_OK);
+  auto changed=scores.LoadFolderGoals(error);
+  assert(changed && changed->front().progress.available==2 && changed->front().progress.missing==0 && !changed->front().progress.achieved);
+  assert(changed->front().goal.achievedAt>0);
+  // Imports can complete a new EX goal without local play credit.
+  auto ex=goal; ex.target={.type=folder_goals::Type::AverageEx,.percent=6000};
+  assert(scores.SaveFolderGoal(ex,error));
+  auto imported=remoteScore("folder-import",'f',200,300);
+  assert(scores.ReplaceImportedIrScores(kProvider,kOrigin,1,std::span(&imported,1)).status==ImportedIrScoreProjectionStatus::Applied);
+  auto importedGoals=scores.LoadFolderGoals(error);
+  assert(importedGoals && importedGoals->size()==2);
+  for(const auto &g:*importedGoals) assert(g.progress.achieved && g.goal.achievedAt>0);
+  pending.attemptId.back()='2';pending.score.score=110;
+  assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
+  assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::AlreadyPresent);
+  assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
+  // Removing the source keeps both goals without transferring them to another table.
+  assert(sqlite3_exec(db,"DELETE FROM difficulty_tables;DELETE FROM difficulty_table_entries",nullptr,nullptr,nullptr)==SQLITE_OK);
+  assert(!scores.LoadFolderGoals(error)->front().progress.sourceAvailable);
+  sqlite3_close(db);
+  assert(scores.RemoveFolderGoal(ex,error));
+  scores.SetDatabasePath(root/"other.db"); assert(scores.EnsureSchema());
+  assert(scores.LoadFolderGoals(error)->empty());
+  scores.SetDatabasePath(root/"score.db");
+  assert(scores.RemoveFolderGoal(goal,error));
+  assert(scores.LoadFolderGoals(error)->empty());
+}
+
 int main() {
+  testFolderGoalPersistenceAndPlayCredit();
   testGaugeRecommendationSummaries();
   testCannotSetAlreadyAchievedGoal();
   testGoalIgnoresReplacedChartAtSamePath();

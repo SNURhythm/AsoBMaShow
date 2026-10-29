@@ -1105,6 +1105,14 @@ void testPagedProviderLifetimeAndExplicitEnumeration() {
 }
 
 void testProviderReplacementAndNestedBackNavigation() {
+  {
+    MusicSelectBarManager direct(fixture());
+    auto rows=std::make_shared<CountingRowProvider>(100000);
+    MusicSelectBar folder{.id={"goal-folder"},.kind=skin::MusicSelectBarKind::Folder};
+    require(direct.openTransient(folder,{},rows) && direct.readView().rowCount()==100000,
+            "folder goal navigation opens paged membership without materializing all rows");
+    require(rows->atCalls<20 && direct.close(),"paged goal navigation remains bounded and can return");
+  }
   MusicSelectBarManager manager(fixture());
   auto provider = std::make_shared<CountingRowProvider>(100'000);
   require(manager.open({"folder:a"}) &&

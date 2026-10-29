@@ -2,6 +2,7 @@
 #include "Scene.h"
 #include "SceneReturnTarget.h"
 #include "../goals/ChartGoal.h"
+#include "FolderGoalsScene.h"
 
 class ScrollView;
 class OverlayPortal;
@@ -10,7 +11,7 @@ public:
   using SelectChart = std::function<void(const ChartMetaRecord &, int)>;
   ChartGoalsScene(ApplicationContext &, SceneReturnTarget,
                   std::optional<ChartMetaRecord> initial = {}, SelectChart = {},
-                  std::optional<int> initialMode = {}, bool initialRecommendations = false);
+                  std::optional<int> initialMode = {}, bool initialRecommendations = false, FolderGoalsScene::SelectFolder = {});
   void init() override;
   void onPause() override;
   void onResume() override;
@@ -56,6 +57,7 @@ private:
   void back();
   SceneReturnTarget returnTarget_;
   SelectChart onSelectChart_;
+  FolderGoalsScene::SelectFolder onSelectFolder_;
   std::optional<ChartMetaRecord> initial_, resolved_;
   std::optional<int> initialMode_;
   bool initialRecommendations_ = false;

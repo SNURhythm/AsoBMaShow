@@ -72,6 +72,8 @@
 #include "SettingsScene.h"
 #include "KomboScene.h"
 #include "ChartGoalsScene.h"
+#include "FolderGoalsScene.h"
+#include "../repositories/ChartStorageIdentity.h"
 #include "../goals/GoalTargetPresentation.h"
 #include "MusicSelectScene.h"
 #include "MusicSelectSkinErrorScene.h"
@@ -832,6 +834,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     state.folder = activeFolder;
     state.selected = selectedChartRecord;
     state.temporaryFolder = temporaryChartFolder;
+    state.temporaryFolderRecursive = temporaryChartFolderRecursive_;
     state.search = searchText;
     state.songScroll = recyclerView->scrollOffset;
     state.folderScroll = folderRecyclerView->scrollOffset;
@@ -873,6 +876,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     auto &state = selectorStates_[tab == Tab::Course ? 1 : 0];
     activeFolder = state.folder;
     temporaryChartFolder = state.temporaryFolder;
+    temporaryChartFolderRecursive_ = state.temporaryFolderRecursive;
     searchText = state.search;
     searchBox->setEditingText(searchText);
     if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint"))
@@ -932,6 +936,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
 void MainMenuScene::openKomboAssignment(const std::string &id) {
   selectTab(Tab::Play);
   temporaryChartFolder.reset();
+  temporaryChartFolderRecursive_ = false;
   searchText.clear();
   searchBox->setEditingText("");
   if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint")) hint->setVisible(true);
@@ -1330,6 +1335,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   overlayPortal = nullptr;
   revealButton = nullptr;
   temporaryChartFolder.reset();
+  temporaryChartFolderRecursive_ = false;
   jacketView = nullptr;
   chartDetailsView_ = nullptr;
   searchBox = nullptr;
@@ -1701,6 +1707,18 @@ void MainMenuScene::initView(ApplicationContext &context) {
       default:
         break;
       }
+      const bool supportsGoal=!item.sectionHeader && (item.type==LibraryFolderItem::Type::DifficultyTable ||
+          item.type==LibraryFolderItem::Type::DifficultyLevel);
+      folderView->setGoalAction(supportsGoal ? std::function<void()>([this,item] {
+        if (!chartSession) return;
+        for (const auto &table:chartSession->SelectDifficultyTables()) if (table.id==item.tableId) {
+          folder_goals::Source source{.kind=item.type==LibraryFolderItem::Type::DifficultyTable ? folder_goals::SourceKind::Table : folder_goals::SourceKind::Level,
+              .identity=table.sourceUrl,.level=item.tableLevel,.name=item.label};
+          const auto profile=this->context.profileManager.activeProfile().id;
+          defer([this,source,profile] { if (profile==this->context.profileManager.activeProfile().id) openFolderGoals(source); return true; },0,true);
+          break;
+        }
+      }) : std::function<void()>{});
       if (item.sectionHeader) label = i18n::tr("menu.selector.difficulty_tables.label");
       folderView->setItem(label, item.depth, item.count, isSelected,
                           item.clearMarkFolder ? item.clearMarkRank
@@ -2086,6 +2104,18 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   });
   libraryActions->addView(addFolderButton);
+  TextView *folderGoalText=nullptr;
+  auto *folderGoalButton=makeSelectorButton(i18n::message("folder_goals.title"),18,&folderGoalText,0xf024);
+  styleMenuButton(folderGoalButton,folderGoalText);
+  folderGoalButton->setOnClickListener([this] {
+    std::optional<folder_goals::Source> source;
+    if (temporaryChartFolder) source=folder_goals::Source{.kind=folder_goals::SourceKind::Directory,
+        .identity=chart_storage_identity::StoredFolderPathText(*temporaryChartFolder),.name=temporaryChartFolder->filename().string()};
+    const auto profile=this->context.profileManager.activeProfile().id;
+    defer([this,source,profile]{if(profile==this->context.profileManager.activeProfile().id) openFolderGoals(source); return true;},0,true);
+  });
+  libraryActions->addView(folderGoalButton);
+
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
@@ -3308,9 +3338,13 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   const int selectedLongNoteMode =
       long_note_mode::valueFromId(profileSelections.longNoteMode);
   if (temporaryChartFolder.has_value()) {
-    return main_menu_library::chartQueryForSameFolder(
+    auto query = main_menu_library::chartQueryForSameFolder(
         *temporaryChartFolder, searchText, chartRecordFilters,
         selectedLongNoteMode);
+    if (temporaryChartFolderRecursive_) {
+      query.exactFolder.reset(); query.recursiveFolder = *temporaryChartFolder;
+    }
+    return query;
   }
 
   ChartMetaQuery query;
@@ -3339,6 +3373,7 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   case LibraryFolderItem::Type::DifficultyLevel:
     query.tableId = activeFolder.tableId;
     query.tableLevel = activeFolder.tableLevel;
+    query.exactTableLevel = true;
     break;
   case LibraryFolderItem::Type::DifficultyClearMark:
     query.tableId = activeFolder.tableId;
@@ -5326,6 +5361,16 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 }
 
 void MainMenuScene::resumeGoalNavigation() {
+  if (pendingFolderGoalSelection_) {
+    if (pendingFolderGoalProfile_!=context.profileManager.activeProfile().id) {
+      pendingFolderGoalSelection_.reset(); pendingFolderGoalProfile_.clear();
+    } else {
+      if (activeTab_!=Tab::Play) {selectTab(Tab::Play);return;}
+      if (pendingTab_) return;
+      auto goal=std::exchange(pendingFolderGoalSelection_,{});
+      applyFolderGoalSelection(goal->first,goal->second); pendingFolderGoalProfile_.clear();
+    }
+  }
   if (!pendingGoalSelection_) return;
   if (pendingGoalProfile_ != context.profileManager.activeProfile().id) {
     pendingGoalSelection_.reset(); pendingGoalProfile_.clear(); return;
@@ -5360,7 +5405,9 @@ void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
         pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
-      }, mode, recommendations), true);
+      }, mode, recommendations, [this,profile](const folder_goals::Source &source,int mode) {
+        pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
+      }), true);
 }
 
 void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
@@ -5376,6 +5423,7 @@ void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) 
   chartKeyModeDropdownOpen = chartClearMarkDropdownOpen = chartScoreRankDropdownOpen = false;
   chartDifficultyMinDropdownOpen = chartDifficultyMaxDropdownOpen = false;
   temporaryChartFolder = main_menu_library::sameFolderForChart(record);
+  temporaryChartFolderRecursive_ = false;
   activeFolder = {.key="all", .label=i18n::tr("menu.all_songs.label"), .type=LibraryFolderItem::Type::AllSongs};
   reloadFolderItems(); reloadChartList();
   selectChartByPathAfterReload(record.meta.BmsPath, AutoSelectionPreview::Load);
@@ -5479,6 +5527,7 @@ void MainMenuScene::showSelectedChartFolder() {
   }
 
   temporaryChartFolder = *folder;
+  temporaryChartFolderRecursive_ = false;
   searchText.clear();
   if (searchBox != nullptr) {
     searchBox->setEditingText("");
@@ -5522,6 +5571,7 @@ bool MainMenuScene::clearSameFolderScope() {
     return false;
   }
   temporaryChartFolder.reset();
+  temporaryChartFolderRecursive_ = false;
   return true;
 }
 
@@ -8838,6 +8888,7 @@ void MainMenuScene::cleanupScene() {
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
   temporaryChartFolder.reset();
+  temporaryChartFolderRecursive_ = false;
   rootLayout = nullptr;
   if (tabLoadingOverlay_ != nullptr) {
     overlayPortal->dismiss(tabLoadingOverlay_);
@@ -9125,4 +9176,40 @@ void MainMenuScene::FindNewBmsFiles(
     FindFilesIOS(currentDir, diffs, oldFilesWs, directoriesToVisit, stop_token);
 #endif
   }
+}
+
+void MainMenuScene::openFolderGoals(std::optional<folder_goals::Source> source) {
+  if (context.storageMaintenanceActive || willStart.load() || replayExportJob_.inProgress()) return;
+  const auto profile=this->context.profileManager.activeProfile().id;
+  context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,SceneReturnTarget::Retained(this),std::move(source),
+      [this,profile](const folder_goals::Source &source,int mode) {
+        pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
+      }),true);
+}
+void MainMenuScene::applyFolderGoalSelection(const folder_goals::Source &source,int mode) {
+  if (!chartSession) return;
+  std::optional<LibraryFolderItem> tableFolder;
+  if (source.kind!=folder_goals::SourceKind::Directory) {
+    for (const auto &table:chartSession->SelectDifficultyTables()) if (table.sourceUrl==source.identity) {
+      const bool level=source.kind==folder_goals::SourceKind::Level;
+      tableFolder=LibraryFolderItem{.key=level ? folderKeyForLevel(table.id,source.level) : folderKeyForTable(table.id),
+          .label=source.name,.type=level ? LibraryFolderItem::Type::DifficultyLevel : LibraryFolderItem::Type::DifficultyTable,
+          .tableId=table.id,.tableLevel=source.level};
+      break;
+    }
+    if (!tableFolder) return;
+  }
+  context.settings.selectedLnMode=long_note_mode::idFromValue(mode); (void)context.saveSettings(); reloadProfileSelectionsFromSettings();
+  searchText.clear(); if (searchBox) searchBox->setEditingText(""); chartRecordFilters={};
+  chartBpmMinText.clear(); chartBpmMaxText.clear(); chartDifficultyRangeTableId.reset();
+  temporaryChartFolder.reset(); temporaryChartFolderRecursive_=false;
+  if (source.kind==folder_goals::SourceKind::Directory) {
+    auto path=std::filesystem::path(utf8_to_path_t(source.identity)); chart_storage_identity::ToAbsolutePath(path);
+    temporaryChartFolder=path; temporaryChartFolderRecursive_=true;
+    activeFolder={.key="all",.label=i18n::tr("menu.all_songs.label"),.type=LibraryFolderItem::Type::AllSongs};
+  } else {
+    activeFolder=*tableFolder;
+    expandedLibraryFolders.insert(folderKeyForTable(activeFolder.tableId));
+  }
+  reloadFolderItems(); reloadChartList();
 }
