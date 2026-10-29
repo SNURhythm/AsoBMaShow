@@ -19,16 +19,27 @@ using ChartMetaRecord = Record;
 int scoreLongNoteModeForClearLamp(const bms_parser::ChartMeta &, int mode) { return mode; }
 struct Scores {
   std::optional<chart_goals::GoalProgress> stored;
-  std::optional<chart_goals::GoalProgress> LoadChartGoal(const bms_parser::ChartMeta &meta, int mode, std::string &error) {
+  std::optional<chart_goals::GoalProgress> LoadChartGoal(const bms_parser::ChartMeta &meta, int mode, std::string &error, std::int64_t id = 0) {
     if (fail) { error = "storage failure"; return {}; }
-    return stored && stored->goal.chart.SHA256 == meta.SHA256 && stored->goal.longNoteMode == mode ? stored : std::nullopt;
+    const auto goals = LoadChartGoalsForChart(meta, error);
+    for (const auto &goal : *goals)
+      if (id > 0 ? goal.goal.id == id : goal.goal.longNoteMode == mode) return goal;
+    return {};
+  }
+  std::vector<chart_goals::GoalProgress> additional;
+  std::optional<std::vector<chart_goals::GoalProgress>> LoadChartGoalsForChart(const bms_parser::ChartMeta &meta, std::string &error) {
+    if (fail) { error = "storage failure"; return {}; }
+    std::vector<chart_goals::GoalProgress> result;
+    if (stored && stored->goal.chart.SHA256 == meta.SHA256) result.push_back(*stored);
+    for (const auto &goal : additional) if (goal.goal.chart.SHA256 == meta.SHA256) result.push_back(goal);
+    return result;
   }
   bool fail = false, achieved = false;
   int saves = 0, removals = 0;
-  bool SaveChartGoal(const chart_goals::Goal &, std::string &error) {
+  bool SaveChartGoal(chart_goals::Goal &, std::string &error) {
     ++saves; if (fail) error = "storage failure"; else if (achieved) error = "goal_already_achieved"; return !fail && !achieved;
   }
-  bool RemoveChartGoal(const bms_parser::ChartMeta &, int, std::string &error) {
+  bool RemoveChartGoal(const bms_parser::ChartMeta &, int, std::string &error, std::int64_t) {
     ++removals; if (fail) error = "storage failure"; return !fail;
   }
 };
@@ -58,7 +69,7 @@ struct ChartGoalsScene {
   chart_goals::Goal draft_;
   chart_goals::ProgressPage page_;
   std::optional<chart_goals::GoalProgress> selected_;
-  std::optional<Record> initial_, recommendationChart_;
+  std::optional<Record> initial_, recommendationChart_, pickerChart_;
   std::optional<int> initialMode_, resolved_;
   std::vector<std::function<bool()>> queued;
   void defer(std::function<bool()> action, int, bool) { queued.push_back(action); }
@@ -66,11 +77,18 @@ struct ChartGoalsScene {
   bool trackRecommendationScope = false;
   void reload() {
     ++reloads;
+    if (pickerChart_) {
+      std::string error;
+      auto goals = context.scoreRepository.LoadChartGoalsForChart(pickerChart_->meta, error);
+      loadFailed_ = !goals;
+      if (goals) page_.goals = *goals;
+    }
     if (trackRecommendationScope) recommendations_ = recommendationChart_
         ? std::map<int,int>{{24,1}} : std::map<int,int>{{26,2}};
   }
   void back();
   void init();
+  void showChartGoals(const ChartMetaRecord &, int);
   void showGoal(chart_goals::Goal);
   void recommendGoal(const ChartMetaRecord &, int, int);
   void changeDraftMode(int);
@@ -127,6 +145,7 @@ int main() {
   assert(rememberedOverview.loadedRank == 26 && !rememberedOverview.initialRecommendations_);
   ChartGoalsScene existing;
   chart_goals::Goal saved;
+  saved.id = 1;
   saved.chart.SHA256 = std::string(64, 'a'); saved.longNoteMode = 2;
   saved.target = {.lamp=400, .scoreNumerator=24};
   existing.context.scoreRepository.stored = chart_goals::GoalProgress{saved, {}};
@@ -137,31 +156,48 @@ int main() {
   existing.showGoal({.chart=saved.chart, .longNoteMode=3});
   assert(!existing.selected_ && existing.editing_); // No saved target opens a fresh editor.
   assert(existing.draft_.longNoteMode == 3);
-  existing.showGoal({.chart=saved.chart, .longNoteMode=2});
+  existing.showGoal(saved);
   assert(existing.selected_ && !existing.editing_ && existing.draft_.target.lamp == 400);
   existing.recommendGoal(Record{saved.chart}, 2, 26);
   assert(existing.editing_ && !existing.customScore_);
   assert(existing.draft_.target.scoreNumerator == 26 && existing.draft_.target.scoreDenominator == 27);
-  assert(existing.draft_.target.lamp == 400 && existing.draft_.longNoteMode == 2);
+  assert(existing.draft_.target.lamp == -1 && existing.draft_.longNoteMode == 2 && existing.draft_.id == 0);
   assert(existing.context.scoreRepository.saves == 0); // Recommendation only opens the editor.
   existing.recommendGoal(Record{saved.chart}, 3, 24);
   assert(!existing.selected_ && existing.editing_ && existing.draft_.longNoteMode == 3);
   assert(existing.draft_.target.scoreNumerator == 24);
   existing.recommendGoal(Record{saved.chart}, 2, 500);
   assert(existing.editing_ && existing.draft_.target.lamp == 500);
-  assert(existing.draft_.target.scoreNumerator == 24 && existing.draft_.longNoteMode == 2);
+  assert(existing.draft_.target.scoreNumerator == 0 && existing.draft_.longNoteMode == 2);
   assert(existing.context.scoreRepository.saves == 0);
   existing.context.scoreRepository.stored->goal.target = {.lamp=400, .scoreNumerator=91, .scoreDenominator=100};
   existing.recommendGoal(Record{saved.chart}, 2, 500);
-  assert(existing.customScore_ && existing.customRate_ == "91.00");
-  assert(existing.draft_.target.scoreNumerator == 91 && existing.draft_.target.scoreDenominator == 100);
+  assert(!existing.customScore_ && existing.draft_.id == 0);
+  assert(existing.draft_.target.scoreNumerator == 0);
+  existing.customScore_ = true; existing.customRate_ = "91.00";
+  existing.draft_.target.scoreNumerator = 91; existing.draft_.target.scoreDenominator = 100;
   existing.changeDraftMode(3);
   assert(existing.editing_ && !existing.selected_ && existing.draft_.longNoteMode == 3);
   assert(existing.draft_.target.lamp == 500 && existing.customRate_ == "91.00");
   existing.changeDraftMode(2);
-  assert(existing.editing_ && existing.selected_ && existing.draft_.longNoteMode == 2);
+  assert(existing.editing_ && !existing.selected_ && existing.draft_.longNoteMode == 2);
   assert(existing.draft_.target.lamp == 500 && existing.customScore_);
   assert(existing.context.scoreRepository.saves == 0);
+  ChartGoalsScene multiple;
+  multiple.editing_ = false;
+  multiple.context.scoreRepository.stored = chart_goals::GoalProgress{saved, {}};
+  auto second = saved; second.id = 2; second.target = {.lamp=500};
+  multiple.context.scoreRepository.additional.push_back({second, {}});
+  multiple.initial_ = Record{saved.chart}; multiple.initialMode_ = 2;
+  multiple.init();
+  assert(multiple.pickerChart_ && !multiple.selected_ && !multiple.editing_);
+  assert(multiple.page_.goals.size() == 2);
+  multiple.showGoal(second);
+  assert(multiple.selected_ && multiple.draft_.id == 2 && multiple.draft_.target.lamp == 500);
+  multiple.back(); multiple.flush();
+  assert(multiple.pickerChart_ && !multiple.selected_ && multiple.page_.goals.size() == 2);
+  multiple.context.profileManager.profile.id = "two";
+  assert(!multiple.checkProfile() && !multiple.pickerChart_ && multiple.page_.goals.empty());
   ChartGoalsScene scene;
   scene.saveGoal();
   assert(scene.context.scoreRepository.saves == 0 && scene.editing_);

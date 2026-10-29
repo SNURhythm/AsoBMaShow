@@ -8,7 +8,8 @@ goals-per-round quota when creating the routine or editing tomorrow's routine.
 Regular rounds grant 10 points up to the remaining daily target; extra rounds
 use one newly achieved goal for 1 point within Kombo's shared daily bonus limit.
 Previously achieved goals and imported records do not grant retroactive points.
-Separate LN-mode goals and newly set harder targets count as separate achievements;
+Independent goals, including those in the same LN mode, and newly set harder
+targets count as separate achievements;
 a goal containing both lamp and score targets counts once when both are met.
 
 ## Recommendations
@@ -26,7 +27,8 @@ The Personal goals screen offers expandable **Near E** through **Near MAX**
 groups for best scores within 2 percentage points below their next rank. Empty
 groups are hidden. Candidates are ordered by EX points remaining, nearest first, with 20 per
 page. Tapping a recommendation opens the normal goal editor with that rank
-selected; saving remains explicit. Existing lamp targets are preserved. LN/CN/HCN
+selected in a new independent goal; saving remains explicit. Existing goals
+remain unchanged. LN/CN/HCN
 evidence is combined into one chart card per target group. The editor provides
 a mode picker for selectable-mode charts, initially using the closest evidence;
 changing the mode keeps the draft targets without saving.
@@ -50,8 +52,8 @@ They are ordered by fewest breaks and show that count on the chart card.
 
 Each group hides lamps already earned and sorts by closeness: gauge points below
 the border for groove gauges, remaining chart proportion after death for survival
-gauges. Selecting a candidate prefills the lamp in the normal editor and preserves
-any score target. Background evidence is a recommendation, not an earned lamp.
+gauges. Selecting a candidate prefills the lamp in a new goal editor; existing goals
+remain unchanged. Background evidence is a recommendation, not an earned lamp.
 
 Only eligible, unmodified local chart plays with recorded evidence contribute;
 unknown historical evidence, practice/autoplay/assisted plays, altered playback,
@@ -95,12 +97,13 @@ view stays centered in the safe area; narrower screens use the remaining space.
 
 - In PLAY, tap the small flag on a chart row in the built-in selector or the flag
   in the custom selector toolbar. The row flag is filled when that chart has a goal.
-  It opens the existing goal for the current LN mode, or another configured mode if none exists for the current
-  mode. An empty flag without a red dot opens a new goal editor. When a selected chart has an
-  unfinished goal, a brief animated bubble above its flag shows the lamp
-  target with its clear-lamp color and the score target. For charts with
-  selectable long notes, the LN, CN and HCN buttons on goal details open or
-  create each mode’s separate goal.
+  With one saved goal, it opens that goal directly. With multiple goals, it opens
+  a chart-specific list showing each target, LN scope, and current status.
+  **Add goal** in that list or a goal's details creates another independent goal,
+  including within the same LN mode. An empty flag without a red dot opens a new
+  goal editor. The selected chart's bubble shows its target for a single goal,
+  or the number of goals when there are several. LN, CN and HCN buttons in the
+  editor choose the scope of the goal being added or edited.
 - The favorite star is beside the chart title in the detail panel.
 - The **Goals** folder in either selector gathers indexed charts with goals
   across LN modes with at least one unfinished goal. Normal search and filters apply.
@@ -128,9 +131,11 @@ view stays centered in the safe area; narrower screens use the remaining space.
 
 ## Records, scope, and missing charts
 
-Goals are profile-specific and keyed by chart SHA-256 and effective long-note
-mode. Selectable LN/CN/HCN charts have separate goals; authored LN modes use the
-fixed scope; charts without long notes share one goal across mode selections.
+Goals are profile-specific. Each has its own stable ID and belongs to a chart
+SHA-256 and effective long-note mode. Multiple targets may coexist within the
+same scope, and editing or removing one leaves the others unchanged. Selectable
+LN/CN/HCN charts allow each scope; authored LN modes use the fixed scope; charts
+without long notes use shared scope across mode selections.
 Changing the chart content at the same path cannot transfer a goal to it.
 
 Existing eligible best records count immediately, including accepted imported
@@ -153,7 +158,9 @@ payload scan is needed for goal browsing or resolution.
 ## Implementation and verification
 
 Versioned rows in the profile score database's `chart_goals` table retain only
-identity, display and LN metadata, targets, and goal dates. They use repository locking,
+identity, display and LN metadata, targets, and goal dates. Existing single-goal
+rows migrate transactionally on write, preserving their IDs and stored metadata.
+They use repository locking,
 profile activity guards, transactional writes, and bounded page reads. Corrupt
 or future-version rows produce an error and cannot be silently overwritten.
 Switching profiles discards unsaved goal edits and queued navigation.
@@ -166,12 +173,11 @@ The goal editor shows the current best lamp and EX score before saving, includin
 
 New achievements play a short trumpet-style fanfare when the result banner appears, using the existing system sound bus and master volume.
 
-Flags are green when the goal they open is achieved. Achieved-only charts are
-excluded from the Goals folder. A
-chart remains in that folder while any LN-mode goal is unfinished. In Personal
-goals, unfinished goals appear first; achieved goals are collapsed at the bottom
-behind the same plus/hide control used by Kombo optional challenges. Each group
-pages independently. Titles and subtitles share one heading.
+Flags are green only when all saved goals for the chart are currently achieved.
+Achieved-only charts are excluded from the Goals folder. A chart remains in that
+folder while any goal is unfinished, including another goal in the same LN mode.
+In Personal goals, In progress and Achieved tabs page independently. Titles and
+subtitles share one heading.
 
 Goal lists, details, and the editor show the chart jacket (or banner), with a
 music-note placeholder while artwork is loading or unavailable. Artwork for

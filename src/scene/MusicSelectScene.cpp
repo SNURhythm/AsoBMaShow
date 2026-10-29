@@ -4116,13 +4116,9 @@ void MusicSelectScene::refreshToolbarGoal() {
   if (toolbarGoalKey_ == key) return;
   toolbarGoalKey_ = key;
   std::string error;
-  std::optional<chart_goals::GoalProgress> goal;
-  for (const int candidate : {mode, 0, 1, 2, 3}) {
-    goal = context.scoreRepository.LoadChartGoal(chart->meta, candidate, error);
-    if (goal || !error.empty()) break;
-  }
+  const auto goals = context.scoreRepository.LoadChartGoalsForChart(chart->meta, error);
   if (!error.empty()) SDL_Log("Cannot load toolbar goal: %s", error.c_str());
-  if (!goal) {
+  if (!goals || goals->empty()) {
     bool recommended = false;
     if (error.empty() && chartSession_) try {
       toolbarGoalRecommendations_.refresh(context.profileManager.activeProfile().id,
@@ -4135,8 +4131,14 @@ void MusicSelectScene::refreshToolbarGoal() {
     toolbar_->setGoalState(false, false, -1, {}, {}, recommended);
     return;
   }
-  const auto labels = chart_goals::targetLabels(goal->goal.target);
-  toolbar_->setGoalState(true, goal->progress.achieved, labels.lampRank, labels.lamp, labels.score);
+  const bool achieved = std::ranges::all_of(*goals, [](const auto &goal) { return goal.progress.achieved; });
+  if (goals->size() > 1) {
+    toolbar_->setGoalState(true, achieved, -1, {},
+        i18n::format("goals.ui.count", {{"count", std::to_string(goals->size())}}));
+  } else {
+    const auto labels = chart_goals::targetLabels(goals->front().goal.target);
+    toolbar_->setGoalState(true, achieved, labels.lampRank, labels.lamp, labels.score);
+  }
 }
 
 bool MusicSelectScene::canDownloadSelectedChart() const {

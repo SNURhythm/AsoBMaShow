@@ -278,6 +278,46 @@ int main() {
   CHECK(rejects([] { evaluate({.scoreNumerator=28}, {}, {}); }));
   CHECK(rejects([] { evaluate({.scoreNumerator=1, .scoreDenominator=0}, {}, {}); }));
 
+  // Independent targets in the same chart/mode must survive together.
+  {
+    sqlite3 *multiple = nullptr;
+    CHECK(sqlite3_open(":memory:", &multiple) == SQLITE_OK);
+    Goal first;
+    first.chart.SHA256 = std::string(64, 'e');
+    first.target.lamp = 400;
+    save(multiple, first);
+    auto second = first;
+    second.target = {.scoreNumerator=24};
+    save(multiple, second);
+    const auto goals = loadForChart(multiple, first.chart.SHA256);
+    CHECK(goals.size() == 2);
+    CHECK(goals[0].target.lamp == 400 && goals[1].target.scoreNumerator == 24);
+    CHECK(goals[0].id > 0 && goals[1].id != goals[0].id);
+    auto edited = goals[0];
+    edited.target.lamp = 500;
+    CHECK(save(multiple, edited) == edited.id);
+    CHECK(load(multiple, first.chart.SHA256, 0, goals[1].id)->target.scoreNumerator == 24);
+    CHECK(rejects([&] { remove(multiple, first.chart.SHA256, 0); }));
+    remove(multiple, first.chart.SHA256, 0, edited.id);
+    CHECK(loadForChart(multiple, first.chart.SHA256).size() == 1);
+    CHECK(rejects([&] { save(multiple, edited); })); // A stale editor cannot recreate a deleted goal.
+    // Recreate the old schema and verify IDs, dates and body bytes survive migration.
+    CHECK(sqlite3_exec(multiple,
+        "CREATE TABLE legacy(sha256 TEXT NOT NULL,ln_mode INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(sha256,ln_mode));"
+        "INSERT INTO legacy(rowid,sha256,ln_mode,body) SELECT rowid,sha256,ln_mode,body FROM chart_goals;"
+        "DROP TABLE chart_goals; ALTER TABLE legacy RENAME TO chart_goals;",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    const auto legacy = loadForChart(multiple, first.chart.SHA256).front();
+    first.setAtUnixMillis = 1730000000000;
+    first.id = save(multiple, first);
+    CHECK(first.id != legacy.id);
+    const auto migrated = load(multiple, first.chart.SHA256, 0, legacy.id);
+    CHECK(migrated && migrated->target == legacy.target && migrated->setAtUnixMillis == legacy.setAtUnixMillis);
+    for (int i = 0; i < 5; ++i) { auto extra = first; extra.id = 0; save(multiple, extra); }
+    CHECK(loadForChart(multiple, first.chart.SHA256).size() == 7);
+    CHECK(loadPage(multiple, 0).goals.size() == 7);
+    sqlite3_close(multiple);
+  }
   SqliteConnectionHandle db;
   sqlite3 *raw = nullptr;
   CHECK(sqlite3_open(":memory:", &raw) == SQLITE_OK); db.reset(raw);
@@ -289,7 +329,7 @@ int main() {
   goal.achievedAtUnixMillis = 1730000001234;
   goal.chart.Title = "Goal chart"; goal.chart.SubTitle = "Another";
   goal.chart.TotalLongNotes = 1; goal.longNoteMode = 1; goal.target = aaa;
-  save(db.get(), goal);
+  goal.id = save(db.get(), goal);
   CHECK(load(db.get(), std::string(64, 'a'), 1)->chart.Title == "Goal chart");
   CHECK(load(db.get(), goal.chart.SHA256, 1)->setAtUnixMillis == 1730000000000);
   CHECK(load(db.get(), goal.chart.SHA256, 1)->achievedAtUnixMillis == 1730000001234);
@@ -311,7 +351,7 @@ int main() {
   CHECK(rejects([&] { auto invalid = goal; invalid.target.lamp = 150; save(db.get(), invalid); }));
   goal.chart.Title = "Updated"; save(db.get(), goal);
   CHECK(loadPage(db.get(), 0).goals.size() == 1);
-  goal.longNoteMode = 2; save(db.get(), goal);
+  goal.longNoteMode = 2; goal.id = 0; goal.id = save(db.get(), goal);
   CHECK(loadPage(db.get(), 0).goals.size() == 2);
   auto index = loadIndex(db.get());
   CHECK(index.hashes() == std::vector<std::string>{std::string(64, 'a')});
@@ -333,6 +373,7 @@ int main() {
     goal.chart.Title = "Rolled back"; save(db.get(), goal); }
   CHECK(load(db.get(), goal.chart.SHA256, 2)->chart.Title == "Updated");
   for (int i = 0; i < 19; ++i) {
+    goal.id = 0;
     goal.chart.SHA256 = std::string(62, 'c') + char('a' + i / 16) + "0123456789abcdef"[i % 16];
     save(db.get(), goal);
   }
@@ -354,7 +395,7 @@ int main() {
       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   CHECK(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK); db.reset(raw);
   CHECK(loadPage(db.get(), 0).goals.empty());
-  save(db.get(), goal); db.reset();
+  goal.id = 0; goal.id = save(db.get(), goal); db.reset();
   CHECK(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK); db.reset(raw);
   CHECK(load(db.get(), goal.chart.SHA256, 1)->chart.SubTitle == "Another");
   CHECK(sqlite3_exec(db.get(), "PRAGMA query_only=ON", nullptr, nullptr, nullptr) == SQLITE_OK);

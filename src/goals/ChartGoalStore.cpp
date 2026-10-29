@@ -25,7 +25,7 @@ int integer(const nlohmann::json &body, const char *key, int minimum, int maximu
 void validateGoal(const Goal &goal) {
   validate(goal.target);
   (void)normalizedHash(goal.chart.SHA256);
-  if (goal.setAtUnixMillis < 0 || goal.achievedAtUnixMillis < 0 ||
+  if (goal.id < 0 || goal.setAtUnixMillis < 0 || goal.achievedAtUnixMillis < 0 ||
       goal.setAtUnixMillis > 253402300799999LL || goal.achievedAtUnixMillis > 253402300799999LL ||
       (goal.achievedAtUnixMillis > 0 && goal.achievedAtUnixMillis < goal.setAtUnixMillis))
     throw std::invalid_argument("Invalid goal dates.");
@@ -47,6 +47,7 @@ Goal decode(sqlite3_stmt *query) {
   if (integer(body, "version", 1, 2147483647) != 1)
     throw std::runtime_error("These goals need a different app version.");
   Goal goal;
+  goal.id = sqlite3_column_int64(query, 3);
   goal.chart.SHA256 = sqliteColumnString(query, 0);
   goal.longNoteMode = sqlite3_column_int(query, 1);
   goal.chart.MD5 = body.at("md5").get<std::string>();
@@ -98,7 +99,7 @@ std::vector<Goal> loadForChart(sqlite3 *db, std::string_view sha256) {
   std::vector<Goal> result;
   if (!exists(db)) return result;
   SqliteStatementHandle query;
-  require(prepareSqliteStatement(db, "SELECT sha256, ln_mode, body FROM chart_goals WHERE sha256=? ORDER BY ln_mode LIMIT 4", query) == SQLITE_OK, db);
+  require(prepareSqliteStatement(db, "SELECT sha256, ln_mode, body, rowid FROM chart_goals WHERE sha256=? ORDER BY ln_mode, rowid", query) == SQLITE_OK, db);
   require(sqlite3_bind_text(query, 1, hash.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK, db);
   int rc;
   while ((rc = sqlite3_step(query)) == SQLITE_ROW) result.push_back(decode(query));
@@ -110,7 +111,7 @@ Page loadPage(sqlite3 *db, int offset) {
   Page page;
   if (!exists(db)) return page;
   SqliteStatementHandle query;
-  require(prepareSqliteStatement(db, "SELECT sha256, ln_mode, body FROM chart_goals ORDER BY sha256, ln_mode LIMIT 21 OFFSET ?", query) == SQLITE_OK, db);
+  require(prepareSqliteStatement(db, "SELECT sha256, ln_mode, body, rowid FROM chart_goals ORDER BY sha256, ln_mode, rowid LIMIT 21 OFFSET ?", query) == SQLITE_OK, db);
   require(sqlite3_bind_int(query, 1, offset) == SQLITE_OK, db);
   int rc;
   while ((rc = sqlite3_step(query)) == SQLITE_ROW) {
@@ -120,18 +121,25 @@ Page loadPage(sqlite3 *db, int offset) {
   require(rc == SQLITE_ROW || rc == SQLITE_DONE, db);
   return page;
 }
-std::optional<Goal> load(sqlite3 *db, std::string_view sha256, int mode) {
+std::optional<Goal> load(sqlite3 *db, std::string_view sha256, int mode, std::int64_t id) {
   const auto hash = normalizedHash(sha256);
   if (!exists(db)) return {};
   SqliteStatementHandle query;
-  require(prepareSqliteStatement(db, "SELECT sha256, ln_mode, body FROM chart_goals WHERE sha256=? AND ln_mode=?", query) == SQLITE_OK, db);
+  require(prepareSqliteStatement(db, id > 0
+      ? "SELECT sha256, ln_mode, body, rowid FROM chart_goals WHERE sha256=? AND rowid=?"
+      : "SELECT sha256, ln_mode, body, rowid FROM chart_goals WHERE sha256=? AND ln_mode=? ORDER BY rowid LIMIT 2", query) == SQLITE_OK, db);
   bindIdentity(db, query, hash, mode);
+  if (id > 0) require(sqlite3_bind_int64(query, 2, id) == SQLITE_OK, db);
   const auto rc = sqlite3_step(query);
   require(rc == SQLITE_ROW || rc == SQLITE_DONE, db);
   if (rc == SQLITE_DONE) return {};
-  return decode(query);
+  auto result = decode(query);
+  const auto next = sqlite3_step(query);
+  if (next == SQLITE_ROW) throw std::runtime_error("Select an individual chart goal.");
+  require(next == SQLITE_DONE, db);
+  return result;
 }
-void save(sqlite3 *db, const Goal &goal) {
+std::int64_t save(sqlite3 *db, const Goal &goal) {
   validateGoal(goal);
   const auto hash = normalizedHash(goal.chart.SHA256);
   std::string error;
@@ -139,8 +147,30 @@ void save(sqlite3 *db, const Goal &goal) {
       "RELEASE chart_goal_write", "ROLLBACK TO chart_goal_write; RELEASE chart_goal_write");
   if (!tx.active()) throw std::runtime_error(error);
   // Preserve unreadable future/corrupt rows, including on attempted replacement.
-  (void)load(db, hash, goal.longNoteMode);
-  require(sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS chart_goals (sha256 TEXT NOT NULL, ln_mode INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (sha256, ln_mode))", nullptr, nullptr, nullptr) == SQLITE_OK, db);
+  (void)loadForChart(db, hash);
+  if (goal.id > 0 && !load(db, hash, goal.longNoteMode, goal.id))
+    throw std::runtime_error("The chart goal no longer exists.");
+  if (exists(db)) {
+    SqliteStatementHandle columns;
+    require(prepareSqliteStatement(db, "PRAGMA table_info(chart_goals)", columns) == SQLITE_OK, db);
+    bool hasId = false;
+    int rc;
+    while ((rc = sqlite3_step(columns)) == SQLITE_ROW)
+      hasId = hasId || sqliteColumnString(columns, 1) == "id";
+    require(rc == SQLITE_DONE, db);
+    columns.reset();
+    if (!hasId) {
+      // Preserve legacy row identities and JSON bytes in the same savepoint.
+      require(sqlite3_exec(db,
+          "CREATE TABLE chart_goals_migrated(id INTEGER PRIMARY KEY AUTOINCREMENT,sha256 TEXT NOT NULL,ln_mode INTEGER NOT NULL,body TEXT NOT NULL);"
+          "INSERT INTO chart_goals_migrated SELECT rowid,sha256,ln_mode,body FROM chart_goals;"
+          "DROP TABLE chart_goals; ALTER TABLE chart_goals_migrated RENAME TO chart_goals;",
+          nullptr, nullptr, nullptr) == SQLITE_OK, db);
+    }
+  } else require(sqlite3_exec(db,
+      "CREATE TABLE chart_goals(id INTEGER PRIMARY KEY AUTOINCREMENT,sha256 TEXT NOT NULL,ln_mode INTEGER NOT NULL,body TEXT NOT NULL)",
+      nullptr, nullptr, nullptr) == SQLITE_OK, db);
+  require(sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS chart_goals_chart_mode ON chart_goals(sha256,ln_mode)", nullptr, nullptr, nullptr) == SQLITE_OK, db);
   const auto body = nlohmann::json{{"version", 1}, {"md5", goal.chart.MD5},
       {"title", goal.chart.Title}, {"subtitle", goal.chart.SubTitle},
       {"lnMode", goal.chart.LnMode}, {"longNotes", goal.chart.TotalLongNotes},
@@ -149,21 +179,27 @@ void save(sqlite3 *db, const Goal &goal) {
       {"setAt", goal.setAtUnixMillis}, {"achievedAt", goal.achievedAtUnixMillis}}.dump();
   if (body.size() > 65536) throw std::invalid_argument("Goal metadata is too large.");
   SqliteStatementHandle query;
-  require(prepareSqliteStatement(db, "INSERT INTO chart_goals VALUES (?, ?, ?) ON CONFLICT(sha256, ln_mode) DO UPDATE SET body=excluded.body", query) == SQLITE_OK, db);
+  require(prepareSqliteStatement(db,
+      "INSERT INTO chart_goals(sha256,ln_mode,body,id) VALUES(?,?,?,?) "
+      "ON CONFLICT(id) DO UPDATE SET ln_mode=excluded.ln_mode,body=excluded.body", query) == SQLITE_OK, db);
   bindIdentity(db, query, hash, goal.longNoteMode);
+  require((goal.id > 0 ? sqlite3_bind_int64(query, 4, goal.id) : sqlite3_bind_null(query, 4)) == SQLITE_OK, db);
   require(sqlite3_bind_text(query, 3, body.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK && sqlite3_step(query) == SQLITE_DONE, db);
+  const auto id = goal.id > 0 ? goal.id : sqlite3_last_insert_rowid(db);
   if (!tx.commit(error)) throw std::runtime_error(error);
+  return id;
 }
-void remove(sqlite3 *db, std::string_view sha256, int mode) {
+void remove(sqlite3 *db, std::string_view sha256, int mode, std::int64_t id) {
   const auto hash = normalizedHash(sha256);
   std::string error;
   SqliteTransactionHandle tx(db, "SAVEPOINT chart_goal_write", error,
       "RELEASE chart_goal_write", "ROLLBACK TO chart_goal_write; RELEASE chart_goal_write");
   if (!tx.active()) throw std::runtime_error(error);
-  if (load(db, hash, mode)) {
+  if (const auto goal = load(db, hash, mode, id)) {
     SqliteStatementHandle query;
-    require(prepareSqliteStatement(db, "DELETE FROM chart_goals WHERE sha256=? AND ln_mode=?", query) == SQLITE_OK, db);
+    require(prepareSqliteStatement(db, "DELETE FROM chart_goals WHERE sha256=? AND rowid=?", query) == SQLITE_OK, db);
     bindIdentity(db, query, hash, mode);
+    require(sqlite3_bind_int64(query, 2, goal->id) == SQLITE_OK, db);
     require(sqlite3_step(query) == SQLITE_DONE, db);
   }
   if (!tx.commit(error)) throw std::runtime_error(error);

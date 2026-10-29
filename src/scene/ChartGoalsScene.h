@@ -51,6 +51,7 @@ private:
   std::map<std::string, float> scrollOffsets_;
   std::string renderedScrollKey_;
   std::string scrollKey() const;
+  void showChartGoals(const ChartMetaRecord &, int mode);
   void showGoal(chart_goals::Goal);
   void saveGoal();
   void removeGoal();
@@ -62,7 +63,7 @@ private:
   SceneReturnTarget returnTarget_;
   SelectChart onSelectChart_;
   FolderGoalsScene::SelectFolder onSelectFolder_;
-  std::optional<ChartMetaRecord> initial_, resolved_, recommendationChart_;
+  std::optional<ChartMetaRecord> initial_, resolved_, recommendationChart_, pickerChart_;
   std::optional<int> initialMode_;
   bool initialRecommendations_ = false;
   std::string profileId_, message_, customRate_;

@@ -13,6 +13,7 @@ struct Goal {
   bms_parser::ChartMeta chart;
   int longNoteMode = 0;
   Target target;
+  std::int64_t id = 0; // Zero starts a new independent goal.
   std::int64_t setAtUnixMillis = 0;
   std::int64_t achievedAtUnixMillis = 0;
 };

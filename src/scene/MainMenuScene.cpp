@@ -1502,9 +1502,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
             long_note_mode::valueFromId(profileSelections.longNoteMode)));
     if (goalMode) {
       std::string error;
-      const auto goal = this->context.scoreRepository.LoadChartGoal(record.meta, *goalMode, error);
-      if (goal && !goal->progress.achieved) {
-        const auto labels = chart_goals::targetLabels(goal->goal.target);
+      const auto goals = this->context.scoreRepository.LoadChartGoalsForChart(record.meta, error);
+      if (goals && goals->size() > 1) {
+        view->setGoalTarget(-1, {}, i18n::format("goals.ui.count", {{"count", std::to_string(goals->size())}}));
+      } else if (goals && goals->size() == 1 && !goals->front().progress.achieved) {
+        const auto labels = chart_goals::targetLabels(goals->front().goal.target);
         view->setGoalTarget(labels.lampRank, labels.lamp, labels.score);
       } else if (!error.empty()) SDL_Log("Cannot load chart goal: %s", error.c_str());
     }
@@ -1535,12 +1537,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     const auto goalMode = chartGoalIndex.modeFor(item.meta.SHA256,
         scoreLongNoteModeForClearLamp(item.meta,
             long_note_mode::valueFromId(profileSelections.longNoteMode)));
-    bool goalAchieved = false;
-    if (goalMode) {
-      const auto achieved = chartGoalIndex.achievedModes.find(chart_goals::normalizedHash(item.meta.SHA256));
-      goalAchieved = achieved != chartGoalIndex.achievedModes.end() &&
-          (achieved->second & (1u << *goalMode));
-    }
+    const bool goalAchieved = chartGoalIndex.allAchieved(item.meta.SHA256);
     chartListItemView->setGoalState(goalMode.has_value(), goalAchieved,
         chartGoalRecommendations.contains(item.meta.SHA256));
     if (isSelected && !goalAchieved) updateSelectedGoalBubble(chartListItemView, item);

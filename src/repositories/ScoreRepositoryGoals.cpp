@@ -80,10 +80,11 @@ std::optional<chart_goals::Index> ScoreRepository::LoadChartGoalIndex(std::strin
   if (!tx.active()) return {};
   try {
     auto result = chart_goals::loadIndex(impl_->sessionDatabase);
+    result.achievedModes = result.modes;
     for (const auto &[hash, mask] : result.modes)
       for (const auto &goal : chart_goals::loadForChart(impl_->sessionDatabase, hash))
-        if (project(impl_->sessionDatabase, goal).progress.achieved)
-          result.achievedModes[hash] |= 1u << goal.longNoteMode;
+        if (!project(impl_->sessionDatabase, goal).progress.achieved)
+          result.achievedModes[hash] &= ~(1u << goal.longNoteMode);
     if (!tx.commit(error)) return {};
     return result;
   }
@@ -126,8 +127,8 @@ std::optional<chart_goals::ProgressPage> ScoreRepository::LoadChartGoals(int off
     return result;
   } catch (const std::exception &failure) { error = failure.what(); return {}; }
 }
-std::optional<chart_goals::GoalProgress> ScoreRepository::LoadChartGoal(
-    const bms_parser::ChartMeta &chart, int selectedMode, std::string &error) {
+std::optional<std::vector<chart_goals::GoalProgress>> ScoreRepository::LoadChartGoalsForChart(
+    const bms_parser::ChartMeta &chart, std::string &error) {
   profile_database_activity::WriteGuard guard;
   std::lock_guard lock(impl_->sessionMutex);
   error.clear();
@@ -135,14 +136,30 @@ std::optional<chart_goals::GoalProgress> ScoreRepository::LoadChartGoal(
   SqliteTransactionHandle tx(impl_->sessionDatabase, "BEGIN", error);
   if (!tx.active()) return {};
   try {
-    auto goal = chart_goals::load(impl_->sessionDatabase, chart.SHA256, goalMode(chart, selectedMode));
+    std::vector<chart_goals::GoalProgress> result;
+    for (auto &goal : chart_goals::loadForChart(impl_->sessionDatabase, chart.SHA256))
+      result.push_back(project(impl_->sessionDatabase, std::move(goal)));
+    if (!tx.commit(error)) return {};
+    return result;
+  } catch (const std::exception &failure) { error = failure.what(); return {}; }
+}
+std::optional<chart_goals::GoalProgress> ScoreRepository::LoadChartGoal(
+    const bms_parser::ChartMeta &chart, int selectedMode, std::string &error, std::int64_t goalId) {
+  profile_database_activity::WriteGuard guard;
+  std::lock_guard lock(impl_->sessionMutex);
+  error.clear();
+  if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return {}; }
+  SqliteTransactionHandle tx(impl_->sessionDatabase, "BEGIN", error);
+  if (!tx.active()) return {};
+  try {
+    auto goal = chart_goals::load(impl_->sessionDatabase, chart.SHA256, goalMode(chart, selectedMode), goalId);
     std::optional<chart_goals::GoalProgress> result;
     if (goal) result = project(impl_->sessionDatabase, std::move(*goal));
     if (!tx.commit(error)) return {};
     return result;
   } catch (const std::exception &failure) { error = failure.what(); return {}; }
 }
-bool ScoreRepository::SaveChartGoal(const chart_goals::Goal &goal, std::string &error) {
+bool ScoreRepository::SaveChartGoal(chart_goals::Goal &goal, std::string &error) {
   profile_database_activity::WriteGuard guard;
   std::lock_guard lock(impl_->sessionMutex);
   error.clear();
@@ -153,27 +170,30 @@ bool ScoreRepository::SaveChartGoal(const chart_goals::Goal &goal, std::string &
     auto normalized = goal;
     normalized.chart.SHA256 = chart_goals::normalizedHash(goal.chart.SHA256);
     normalized.longNoteMode = goalMode(goal.chart, goal.longNoteMode);
-    const auto previous = chart_goals::load(impl_->sessionDatabase, normalized.chart.SHA256, normalized.longNoteMode);
-    const bool unchanged = previous && previous->target == normalized.target;
+    const auto previous = normalized.id > 0 ? chart_goals::load(impl_->sessionDatabase,
+        normalized.chart.SHA256, normalized.longNoteMode, normalized.id) : std::nullopt;
+    const bool unchanged = previous && previous->target == normalized.target &&
+        previous->longNoteMode == normalized.longNoteMode;
     normalized.setAtUnixMillis = unchanged ? previous->setAtUnixMillis : chart_goals::nowUnixMillis();
     normalized.achievedAtUnixMillis = unchanged ? previous->achievedAtUnixMillis : 0;
     if (!unchanged && project(impl_->sessionDatabase, normalized).progress.achieved) {
       error = "goal_already_achieved";
       return false;
     }
-    chart_goals::save(impl_->sessionDatabase, normalized);
+    normalized.id = chart_goals::save(impl_->sessionDatabase, normalized);
     if (!tx.commit(error)) return false;
+    goal = std::move(normalized);
     score_repository_detail::IncrementRevision();
     return true;
   } catch (const std::exception &failure) { error = failure.what(); return false; }
 }
-bool ScoreRepository::RemoveChartGoal(const bms_parser::ChartMeta &chart, int selectedMode, std::string &error) {
+bool ScoreRepository::RemoveChartGoal(const bms_parser::ChartMeta &chart, int selectedMode, std::string &error, std::int64_t goalId) {
   profile_database_activity::WriteGuard guard;
   std::lock_guard lock(impl_->sessionMutex);
   error.clear();
   if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return false; }
   try {
-    chart_goals::remove(impl_->sessionDatabase, chart.SHA256, goalMode(chart, selectedMode));
+    chart_goals::remove(impl_->sessionDatabase, chart.SHA256, goalMode(chart, selectedMode), goalId);
     score_repository_detail::IncrementRevision();
     return true;
   } catch (const std::exception &failure) { error = failure.what(); return false; }

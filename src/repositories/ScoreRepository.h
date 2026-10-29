@@ -101,12 +101,15 @@ public:
   std::optional<chart_goals::GoalProgress> PreviewChartGoal(
       const chart_goals::Goal &goal, std::string &error);
   std::optional<chart_goals::ProgressPage> LoadChartGoals(int offset, std::string &error);
+  std::optional<std::vector<chart_goals::GoalProgress>> LoadChartGoalsForChart(
+      const bms_parser::ChartMeta &, std::string &error);
   std::optional<chart_goals::Index> LoadChartGoalIndex(std::string &error);
   std::vector<chart_goals::Goal> TakeChartGoalAchievements(std::string_view attemptId);
   std::optional<chart_goals::GoalProgress> LoadChartGoal(
-      const bms_parser::ChartMeta &, int selectedMode, std::string &error);
-  bool SaveChartGoal(const chart_goals::Goal &, std::string &error);
-  bool RemoveChartGoal(const bms_parser::ChartMeta &, int selectedMode, std::string &error);
+      const bms_parser::ChartMeta &, int selectedMode, std::string &error, std::int64_t goalId = 0);
+  // Returns the persisted ID and dates in the goal only after a successful commit.
+  bool SaveChartGoal(chart_goals::Goal &, std::string &error);
+  bool RemoveChartGoal(const bms_parser::ChartMeta &, int selectedMode, std::string &error, std::int64_t goalId = 0);
   std::optional<folder_goals::GoalProgress> PreviewFolderGoal(const folder_goals::Goal &, std::string &error);
   std::optional<std::vector<folder_goals::GoalProgress>> LoadFolderGoals(std::string &error);
   bool SaveFolderGoal(const folder_goals::Goal &, std::string &error);

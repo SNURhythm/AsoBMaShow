@@ -679,7 +679,7 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   chart_goals::Goal goal;
   goal.chart.SHA256 = std::string(64, 'A');
   goal.chart.Title = "Personal target";
-  goal.longNoteMode = 3; // A chart without LN has one shared goal.
+  goal.longNoteMode = 3; // A chart without LN has shared goal scope.
   goal.target = {.lamp=500, .scoreNumerator=24};
   assert(scores.SaveChartGoal(goal, error));
   auto saved = scores.LoadChartGoal(goal.chart, 1, error);
@@ -714,10 +714,11 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   assert(!scores.LoadChartGoal(goal.chart, 1, error)->progress.achieved);
   assert(scores.LoadChartGoalIndex(error)->activeHashes().size() == 1);
   assert(scores.LoadChartGoal(goal.chart, 1, error)->goal.achievedAtUnixMillis == achievedAt);
+  goal.id = 0;
   goal.chart.SHA256 = std::string(64, 'b');
   goal.chart.TotalLongNotes = 1;
   goal.longNoteMode = 1; assert(scores.SaveChartGoal(goal, error));
-  goal.longNoteMode = 2; assert(scores.SaveChartGoal(goal, error));
+  goal.id = 0; goal.longNoteMode = 2; assert(scores.SaveChartGoal(goal, error));
   assert(scores.LoadChartGoals(0, error)->goals.size() == 3);
   auto index = scores.LoadChartGoalIndex(error);
   assert(index && error.empty() && index->hashes().size() == 2);
@@ -728,7 +729,7 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   assert(scores.BindDatabasePath(root / "other.db", error));
   assert(scores.LoadChartGoals(0, error)->goals.empty());
   assert(scores.LoadChartGoalIndex(error)->modes.empty());
-  assert(scores.SaveChartGoal(goal, error));
+  goal.id = 0; assert(scores.SaveChartGoal(goal, error));
   assert(scores.LoadChartGoals(0, error)->goals.size() == 1);
   assert(scores.BindDatabasePath(path, error));
   assert(scores.LoadChartGoals(0, error)->goals.size() == 3);
@@ -852,7 +853,7 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   sqlite3_close(blocked);
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
   assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 10);
-  const auto reached = scores.LoadChartGoal(goal.chart, 2, error);
+  auto reached = scores.LoadChartGoal(goal.chart, 2, error);
   assert(reached->progress.achieved && reached->goal.achievedAtUnixMillis >= setAt);
   assert(reached->goal.achievedAtUnixMillis / 1000 == (setAt + 5000) / 1000);
   assert(scores.TakeChartGoalAchievements("other-attempt").empty());
@@ -893,6 +894,50 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
 }
 
+void testIndependentChartGoals() {
+  const auto root = testRoot("multiple-chart-goals");
+  ScoreRepository scores(root / "scores.db");
+  assert(scores.EnsureSchema());
+  std::string error;
+  chart_goals::Goal lamp;
+  lamp.chart.SHA256 = std::string(64, 'd'); lamp.chart.MD5 = std::string(32, 'd');
+  lamp.chart.TotalLongNotes = 1; lamp.longNoteMode = 2;
+  lamp.target = {.lamp=500};
+  auto score = lamp; score.target = {.scoreNumerator=24};
+  assert(scores.SaveChartGoal(lamp, error) && scores.SaveChartGoal(score, error));
+  assert(lamp.id > 0 && score.id != lamp.id);
+  assert(scores.LoadChartGoalsForChart(lamp.chart, error)->size() == 2);
+  result_persistence::PendingChartScoreWrite pending;
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174070";
+  pending.replayId = 1; pending.createdAt = scoreHistoryTime(score.setAtUnixMillis + 1000);
+  pending.score.chartSha256 = lamp.chart.SHA256; pending.score.chartMd5 = lamp.chart.MD5;
+  pending.score.longNoteMode = 2; pending.score.score = 180; pending.score.maxScore = 200;
+  pending.score.clearType = 300; pending.score.comboBreak = 1;
+  pending.score.provenance = ScoreProvenance::Legacy();
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  auto achieved = scores.TakeChartGoalAchievements(pending.attemptId);
+  assert(achieved.size() == 1 && achieved.front().id == score.id);
+  assert(!scores.LoadChartGoalIndex(error)->allAchieved(lamp.chart.SHA256));
+  assert(scores.LoadChartGoalIndex(error)->activeHashes().size() == 1);
+  assert(scores.LoadChartGoal(score.chart, 2, error, score.id)->goal.achievedAtUnixMillis > 0);
+  assert(scores.LoadChartGoal(lamp.chart, 2, error, lamp.id)->goal.achievedAtUnixMillis == 0);
+  pending.attemptId.back() = '1'; pending.score.clearType = 500;
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  achieved = scores.TakeChartGoalAchievements(pending.attemptId);
+  assert(achieved.size() == 1 && achieved.front().id == lamp.id);
+  assert(scores.LoadChartGoalIndex(error)->allAchieved(lamp.chart.SHA256));
+  const auto scoreDate = scores.LoadChartGoal(score.chart, 2, error, score.id)->goal.achievedAtUnixMillis;
+  lamp.target.lamp = 600;
+  assert(scores.SaveChartGoal(lamp, error));
+  assert(!scores.LoadChartGoalIndex(error)->allAchieved(lamp.chart.SHA256));
+  assert(scores.LoadChartGoal(score.chart, 2, error, score.id)->goal.achievedAtUnixMillis == scoreDate);
+  assert(scores.RemoveChartGoal(lamp.chart, 2, error, lamp.id));
+  assert(scores.LoadChartGoalsForChart(lamp.chart, error)->size() == 1);
+  assert(scores.LoadChartGoalIndex(error)->allAchieved(lamp.chart.SHA256));
+  assert(!scores.SaveChartGoal(lamp, error));
+  assert(scores.LoadChartGoalsForChart(score.chart, error)->front().goal.id == score.id);
+}
+
 void testFolderGoalPersistenceAndPlayCredit() {
   const auto root=testRoot("folder-goals");
   bms_parser::ChartMeta chart;
@@ -900,11 +945,11 @@ void testFolderGoalPersistenceAndPlayCredit() {
   chart.SHA256=std::string(64,'e'); chart.MD5=std::string(32,'e'); chart.TotalNotes=100;
   sqlite3 *db=nullptr;
   assert(sqlite3_open((root/"chart.db").string().c_str(),&db)==SQLITE_OK);
-  const std::string fixture="CREATE TABLE chart_meta(path TEXT,sha256 TEXT,md5 TEXT,ln_mode INTEGER,total_long_notes INTEGER,total_backspin_notes INTEGER,total_notes INTEGER);"
+  const std::string fixture="CREATE TABLE chart_meta(path TEXT,sha256 TEXT,md5 TEXT,ln_mode INTEGER,total_long_notes INTEGER,total_backspin_notes INTEGER,total_notes INTEGER,source_priority INTEGER,source_archive_size INTEGER);"
       "CREATE TABLE difficulty_tables(id INTEGER,source_url TEXT);"
       "CREATE TABLE difficulty_table_entries(table_id INTEGER,level TEXT,sha256 TEXT,md5 TEXT);"
       "INSERT INTO difficulty_tables VALUES(1,'https://folder-test');"
-      "INSERT INTO chart_meta VALUES('/charts/a','"+chart.SHA256+"','"+chart.MD5+"',0,0,0,100);"
+      "INSERT INTO chart_meta(path,sha256,md5,ln_mode,total_long_notes,total_backspin_notes,total_notes) VALUES('/charts/a','"+chart.SHA256+"','"+chart.MD5+"',0,0,0,100);"
       "INSERT INTO difficulty_table_entries VALUES(1,'1','"+chart.SHA256+"',''),(1,'1','missing','');";
   assert(sqlite3_exec(db,fixture.c_str(),nullptr,nullptr,nullptr)==SQLITE_OK);
   sqlite3_close(db);
@@ -935,7 +980,7 @@ void testFolderGoalPersistenceAndPlayCredit() {
   assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
   // Adding an available, unplayed member drops progress, but never resets its first achievement.
   assert(sqlite3_open((root/"chart.db").string().c_str(),&db)==SQLITE_OK);
-  const auto added="INSERT INTO chart_meta VALUES('/charts/b','"+std::string(64,'f')+"','"+std::string(32,'f')+"',0,0,0,100);"
+  const auto added="INSERT INTO chart_meta(path,sha256,md5,ln_mode,total_long_notes,total_backspin_notes,total_notes) VALUES('/charts/b','"+std::string(64,'f')+"','"+std::string(32,'f')+"',0,0,0,100);"
       "UPDATE difficulty_table_entries SET sha256='"+std::string(64,'f')+"' WHERE sha256='missing';"
       "UPDATE difficulty_tables SET id=2; UPDATE difficulty_table_entries SET table_id=2;";
   assert(sqlite3_exec(db,added.c_str(),nullptr,nullptr,nullptr)==SQLITE_OK);
@@ -968,6 +1013,7 @@ void testFolderGoalPersistenceAndPlayCredit() {
 }
 
 int main() {
+  testIndependentChartGoals();
   testFolderGoalPersistenceAndPlayCredit();
   testGaugeRecommendationSummaries();
   testCannotSetAlreadyAchievedGoal();
