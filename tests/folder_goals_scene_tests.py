@@ -12,7 +12,7 @@ class FolderGoalsSceneTests(unittest.TestCase):
         source=(root/'src/scene/FolderGoalsScene.cpp').read_text()
         methods='\n'.join(extract(source,s) for s in (
             'bool FolderGoalsScene::checkProfile(', 'void FolderGoalsScene::choose(',
-            'void FolderGoalsScene::saveGoal(', 'void FolderGoalsScene::removeGoal(',
+            'void FolderGoalsScene::selectScoreTarget(', 'void FolderGoalsScene::saveGoal(', 'void FolderGoalsScene::removeGoal(',
             'void FolderGoalsScene::openSource(', 'void FolderGoalsScene::addGoal(',
             'void FolderGoalsScene::changeScope(',
             'void FolderGoalsScene::cancelEditor(', 'void FolderGoalsScene::back(',
@@ -52,7 +52,7 @@ struct FolderGoalsScene {
  std::vector<folder_goals::GoalProgress> goals_;
  folder_goals::Goal draft_;
  std::optional<folder_goals::Progress> progress_;
- std::string profile_="one",message_,rate_="100";
+ std::string profile_="one",message_,rate_="100",scoreRate_="100";
  bool detail_=false,editing_=false,confirmRemove_=false,failed_=false,achieved_=false;
  bool picker_=false,newGoal_=false,sourceOrigin_=false;
  std::optional<folder_goals::Goal> editorReturn_;
@@ -63,6 +63,7 @@ struct FolderGoalsScene {
  void reload(){++reloads;}
  bool checkProfile();
  void choose(folder_goals::Goal);
+ void selectScoreTarget(const std::string &);
  void saveGoal();void removeGoal();
  void later(std::function<void()> f){f();}
  void defer(std::function<bool()> f,int,bool){f();}
@@ -117,6 +118,35 @@ int main(){
  assert(s.navigationState_->folderNavigationOffset==23);
  s.goals_.clear();s.openSource();assert(s.editing_ && s.newGoal_ && !s.picker_);
  s.sourceOrigin_=true;s.back();assert(returned==2);
+ // Rank selection survives save/reopen/edit; custom percentages and lamp coverage remain independent.
+ FolderGoalsScene ranks;
+ ranks.choose({.source=source,.target={.type=folder_goals::Type::AverageEx}});
+ ranks.selectScoreTarget("24");
+ assert(ranks.draft_.target.scoreRank==24 && ranks.rate_=="88.89");
+ ranks.rate_="invalid";ranks.saveGoal(); // Rank saves never parse the hidden custom input.
+ assert(ranks.context.scoreRepository.saves==1 && ranks.context.scoreRepository.saved.target.scoreRank==24);
+ auto rankGoal=ranks.draft_;ranks.goals_.push_back({rankGoal,{}});ranks.choose(rankGoal);
+ assert(ranks.draft_.target.scoreRank==24 && ranks.rate_=="88.89");
+ ranks.editing_=true;ranks.selectScoreTarget("custom");ranks.rate_="87.77";ranks.saveGoal();
+ assert(ranks.context.scoreRepository.saved.target.scoreRank==0 && ranks.context.scoreRepository.saved.target.percent==8777);
+ ranks.addGoal();ranks.changeScope(2,folder_goals::Type::AverageEx);ranks.selectScoreTarget("21");
+ ranks.changeScope(2,folder_goals::Type::Lamp);assert(ranks.draft_.target.scoreRank==0);
+ FolderGoalsScene coverage;
+ coverage.choose({.source=source,.target={.type=folder_goals::Type::ExCoverage,.percent=8000}});
+ coverage.selectScoreTarget("24");
+ assert(coverage.rate_=="80.00" && coverage.scoreRate_=="88.89");
+ coverage.saveGoal();auto coverageGoal=coverage.draft_;coverage.goals_.push_back({coverageGoal,{}});
+ coverage.choose(coverageGoal);
+ assert(coverage.rate_=="80.00" && coverage.draft_.target.scoreRank==24);
+ coverage.editing_=true;coverage.selectScoreTarget("custom");coverage.scoreRate_="87.77";
+ coverage.rate_="90";coverage.saveGoal();
+ assert(coverage.context.scoreRepository.saved.target.exPercent==8777);
+ assert(coverage.context.scoreRepository.saved.target.percent==9000 && coverage.draft_.target.scoreRank==0);
+ coverage.editing_=true;auto saves=coverage.context.scoreRepository.saves;
+ coverage.scoreRate_="0";coverage.saveGoal();assert(coverage.context.scoreRepository.saves==saves);
+ coverage.scoreRate_="88.888";coverage.saveGoal();assert(coverage.context.scoreRepository.saves==saves);
+ coverage.selectScoreTarget("21");coverage.rate_="0";coverage.saveGoal();
+ assert(coverage.context.scoreRepository.saves==saves); // Coverage is required even for rank thresholds.
  s.context.profileManager.p.id="two";assert(!s.checkProfile());
  assert(!s.detail_ && !s.editing_ && s.goals_.empty() && !s.progress_ && s.rate_=="100");
 }
@@ -129,16 +159,18 @@ int main(){
 
     def test_duplicate_pending_types_use_count_instead_of_arbitrary_target(self):
         root=Path(__file__).resolve().parents[1]
-        method=extract((root/'src/goals/FolderGoalPresentation.h').read_text(), 'inline BubbleLabels bubbleLabels(')
+        presentation=(root/'src/goals/FolderGoalPresentation.h').read_text()
+        method='\n'.join(extract(presentation, signature) for signature in (
+            'inline std::string rateTargetText(', 'inline BubbleLabels bubbleLabels(', 'inline std::string targetText('))
         fixture=r'''
 #include "goals/FolderGoalStatusIndex.h"
 #include <cassert>
 #include <initializer_list>
 #include <utility>
-namespace kombo { std::string lampLabel(int){return "HARD";} }
+namespace kombo { std::string lampLabel(int){return "HARD";} std::string scoreRankLabel(int){return "AAA";} }
 namespace i18n {
  std::string format(const char *key,std::initializer_list<std::pair<std::string,std::string>> args) {
-  return std::string(key)+":"+args.begin()->second;
+  std::string out=key; for(const auto &arg:args) out+=":"+arg.second; return out;
  }
 }
 namespace folder_goals {
@@ -158,6 +190,14 @@ int main() {
  assert(folder_goals::bubbleLabels(s).score=="goals.ui.count:2");
  s.pendingExCount=1;
  assert(folder_goals::bubbleLabels(s).score=="folder_goals.ui.ex_bubble:72.50%/85.00%");
+ s.pendingEx->target.scoreRank=24;
+ assert(folder_goals::bubbleLabels(s).score=="folder_goals.ui.ex_bubble:72.50%/AAA");
+ folder_goals::Goal goal{.target=s.pendingEx->target};
+ assert(folder_goals::targetText(goal)=="folder_goals.ui.ex_target:AAA");
+ s.pendingEx->target.type=folder_goals::Type::ExCoverage;s.pendingEx->target.percent=8000;s.pendingEx->percent=50;
+ assert(folder_goals::bubbleLabels(s).score=="folder_goals.ui.ex_coverage_bubble:AAA:50.00%/80.00%");
+ goal.target=s.pendingEx->target;
+ assert(folder_goals::targetText(goal)=="folder_goals.ui.ex_coverage_target:80.00%:AAA");
 }
 '''.replace('METHOD',method)
         with tempfile.TemporaryDirectory(prefix='folder-goal-bubble-') as directory:

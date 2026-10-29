@@ -83,7 +83,61 @@ void testLegacyStorageWithAttachedTrigger() {
     sqlite3_close(db);
   }
 }
+void testExRateCoverage() {
+  Target target{.type=Type::ExCoverage,.percent=5000,.scoreRank=24};
+  std::vector<Member> members{
+      {.identity="a",.score=1600,.maxScore=1800}, // Exactly AAA.
+      {.identity="b",.score=88888,.maxScore=100000}, // Below AAA despite nearby display.
+      {.identity="c",.score=200,.maxScore=200}, {.identity="unplayed"},
+      {.identity="missing",.available=false}, {.identity="a",.score=1600,.maxScore=1800}};
+  auto progress=evaluate(target,members);
+  CHECK(progress.available==4 && progress.missing==1 && progress.qualifying==2);
+  CHECK(progress.required==2 && progress.percent==50 && progress.achieved);
+  target.percent=5001; CHECK(!evaluate(target,members).achieved && evaluate(target,members).required==3);
+  CHECK(targetPercent(target)==50.01);
+  target.scoreRank=0; target.exPercent=8888;
+  CHECK(evaluate(target,members).qualifying==3 && evaluate(target,members).achieved);
+  target.exPercent=8889; CHECK(evaluate(target,members).qualifying==1 && !evaluate(target,members).achieved);
+  CHECK(!evaluate(target,{}).achieved);
+  target.exPercent=0;
+  bool rejected=false;try {validate(target);}catch(...){rejected=true;}CHECK(rejected);
+  sqlite3 *db=nullptr;CHECK(sqlite3_open(":memory:",&db)==SQLITE_OK);
+  Goal goal{.source={.identity="folder"},.target={.type=Type::ExCoverage,.percent=8000,.scoreRank=24}};
+  save(db,goal);CHECK(load(db).front().target==goal.target);
+  goal.target.scoreRank=0;goal.target.exPercent=8777;
+  save(db,goal);CHECK(load(db).front().target==goal.target);
+  sqlite3_close(db);
+}
+void testRankAverageTargets() {
+  Target target{.type=Type::AverageEx,.scoreRank=24};
+  CHECK(std::abs(targetPercent(target)-800.0/9)<1e-10);
+  std::vector<Member> members{{.identity="a",.score=1600,.maxScore=1800}};
+  CHECK(evaluate(target,members).achieved); // Exact AAA must not require rounded 88.89%.
+  members[0].score=1599; CHECK(!evaluate(target,members).achieved);
+  target.scoreRank=26; members[0].score=2600; members[0].maxScore=2700;
+  CHECK(evaluate(target,members).achieved);
+  target.scoreRank=27; CHECK(!evaluate(target,members).achieved);
+  members[0].score=2700; CHECK(evaluate(target,members).achieved);
+  target.scoreRank=25;
+  bool rejected=false; try { validate(target); } catch (...) { rejected=true; }
+  CHECK(rejected);
+  target.scoreRank=24; target.type=Type::Lamp;
+  rejected=false; try { validate(target); } catch (...) { rejected=true; }
+  CHECK(rejected);
+  sqlite3 *db=nullptr; CHECK(sqlite3_open(":memory:",&db)==SQLITE_OK);
+  Goal g{.source={.identity="folder"},.target={.type=Type::AverageEx,.scoreRank=24},.setAt=100};
+  save(db,g);
+  const auto originalId=g.id;
+  CHECK(load(db).front().target==g.target);
+  CHECK(queryText(db,"SELECT json_extract(body,'$.version') FROM folder_goals")=="3");
+  g.target.scoreRank=0; g.target.percent=8777; save(db,g);
+  CHECK(load(db).front().target==g.target && g.id==originalId);
+  CHECK(queryText(db,"SELECT json_extract(body,'$.version') FROM folder_goals")=="2");
+  sqlite3_close(db);
+}
 int main() {
+  testExRateCoverage();
+  testRankAverageTargets();
   testIndependentStorage();
   testLegacyStorageWithAttachedTrigger();
   Target lamp{.type=Type::Lamp, .lamp=200, .percent=7500};

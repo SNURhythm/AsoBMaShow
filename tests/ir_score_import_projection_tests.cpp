@@ -1081,19 +1081,23 @@ void testFolderGoalPersistenceAndPlayCredit() {
   assert(scores.LoadFolderGoals(error)->size()==2);
   assert(sqlite3_exec(db,"DROP TRIGGER reject_folder_goal",nullptr,nullptr,nullptr)==SQLITE_OK);
   sqlite3_close(db); sqlite3_close(selector);
-  kombo::Config routine; routine.dailyGoal=20;
+  auto coverage=goal;coverage.id.clear();
+  coverage.target={.type=folder_goals::Type::ExCoverage,.percent=10000,.scoreRank=12};
+  assert(scores.SaveFolderGoal(coverage,error));
+  kombo::Config routine; routine.dailyGoal=30; // Leave room for all three simultaneous goal credits.
   kombo::DayId effectiveDay=0;
   assert(scores.ConfigureKombo(routine,effectiveDay,error));
   result_persistence::PendingChartScoreWrite pending;
   pending.attemptId="123e4567-e89b-42d3-a456-426614174060";
-  pending.replayId=1; pending.createdAt=scoreHistoryTime(std::max(goal.setAt,second.setAt)+1000);
+  pending.replayId=1; pending.createdAt=scoreHistoryTime(std::max({goal.setAt,second.setAt,coverage.setAt})+1000);
   pending.score.chartSha256=chart.SHA256; pending.score.chartMd5=chart.MD5;
   pending.score.chartPath=chart.BmsPath.string(); pending.score.score=100; pending.score.maxScore=200;
   pending.score.clearType=200; pending.score.comboBreak=1; pending.score.provenance=ScoreProvenance::Legacy();
   assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::Inserted);
   const auto achieved=scores.TakeFolderGoalAchievements(pending.attemptId);
-  assert(achieved.size()==2 && achieved[0].id!=achieved[1].id);
-  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==20);
+  assert(achieved.size()==3 && achieved[0].id!=achieved[1].id && achieved[1].id!=achieved[2].id);
+  assert(std::any_of(achieved.begin(),achieved.end(),[&](const auto &g){return g.id==coverage.id;}));
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==30);
   assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
   assert(scores.LoadFolderGoals(error)->front().progress.achieved);
   pending.attemptId.back()='1';
@@ -1110,26 +1114,30 @@ void testFolderGoalPersistenceAndPlayCredit() {
   assert(changed->front().goal.achievedAt>0);
   // Imports can complete a new EX goal without local play credit.
   auto ex=goal; ex.id.clear(); ex.target={.type=folder_goals::Type::AverageEx,.percent=6000};
-  auto higherEx=ex; higherEx.target.percent=7000;
+  auto higherEx=ex; higherEx.target.scoreRank=18; // A: exact 2/3 average EX.
   assert(scores.SaveFolderGoal(ex,error) && scores.SaveFolderGoal(higherEx,error));
   assert(ex.id!=higherEx.id);
   auto imported=remoteScore("folder-import",'f',200,300);
   assert(scores.ReplaceImportedIrScores(kProvider,kOrigin,1,std::span(&imported,1)).status==ImportedIrScoreProjectionStatus::Applied);
   auto importedGoals=scores.LoadFolderGoals(error);
-  assert(importedGoals && importedGoals->size()==4);
-  for(const auto &g:*importedGoals) assert(g.progress.achieved && g.goal.achievedAt>0);
+  assert(importedGoals && importedGoals->size()==5);
+  for(const auto &g:*importedGoals) {
+    assert(g.progress.achieved && g.goal.achievedAt>0);
+    if (g.goal.id==higherEx.id) assert(g.goal.target.scoreRank==18);
+  }
   pending.attemptId.back()='2';pending.score.score=110;
   assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::Inserted);
   assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
   assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::AlreadyPresent);
   assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
-  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==20);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==30);
   // Removing the source keeps all goals without transferring them to another table.
   assert(sqlite3_exec(db,"DELETE FROM difficulty_tables;DELETE FROM difficulty_table_entries",nullptr,nullptr,nullptr)==SQLITE_OK);
   assert(!scores.LoadFolderGoals(error)->front().progress.sourceAvailable);
   sqlite3_close(db);
   assert(scores.RemoveFolderGoal(ex,error));
   assert(scores.RemoveFolderGoal(higherEx,error));
+  assert(scores.RemoveFolderGoal(coverage,error));
   assert(scores.RemoveFolderGoal(second,error));
   scores.SetDatabasePath(root/"other.db"); assert(scores.EnsureSchema());
   assert(scores.LoadFolderGoals(error)->empty());

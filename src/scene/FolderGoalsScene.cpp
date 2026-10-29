@@ -50,11 +50,12 @@ void progress(View *parent,const folder_goals::Goal &goal,const folder_goals::Pr
   value->setThemedColor(app_theme::textSecondary);
   auto *state=text(numbers,i18n::tr(p.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),18);
   state->setVAlign(TextView::MIDDLE);
-  parent->addView(new GoalProgressBar(p.percent,goal.target.percent/100.0,
+  parent->addView(new GoalProgressBar(p.percent,folder_goals::targetPercent(goal.target),
       goal.target.type==folder_goals::Type::Lamp ? goal.target.lamp : -1,p.achieved));
-  text(parent,i18n::format("folder_goals.ui.target_marker",{{"percent",folder_goals::percentText(goal.target.percent/100.0)}}),17)
+  text(parent,i18n::format("folder_goals.ui.target_marker",{{"percent",goal.target.type==folder_goals::Type::ExCoverage
+      ? folder_goals::percentText(folder_goals::targetPercent(goal.target)) : folder_goals::rateTargetText(goal.target)}}),17)
       ->setThemedColor(app_theme::textSecondary);
-  if (goal.target.type==folder_goals::Type::Lamp)
+  if (goal.target.type!=folder_goals::Type::AverageEx)
     text(parent,i18n::format("folder_goals.ui.counts",{{"count",std::to_string(p.qualifying)},{"total",std::to_string(p.available)},
         {"required",std::to_string(p.required)}}),18);
   else text(parent,i18n::format("folder_goals.ui.available",{{"count",std::to_string(p.available)}}),18);
@@ -77,7 +78,7 @@ bool FolderGoalsScene::checkProfile() {
   picker_=newGoal_=sourceOrigin_=false; editorReturn_.reset(); renderedPage_.clear();
   initial_.reset(); goals_.clear(); draft_={}; progress_.reset();
   *navigationState_={};
-  detail_=editing_=confirmRemove_=failed_=achieved_=false; offset_=pickerOffset_=0; rate_="100"; message_.clear();
+  detail_=editing_=confirmRemove_=failed_=achieved_=false; offset_=pickerOffset_=0; rate_=scoreRate_="100"; message_.clear();
   return false;
 }
 void FolderGoalsScene::later(std::function<void()> f) {
@@ -120,7 +121,8 @@ void FolderGoalsScene::choose(folder_goals::Goal goal) {
   editorReturn_.reset();
   if (found!=goals_.end()) draft_=found->goal;
   detail_=true; confirmRemove_=false; message_.clear();
-  rate_=folder_goals::percentText(draft_.target.percent/100.0); rate_.pop_back();
+  rate_=folder_goals::percentText(folder_goals::targetPercent(draft_.target)); rate_.pop_back();
+  scoreRate_=folder_goals::percentText(folder_goals::scoreTargetPercent(draft_.target)); scoreRate_.pop_back();
   auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
   progress_=preview ? std::optional(preview->progress) : std::nullopt;
 }
@@ -139,13 +141,14 @@ void FolderGoalsScene::addGoal() {
   const auto previous=detail_ ? std::optional(draft_) : std::nullopt;
   const auto source=detail_ ? draft_.source : *initial_;
   draft_={.source=source,.longNoteMode=long_note_mode::valueFromId(context.settings.selectedLnMode)};
-  rate_="100"; detail_=editing_=newGoal_=true; confirmRemove_=false; message_.clear();
+  rate_=scoreRate_="100"; detail_=editing_=newGoal_=true; confirmRemove_=false; message_.clear();
   editorReturn_=previous;
   changeScope(draft_.longNoteMode,draft_.target.type);
 }
 void FolderGoalsScene::changeScope(int mode,folder_goals::Type type) {
   if (!newGoal_) return;
   draft_.longNoteMode=std::clamp(mode,1,3); draft_.target.type=type;
+  if (type==folder_goals::Type::Lamp) draft_.target.scoreRank=0;
   auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
   progress_=preview ? std::optional(preview->progress) : std::nullopt;
 }
@@ -162,10 +165,34 @@ void FolderGoalsScene::rememberScroll() {
   navigationState_->folderAchieved=achieved_;
   (achieved_ ? navigationState_->folderAchievedOffset : navigationState_->folderOffset)=offset_;
 }
+void FolderGoalsScene::selectScoreTarget(const std::string &id) {
+  if (draft_.target.type==folder_goals::Type::Lamp) return;
+  const bool coverage=draft_.target.type==folder_goals::Type::ExCoverage;
+  auto &customText=coverage ? scoreRate_ : rate_;
+  auto &customPercent=coverage ? draft_.target.exPercent : draft_.target.percent;
+  if (id=="custom") {
+    const auto value=chart_goals::parseRate(customText);
+    if (value && *value>0) customPercent=*value;
+    draft_.target.scoreRank=0;
+  } else {
+    draft_.target.scoreRank=std::stoi(id);
+    customText=folder_goals::percentText(folder_goals::scoreTargetPercent(draft_.target)); customText.pop_back();
+    customPercent=*chart_goals::parseRate(customText);
+  }
+  auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
+  progress_=preview ? std::optional(preview->progress) : std::nullopt;
+}
 void FolderGoalsScene::saveGoal() {
-  auto value=chart_goals::parseRate(rate_);
-  if (!value || *value==0) { message_=i18n::tr("folder_goals.ui.invalid_percent"); return; }
-  draft_.target.percent=*value;
+  if (draft_.target.type!=folder_goals::Type::AverageEx || draft_.target.scoreRank==0) {
+    auto value=chart_goals::parseRate(rate_);
+    if (!value || *value==0) { message_=i18n::tr("folder_goals.ui.invalid_percent"); return; }
+    draft_.target.percent=*value;
+  }
+  if (draft_.target.type==folder_goals::Type::ExCoverage && draft_.target.scoreRank==0) {
+    auto value=chart_goals::parseRate(scoreRate_);
+    if (!value || *value==0) { message_=i18n::tr("folder_goals.ui.invalid_percent"); return; }
+    draft_.target.exPercent=*value;
+  }
   if (!context.scoreRepository.SaveFolderGoal(draft_,message_)) return;
   editing_=newGoal_=false; editorReturn_.reset(); reload();
 }
@@ -237,11 +264,13 @@ void FolderGoalsScene::build() {
       auto *modes=row(panel);
       for (int mode:{1,2,3}) button(modes,long_note_mode::idFromValue(mode),[this,mode]{later([this,mode]{changeScope(mode,draft_.target.type);});},mode==draft_.longNoteMode)->setFlex(1);
       auto *types=row(panel);
-      for (auto type:{folder_goals::Type::Lamp,folder_goals::Type::AverageEx})
-      button(types,i18n::tr(type==folder_goals::Type::Lamp ? "folder_goals.ui.lamp" : "folder_goals.ui.ex"),
+      for (auto type:{folder_goals::Type::Lamp,folder_goals::Type::AverageEx,folder_goals::Type::ExCoverage})
+      button(types,i18n::tr(type==folder_goals::Type::Lamp ? "folder_goals.ui.lamp"
+          : type==folder_goals::Type::AverageEx ? "folder_goals.ui.ex" : "folder_goals.ui.ex_coverage"),
           [this,type]{later([this,type]{changeScope(draft_.longNoteMode,type);});},type==draft_.target.type)->setFlex(1);
     } else {
-      text(panel,long_note_mode::idFromValue(draft_.longNoteMode)+" · "+i18n::tr(draft_.target.type==folder_goals::Type::Lamp ? "folder_goals.ui.lamp" : "folder_goals.ui.ex"),18)
+      text(panel,long_note_mode::idFromValue(draft_.longNoteMode)+" · "+i18n::tr(draft_.target.type==folder_goals::Type::Lamp ? "folder_goals.ui.lamp"
+          : draft_.target.type==folder_goals::Type::AverageEx ? "folder_goals.ui.ex" : "folder_goals.ui.ex_coverage"),18)
           ->setThemedColor(app_theme::textSecondary);
     }
     progressPanel_=new View();
@@ -260,28 +289,50 @@ void FolderGoalsScene::build() {
         });}},portal_);
         dropdown->setHeight(60)->setFlexShrink(0); dropdown->setTriggerWidth(300); dropdown->refresh(*state); panel->addView(dropdown);
       }
-      text(panel,i18n::tr("folder_goals.ui.target_percent"),18);
-      auto *input=new TextInputBox(app_theme::font,24);
-      input->setHeight(60)->setPadding(Edge::All,12)->setCornerRadius(14)->setFlexShrink(0);
-      input->setThemedColor(app_theme::textPrimary); input->setThemedBackgroundColor(app_theme::insetSurface);
-      input->setEditingText(rate_);
-      input->onTextChanged([this](const auto &value) {
-        rate_=value;
-        auto parsed=chart_goals::parseRate(value);
-        if (!parsed || *parsed==0) return;
-        draft_.target.percent=*parsed;
-        const auto profile=profile_;
-        defer([this,profile] {
-          if (profile!=context.profileManager.activeProfile().id || !editing_ || !progressPanel_ || !progress_) return true;
-          auto preview=*progress_;
-          preview.required=(preview.available*draft_.target.percent+9999)/10000;
-          preview.achieved=preview.available>0 && (draft_.target.type==folder_goals::Type::Lamp
-              ? preview.qualifying>=preview.required : preview.percent>=draft_.target.percent/100.0);
-          progressPanel_->clearChildren(); progress(progressPanel_,draft_,preview); layout();
-          return true;
-        },0,true);
-      });
-      panel->addView(input);
+      if (draft_.target.type!=folder_goals::Type::Lamp) {
+        text(panel,i18n::tr(draft_.target.type==folder_goals::Type::ExCoverage ? "folder_goals.ui.minimum_ex" : "goals.ui.score"),18);
+        DropdownView::State state;
+        state.selectedId=draft_.target.scoreRank>0 ? std::to_string(draft_.target.scoreRank) : "custom";
+        for (int rank:folder_goals::scoreRanks) state.options.push_back({std::to_string(rank),kombo::scoreRankLabel(rank)});
+        state.options.push_back({"custom",i18n::tr("kombo.ui.custom_option")});
+        auto *dropdown=new DropdownView({.onOptionSelected=[this](const std::string &id){
+          later([this,id]{selectScoreTarget(id);});
+        }},portal_);
+        dropdown->setHeight(60)->setFlexShrink(0); dropdown->setTriggerWidth(300); dropdown->refresh(state); panel->addView(dropdown);
+      }
+      const auto addRateInput=[&](bool scoreThreshold) {
+        text(panel,i18n::tr(scoreThreshold ? "kombo.ui.custom_rate"
+            : draft_.target.type==folder_goals::Type::AverageEx ? "folder_goals.ui.target_percent"
+            : "folder_goals.ui.coverage_percent"),18);
+        auto *input=new TextInputBox(app_theme::font,24);
+        input->setHeight(60)->setPadding(Edge::All,12)->setCornerRadius(14)->setFlexShrink(0);
+        input->setThemedColor(app_theme::textPrimary); input->setThemedBackgroundColor(app_theme::insetSurface);
+        input->setEditingText(scoreThreshold ? scoreRate_ : rate_);
+        input->onTextChanged([this,scoreThreshold](const auto &value) {
+          (scoreThreshold ? scoreRate_ : rate_)=value;
+          auto parsed=chart_goals::parseRate(value);
+          if (!parsed || *parsed==0) return;
+          (scoreThreshold ? draft_.target.exPercent : draft_.target.percent)=*parsed;
+          const auto profile=profile_;
+          defer([this,profile,scoreThreshold] {
+            if (profile!=context.profileManager.activeProfile().id || !editing_ || !progressPanel_ || !progress_) return true;
+            if (scoreThreshold) {
+              auto loaded=context.scoreRepository.PreviewFolderGoal(draft_,message_);
+              if (!loaded) return true;
+              progress_=loaded->progress;
+            }
+            auto preview=*progress_;
+            preview.required=(preview.available*draft_.target.percent+9999)/10000;
+            preview.achieved=preview.available>0 && (draft_.target.type!=folder_goals::Type::AverageEx
+                ? preview.qualifying>=preview.required : preview.percent>=folder_goals::targetPercent(draft_.target));
+            progressPanel_->clearChildren(); progress(progressPanel_,draft_,preview); layout();
+            return true;
+          },0,true);
+        });
+        panel->addView(input);
+      };
+      if (draft_.target.type==folder_goals::Type::ExCoverage && draft_.target.scoreRank==0) addRateInput(true);
+      if (draft_.target.type!=folder_goals::Type::AverageEx || draft_.target.scoreRank==0) addRateInput(false);
       auto *actions=row(panel);
       button(actions,i18n::tr("goals.ui.save"),[this]{later([this]{saveGoal();});},true)->setEnabled(progress_ && progress_->sourceAvailable && progress_->available>0);
       button(actions,i18n::tr("goals.ui.cancel"),[this]{back();});

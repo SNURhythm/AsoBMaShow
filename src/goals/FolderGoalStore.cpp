@@ -34,13 +34,15 @@ std::vector<Goal> load(sqlite3 *db) {
     if (sqlite3_column_bytes(q,1)>65536) throw std::runtime_error("Invalid folder goal data size.");
     auto j=nlohmann::json::parse(sqliteColumnString(q,1));
     const auto version=integer(j,"version",1,2147483647);
-    if (version!=1 && version!=2) throw std::runtime_error("These folder goals need a different app version.");
+    if (version!=1 && version!=2 && version!=3) throw std::runtime_error("These folder goals need a different app version.");
     Goal g;
     g.source={static_cast<SourceKind>(integer(j,"kind",0,2)), j.at("identity").get<std::string>(),
         j.at("level").get<std::string>(), j.at("name").get<std::string>()};
     g.longNoteMode=integer(j,"mode",1,3);
-    g.target={static_cast<Type>(integer(j,"type",0,1)), normalizeClearLamp(integer(j,"lamp",0,600)),
+    g.target={static_cast<Type>(integer(j,"type",0,version==3 ? 2 : 1)), normalizeClearLamp(integer(j,"lamp",0,600)),
         static_cast<int>(integer(j,"percent",1,10000))};
+    if (version==3) g.target.scoreRank=integer(j,"scoreRank",0,27);
+    if (g.target.type==Type::ExCoverage) g.target.exPercent=integer(j,"exPercent",1,10000);
     g.revision=integer(j,"revision",1,std::numeric_limits<std::int64_t>::max());
     g.setAt=integer(j,"setAt",0,253402300799999LL);
     g.achievedAt=integer(j,"achievedAt",0,253402300799999LL);
@@ -69,9 +71,11 @@ void save(sqlite3 *db, Goal &g) {
         sqlite3_step(generated)==SQLITE_ROW,db);
     id=sqliteColumnString(generated,0);
   }
-  nlohmann::json j={{"version",2},{"id",id},{"kind",static_cast<int>(g.source.kind)}, {"identity",g.source.identity},
+  nlohmann::json j={{"version",g.target.scoreRank>0 || g.target.type==Type::ExCoverage ? 3 : 2},{"id",id},{"kind",static_cast<int>(g.source.kind)}, {"identity",g.source.identity},
       {"level",g.source.level},{"name",g.source.name},{"mode",g.longNoteMode},{"type",static_cast<int>(g.target.type)},
       {"lamp",g.target.lamp},{"percent",g.target.percent},{"revision",g.revision},{"setAt",g.setAt},{"achievedAt",g.achievedAt}};
+  if (g.target.scoreRank>0 || g.target.type==Type::ExCoverage) j["scoreRank"]=g.target.scoreRank;
+  if (g.target.type==Type::ExCoverage) j["exPercent"]=g.target.exPercent;
   const auto body=j.dump();
   if (body.size()>65536) throw std::runtime_error("Invalid folder goal data size.");
   SqliteStatementHandle q;

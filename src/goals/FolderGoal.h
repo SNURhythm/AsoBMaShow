@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -6,7 +7,8 @@
 
 namespace folder_goals {
 enum class SourceKind { Directory, Table, Level };
-enum class Type { Lamp, AverageEx };
+enum class Type { Lamp, AverageEx, ExCoverage };
+inline constexpr std::array<int,9> scoreRanks{6,9,12,15,18,21,24,26,27};
 struct Source {
   SourceKind kind = SourceKind::Directory;
   std::string identity, level, name;
@@ -15,7 +17,9 @@ struct Source {
 struct Target {
   Type type = Type::Lamp;
   int lamp = 200;
-  int percent = 10000; // Hundredths of one percent.
+  int percent = 10000; // Hundredths of one percent for lamp/custom targets.
+  int scoreRank = 0; // EX targets: numerator over 27; zero uses a custom rate.
+  int exPercent = 10000; // Coverage minimum EX rate, in hundredths of one percent.
   bool operator==(const Target &) const = default;
 };
 struct Goal {
@@ -36,6 +40,8 @@ struct Progress {
   bool achieved = false, sourceAvailable = true;
 };
 struct GoalProgress { Goal goal; Progress progress; };
+double scoreTargetPercent(const Target &);
+double targetPercent(const Target &);
 void validate(const Target &);
 void validate(const Goal &);
 std::string sourceKey(const Source &);

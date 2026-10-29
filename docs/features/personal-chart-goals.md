@@ -219,25 +219,34 @@ has its own line; completed targets are omitted. If several unfinished goals
 share a type, the bubble shows the total unfinished goal count. Open the flag
 to view each target and its progress.
 
-Two goal types are available for each folder and selected LN mode, with multiple
-independent targets allowed for either type:
+Three goal types are available for each folder and selected LN mode, with multiple
+independent targets allowed for each type:
 
 - **Lamp coverage:** a percentage of charts at a chosen lamp or better.
   **100% Failed or better** covers every available chart with an eligible play.
 - **Average EX rate:** the average of each available chart's best EX percentage,
   with equal chart weights. Available unplayed charts count as 0%.
+- **EX rate coverage:** a percentage of charts meeting a minimum EX rate, such
+  as 80% of charts at AAA or above. Available unplayed charts do not qualify.
+  The required chart count rounds up.
 
-Missing charts are excluded from both denominators and shown separately.
+Both EX goal types accept E, D, C, B, A, AA, AAA, MAX−, and MAX, or a custom
+percentage. Rank thresholds use their exact fractions (AAA is 8/9), so rounded
+percentages never change the requirement. Target descriptions and selector
+bubbles retain the chosen rank label. EX rate coverage has separate
+controls for the minimum EX rate and the required percentage of charts.
+
+Missing charts are excluded from the calculations and shown separately.
 Duplicate installations count once. Membership is live, so downloading charts,
 rescanning, or updating a table can change progress. Selector search and filters
 do not change a saved goal's scope. Empty or unavailable folders cannot complete
 a goal. Goals keep their source identity if the table is reimported.
 
 Cards and details show a progress bar, the current percentage, a target marker,
-and available/missing counts. Lamp goals also show the qualifying count and the
+and available/missing counts. Coverage goals also show the qualifying count and the
 number needed. Edit the percentage to preview its target marker; use **Open
 folder** to return to the goal's collection. New targets must exceed current
-progress. The two goal types and LN modes have separate targets.
+progress. The three goal types and LN modes have separate targets.
 
 Eligible imported records contribute to progress. Only a newly completing local
 play grants the result celebration and Kombo goal credit. Imports, membership
