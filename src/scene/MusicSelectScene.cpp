@@ -3747,9 +3747,33 @@ void MusicSelectScene::applyGoalSelection(const ChartMetaRecord &record, int mod
 }
 
 bool MusicSelectScene::restoreGoalDirectory(const MusicSelectBar &directory) {
+  if (!chartSession_) return false;
+  if (directory.kind == skin::MusicSelectBarKind::Folder &&
+      directory.id.value.starts_with("folder-goal:") && repositoryMetadata_) {
+    try {
+      auto content = loadMusicSelectPhysicalDirectory(
+          context.chartRepository, *repositoryMetadata_, directory,
+          scoreCache_, clearRankCache_, context.replayRepository.GetResolvedProfileRoot(),
+          {.modeFilter=context.settings.skinModeFilterName,
+           .difficultyFilter=context.settings.skinDifficultyFilterName,
+           .sortId=context.settings.skinSortId},
+          long_note_mode::valueFromId(context.settings.selectedLnMode));
+      auto restored = directory;
+      restored.children.clear();
+      for (const auto &child : content.children) restored.children.push_back(child.id);
+      restored.childrenLoaded = true;
+      const bool opened = bars_.openTransient(std::move(restored),
+          std::move(content.children), std::move(content.provider));
+      if (opened) syncResolvedFilters();
+      return opened;
+    } catch (const std::exception &failure) {
+      SDL_Log("Cannot restore folder goal: %s", failure.what());
+      return false;
+    }
+  }
   constexpr std::string_view prefix = "personal-goal:";
   if (directory.kind != skin::MusicSelectBarKind::SameFolder ||
-      !directory.id.value.starts_with(prefix) || !chartSession_) return false;
+      !directory.id.value.starts_with(prefix)) return false;
   ChartMetaQuery query;
   query.allowedSha256 = std::vector{directory.id.value.substr(prefix.size())};
   query.rawSongData = true; query.limit = 1;
@@ -4875,19 +4899,23 @@ void MusicSelectScene::openFolderGoals(const folder_goals::Source &source) {
 }
 void MusicSelectScene::applyFolderGoalSelection(const folder_goals::Source &source,int mode) {
   if (!chartSession_ || !repositoryMetadata_) return;
+  const auto previousLongNoteMode = context.settings.selectedLnMode;
   context.settings.selectedLnMode=long_note_mode::idFromValue(mode);
   context.settings.skinModeFilterName="ALL"; context.settings.skinDifficultyFilterName="ALL";
   (void)context.saveSettings();
-  bars_.configure({.modeFilter="ALL",.difficultyFilter="ALL",.sortId=context.settings.skinSortId});
   cancelDirectoryLoad();
+  if (previousLongNoteMode != context.settings.selectedLnMode) {
+    // Discard already loaded table/level rows projected for the previous mode.
+    reloadLibrary(false);
+  } else {
+    bars_.configure({.modeFilter="ALL",.difficultyFilter="ALL",.sortId=context.settings.skinSortId});
+  }
   if (source.kind==folder_goals::SourceKind::Directory) {
     auto path=std::filesystem::path(utf8_to_path_t(source.identity)); chart_storage_identity::ToAbsolutePath(path);
     MusicSelectBar directory{.id={"folder-goal:"+source.identity},.kind=skin::MusicSelectBarKind::Folder,
         .title=source.name,.directoryPath=path,.presentation={.kind=skin::MusicSelectBarKind::Folder,.title=source.name,.exists=true},
         .selectable=true,.sortable=true};
-    auto content=loadMusicSelectPhysicalDirectory(context.chartRepository,*repositoryMetadata_,directory,scoreCache_,clearRankCache_,
-        context.replayRepository.GetResolvedProfileRoot(),{.modeFilter="ALL",.difficultyFilter="ALL",.sortId=context.settings.skinSortId},mode);
-    if (bars_.openTransient(directory,std::move(content.children),std::move(content.provider))) syncResolvedFilters();
+    (void)restoreGoalDirectory(directory);
   } else {
     int tableId=0;
     for(const auto &table:repositoryMetadata_->tables) if(table.info.sourceUrl==source.identity) {tableId=table.info.id;break;}
