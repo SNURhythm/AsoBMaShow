@@ -43,13 +43,13 @@ inline std::string tableOrder(std::string_view hash, int tableId) {
 inline std::string tableFilter(std::string_view hash, int tableId) {
   return tableId == 0 ? "" : " AND " + tableOrder(hash, tableId) + " IS NOT NULL";
 }
-inline std::string recommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false) {
+inline std::string recommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false, bool filterChart = false) {
   return recommendationCandidatesSql(hasGoals) +
       " SELECT sha256,ln_mode,target,score,max_score,remaining FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY sha256 ORDER BY remaining,1.0*remaining/max_score,ln_mode) AS mode_choice "
-      "FROM candidates AS candidate WHERE target=?" + tableFilter("candidate.sha256", tableId) + ") AS ranked WHERE mode_choice=1"
+      "FROM candidates AS candidate WHERE target=?1" + std::string(filterChart ? " AND candidate.sha256=?3" : "") + tableFilter("candidate.sha256", tableId) + ") AS ranked WHERE mode_choice=1"
       " ORDER BY " + (sortTable && tableId ? tableOrder("ranked.sha256", tableId) + ", " : "") +
-      "remaining, 1.0*remaining/max_score, sha256 LIMIT 20 OFFSET ?";
+      "remaining, 1.0*remaining/max_score, sha256 LIMIT 20 OFFSET ?2";
 }
 inline std::string gaugeRecommendationCandidatesSql(bool hasGoals = false) {
   return R"sql(WITH lamp_bests AS (
@@ -70,13 +70,13 @@ inline std::string gaugeRecommendationCandidatesSql(bool hasGoals = false) {
         SELECT 1 FROM score_db.chart_goals goal WHERE goal.sha256=g.chart_sha256 AND goal.ln_mode=g.ln_mode
         AND CASE WHEN json_valid(goal.body) THEN )sql" + clearLampOrderSql("json_extract(goal.body,'$.lamp')") + R"sql( >= )sql" + clearLampOrderSql("g.target") + R"sql( ELSE 0 END))sql" : "") + ")";
 }
-inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false) {
+inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false, bool filterChart = false) {
   return gaugeRecommendationCandidatesSql(hasGoals) +
       " SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap,combo_break FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY chart_sha256 ORDER BY gap,death_notes,ln_mode) AS mode_choice "
-      "FROM candidates AS candidate WHERE target=?" + tableFilter("candidate.chart_sha256", tableId) + ") AS ranked WHERE mode_choice=1"
+      "FROM candidates AS candidate WHERE target=?1" + std::string(filterChart ? " AND candidate.chart_sha256=?3" : "") + tableFilter("candidate.chart_sha256", tableId) + ") AS ranked WHERE mode_choice=1"
       " ORDER BY " + (sortTable && tableId ? tableOrder("ranked.chart_sha256", tableId) + ", " : "") +
-      "gap,death_notes,chart_sha256 LIMIT 20 OFFSET ?";
+      "gap,death_notes,chart_sha256 LIMIT 20 OFFSET ?2";
 }
 
 inline std::string recommendationChartHashesSql() {

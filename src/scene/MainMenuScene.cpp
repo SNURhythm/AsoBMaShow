@@ -5418,8 +5418,9 @@ void MainMenuScene::openChartGoal(const ChartMetaRecord &record) {
       scoreLongNoteModeForClearLamp(record.meta,
           long_note_mode::valueFromId(profileSelections.longNoteMode)));
   const auto profile = context.profileManager.activeProfile().id;
-  defer([this, record, mode, profile] {
-    if (profile == context.profileManager.activeProfile().id) openChartGoals(record, mode);
+  const bool recommendations = !mode && chartGoalRecommendations.contains(record.meta.SHA256);
+  defer([this, record, mode, profile, recommendations] {
+    if (profile == context.profileManager.activeProfile().id) openChartGoals(record, mode, recommendations);
     return true;
   }, 0, true);
 }

@@ -16,6 +16,8 @@ a goal containing both lamp and score targets counts once when both are met.
 A small red dot on a chart's flag indicates available lamp or score
 recommendations when that chart has no configured goal. Both selectors use this
 badge; saving a goal removes it, including when that goal is already achieved.
+Tapping a red-dot flag opens recommendations for that chart. Target groups and
+page counts use the same chart scope; selecting a recommendation opens its editor.
 
 The Personal goals screen offers expandable **Near E** through **Near MAX**
 groups for best scores within 2 percentage points below their next rank. Empty
@@ -84,7 +86,7 @@ backfill gauge evidence.
 - In PLAY, tap the small flag on a chart row in the built-in selector or the flag
   in the custom selector toolbar. The row flag is filled when that chart has a goal.
   It opens the existing goal for the current LN mode, or another configured mode if none exists for the current
-  mode. An empty flag opens a new goal editor. When a selected chart has an
+  mode. An empty flag without a red dot opens a new goal editor. When a selected chart has an
   unfinished goal, a brief animated bubble above its flag shows the lamp
   target with its clear-lamp color and the score target. For charts with
   selectable long notes, the LN, CN and HCN buttons on goal details open or

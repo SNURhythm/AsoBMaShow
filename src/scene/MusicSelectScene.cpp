@@ -3707,6 +3707,8 @@ void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial, bo
     if (auto index = context.scoreRepository.LoadChartGoalIndex(error))
       goalMode = index->modeFor(initial->meta.SHA256, scoreLongNoteModeForClearLamp(
           initial->meta, long_note_mode::valueFromId(context.settings.selectedLnMode)));
+    if (error.empty() && !goalMode)
+      recommendations = recommendations || toolbarGoalRecommendations_.contains(initial->meta.SHA256);
   }
   const auto profile = context.profileManager.activeProfile().id;
   context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,

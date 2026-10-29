@@ -51,7 +51,7 @@ struct ChartGoalsScene {
   chart_goals::Goal draft_;
   chart_goals::ProgressPage page_;
   std::optional<chart_goals::GoalProgress> selected_;
-  std::optional<Record> initial_;
+  std::optional<Record> initial_, recommendationChart_;
   std::optional<int> initialMode_, resolved_;
   std::vector<std::function<bool()>> queued;
   void defer(std::function<bool()> action, int, bool) { queued.push_back(action); }
@@ -81,6 +81,19 @@ int main() {
   noRecommendations.init();
   assert(noRecommendations.overviewTab_ == ChartGoalsScene::OverviewTab::Recommendations);
   assert(noRecommendations.loadedRank == -1);
+  ChartGoalsScene chartRecommendations;
+  chartRecommendations.editing_ = false;
+  chartRecommendations.initial_ = Record{};
+  chartRecommendations.initial_->meta.SHA256 = std::string(64, 'c');
+  chartRecommendations.initialRecommendations_ = true;
+  chartRecommendations.recommendations_[24] = 1;
+  chartRecommendations.init();
+  assert(chartRecommendations.overviewTab_ == ChartGoalsScene::OverviewTab::Recommendations);
+  assert(!chartRecommendations.editing_ && !chartRecommendations.selected_);
+  assert(chartRecommendations.recommendationChart_->meta.SHA256 == std::string(64, 'c'));
+  assert(!chartRecommendations.initial_ && chartRecommendations.loadedRank == 24);
+  chartRecommendations.context.profileManager.profile.id = "two";
+  assert(!chartRecommendations.checkProfile() && !chartRecommendations.recommendationChart_);
   ChartGoalsScene existing;
   chart_goals::Goal saved;
   saved.chart.SHA256 = std::string(64, 'a'); saved.longNoteMode = 2;

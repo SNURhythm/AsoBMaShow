@@ -1173,6 +1173,12 @@ void testChartQueryBehaviorMatrix() {
   assert(session->GoalRecommendationCounts(tables.front().id).at(50) == 2);
   assert(nearest.size() == 2 && nearest[0].sha256 == shaC && nearest[1].sha256 == shaE);
   assert(ordered.size() == 2 && ordered[0].sha256 == shaE && ordered[1].sha256 == shaC);
+  assert(session->GoalRecommendationCounts(0, shaE).at(50) == 1);
+  const auto chartOnly = session->GoalRecommendations(50, 0, 0, false, shaE);
+  assert(chartOnly.size() == 1 && chartOnly[0].sha256 == shaE);
+  assert(session->GoalRecommendations(50, 1, 0, false, shaE).empty());
+  assert(session->GoalRecommendationCounts(0, "missing-chart").empty());
+  assert(session->GoalRecommendations(50, 0, 0, false, "missing-chart").empty());
   {
     auto db = openDatabase(chartPath);
     assert(execute(db.get(), "DELETE FROM difficulty_table_entries WHERE md5='55555555555555555555555555555555'"));

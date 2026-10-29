@@ -93,6 +93,29 @@ int main() {
     CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="closest");
     CHECK(sqlite3_step(query)==SQLITE_DONE);
     query.reset();
+    // A chart below the first global page must still appear in its own recommendations.
+    for (int i=0; i<21; ++i) {
+      const auto hash = "other-" + std::to_string(i);
+      const auto setup = "INSERT INTO chart_meta VALUES('" + hash + "','other',0,0,0);"
+          "INSERT INTO score_db.score_sha256_best_score_cache VALUES('" + hash + "',0,1777,2000);"
+          "INSERT INTO score_db.goal_gauge_best VALUES('" + hash + "',0,400,10,0,-1,100,0);";
+      CHECK(sqlite3_exec(recommendations, setup.c_str(), nullptr,nullptr,nullptr)==SQLITE_OK);
+    }
+    for (const bool gauge : {false, true}) {
+      CHECK(prepareSqliteStatement(recommendations, gauge ? gaugeRecommendationPageSql(0,false,false,true)
+          : recommendationPageSql(0,false,false,true), query)==SQLITE_OK);
+      CHECK(sqlite3_bind_int(query,1,gauge ? 400 : 24)==SQLITE_OK);
+      CHECK(sqlite3_bind_int(query,2,0)==SQLITE_OK);
+      CHECK(sqlite3_bind_text(query,3,gauge ? "closest" : "farther",-1,SQLITE_STATIC)==SQLITE_OK);
+      CHECK(sqlite3_step(query)==SQLITE_ROW);
+      CHECK(sqliteColumnString(query,0)==(gauge ? "closest" : "farther"));
+      CHECK(sqlite3_step(query)==SQLITE_DONE);
+      query.reset();
+    }
+    CHECK(sqlite3_exec(recommendations,
+        "DELETE FROM chart_meta WHERE path='other';"
+        "DELETE FROM score_db.score_sha256_best_score_cache WHERE chart_sha256 LIKE 'other-%';"
+        "DELETE FROM score_db.goal_gauge_best WHERE chart_sha256 LIKE 'other-%';",nullptr,nullptr,nullptr)==SQLITE_OK);
     CHECK(sqlite3_exec(recommendations,
         "INSERT INTO chart_meta VALUES('lamp-only','lamp',0,0,0);"
         "INSERT INTO score_db.goal_combo_best VALUES('lamp-only',0,1);", nullptr,nullptr,nullptr)==SQLITE_OK);

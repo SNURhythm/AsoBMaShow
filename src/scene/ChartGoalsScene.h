@@ -58,7 +58,7 @@ private:
   SceneReturnTarget returnTarget_;
   SelectChart onSelectChart_;
   FolderGoalsScene::SelectFolder onSelectFolder_;
-  std::optional<ChartMetaRecord> initial_, resolved_;
+  std::optional<ChartMetaRecord> initial_, resolved_, recommendationChart_;
   std::optional<int> initialMode_;
   bool initialRecommendations_ = false;
   std::string profileId_, message_, customRate_;

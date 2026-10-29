@@ -213,6 +213,7 @@ bool ChartGoalsScene::checkProfile() {
   if (profileId_ == context.profileManager.activeProfile().id) return true;
   profileId_ = context.profileManager.activeProfile().id;
   initial_.reset(); initialMode_.reset(); resolved_.reset(); selected_.reset();
+  recommendationChart_.reset(); initialRecommendations_ = false;
   draft_ = {}; page_ = {}; offset_ = achievedOffset_ = 0;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
@@ -228,6 +229,10 @@ void ChartGoalsScene::later(std::function<void()> action) {
 }
 void ChartGoalsScene::init() {
   checkProfile();
+  if (initialRecommendations_ && initial_) {
+    recommendationChart_ = std::exchange(initial_, {});
+    initialMode_.reset();
+  }
   if (initial_) {
     auto record = std::exchange(initial_, {});
     showGoal({.chart=record->meta, .longNoteMode=initialMode_.value_or(scoreLongNoteModeForClearLamp(
@@ -257,7 +262,8 @@ void ChartGoalsScene::reload() {
     if (recommendationTable_ && std::ranges::none_of(recommendationTables_, [this](const auto &table) {
           return table.id == recommendationTable_;
         })) recommendationTable_ = 0;
-    for (const auto &[rank, count] : session->GoalRecommendationCounts(recommendationTable_)) {
+    for (const auto &[rank, count] : session->GoalRecommendationCounts(recommendationTable_,
+        recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{})) {
       auto &group = recommendations_[rank];
       group.count = count;
       group.offset = std::clamp(previousOffsets[rank], 0,
@@ -301,7 +307,8 @@ void ChartGoalsScene::loadRecommendations(int rank, int offset) {
   try {
     auto session = context.chartRepository.OpenSession(&context.scoreRepository);
     if (!session) throw std::runtime_error("Chart storage is unavailable.");
-    const auto candidates = session->GoalRecommendations(rank, offset, recommendationTable_, recommendationSortTable_);
+    const auto candidates = session->GoalRecommendations(rank, offset, recommendationTable_, recommendationSortTable_,
+        recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{});
     ChartMetaQuery query;
     query.allowedSha256 = std::vector<std::string>{};
     for (const auto &entry : candidates) query.allowedSha256->push_back(entry.sha256);
@@ -606,6 +613,7 @@ void ChartGoalsScene::build() {
   } else {
     if (overviewTab_ == OverviewTab::Recommendations) {
       label(body, i18n::tr("goals.ui.recommendations"), 24);
+      if (recommendationChart_) goalIdentity(body, recommendationChart_->meta, &*recommendationChart_, 24);
       label(body, i18n::tr("goals.ui.near_help"), 18);
       label(body, i18n::tr("goals.ui.gauge_near_help"), 18);
       std::vector<DropdownView::Option> tables{{"0", i18n::tr("goals.ui.all_tables")}};

@@ -117,7 +117,9 @@ struct ChartMetaQuery { std::optional<std::vector<std::string>> allowedSha256; b
 struct Charts {
   ScoreRepository *active=nullptr;
   struct Session {
-    std::vector<GoalRecommendation> GoalRecommendations(int,int,int,bool) { return {{"active-chart"}}; }
+    std::vector<GoalRecommendation> GoalRecommendations(int,int,int,bool,const std::string &hash = {}) {
+      return hash == "active-chart" ? std::vector<GoalRecommendation>{{"active-chart"}} : std::vector<GoalRecommendation>{{"other-chart"}};
+    }
     void QueryChartMeta(const ChartMetaQuery &, std::vector<ChartMetaRecord> &rows) { rows.push_back({{"active-chart"}}); }
   };
   std::optional<Session> OpenSession(ScoreRepository *scores=nullptr) {
@@ -133,12 +135,14 @@ struct ChartGoalsScene {
   std::map<int,Group> recommendations_;
   int recommendationTable_=0; bool recommendationSortTable_=false;
   std::string message_;
+  std::optional<ChartMetaRecord> recommendationChart_;
   void loadRecommendations(int,int);
 };
 METHOD
 int main() {
   ChartGoalsScene scene;
   scene.context.chartRepository.active=&scene.context.scoreRepository;
+  scene.recommendationChart_ = ChartMetaRecord{{"active-chart"}};
   scene.loadRecommendations(24,0);
   assert(scene.message_.empty());
   assert(scene.recommendations_[24].expanded && scene.recommendations_[24].rows.size()==1);
