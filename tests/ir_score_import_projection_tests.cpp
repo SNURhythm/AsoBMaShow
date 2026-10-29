@@ -936,6 +936,27 @@ void testIndependentChartGoals() {
   assert(scores.LoadChartGoalIndex(error)->allAchieved(lamp.chart.SHA256));
   assert(!scores.SaveChartGoal(lamp, error));
   assert(scores.LoadChartGoalsForChart(score.chart, error)->front().goal.id == score.id);
+  // One play may complete two independent targets in the same chart/LN scope.
+  kombo::Config routine;
+  routine.dailyGoal = 20;
+  kombo::DayId effectiveDay = 0;
+  assert(scores.ConfigureKombo(routine, effectiveDay, error));
+  lamp.id = 0;
+  score.target.scoreNumerator = 27;
+  assert(scores.SaveChartGoal(lamp, error) && scores.SaveChartGoal(score, error));
+  pending.attemptId.back() = '2'; pending.score.clearType = 600; pending.score.score = 200;
+  pending.createdAt = scoreHistoryTime(std::max(lamp.setAtUnixMillis, score.setAtUnixMillis) + 1000);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  achieved = scores.TakeChartGoalAchievements(pending.attemptId);
+  assert(achieved.size() == 2 && achieved[0].id != achieved[1].id);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 20);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 20);
+  pending.attemptId.back() = '3';
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 20);
 }
 
 void testFolderGoalPersistenceAndPlayCredit() {

@@ -1093,7 +1093,8 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
       for (const auto &goal:folderAchievements)
         achievedGoals.push_back("folder:"+folder_goals::key(goal)+":"+std::to_string(goal.setAt)+":"+std::to_string(goal.revision));
       for (const auto &goal : goalAchievements)
-        achievedGoals.push_back(goal.chart.SHA256 + ":" + std::to_string(goal.longNoteMode) + ":" + pending.attemptId);
+        achievedGoals.push_back(goal.chart.SHA256 + ":" + std::to_string(goal.longNoteMode) + ":" +
+            std::to_string(goal.id) + ":" + pending.attemptId);
       // Bound eligibility to history before this attempt, including timestamp
       // ordering when a pending result is recovered after a later play.
       const auto previousClear = score_cache_queries::detail::fullComboClearRankExpr("s", {}, true);
