@@ -103,6 +103,7 @@ private:
   std::optional<std::pair<folder_goals::Source,int>> pendingFolderGoalSelection_;
   std::string pendingFolderGoalProfile_;
   void resumeGoalNavigation();
+  void queueGoalSelection(const ChartMetaRecord &, int mode, const std::string &profile);
   void applyGoalSelection(const ChartMetaRecord &, int mode);
   bool restoreGoalDirectory(const MusicSelectBar &);
   std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;

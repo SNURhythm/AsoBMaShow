@@ -131,6 +131,7 @@ private:
   chart_goals::RecommendationIndex chartGoalRecommendations;
   std::vector<std::string> chartGoalHashes;
   void resumeGoalNavigation();
+  void queueGoalSelection(const ChartMetaRecord &, int mode, const std::string &profile);
   void applyGoalSelection(const ChartMetaRecord &, int mode);
   std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
   std::string pendingGoalProfile_;

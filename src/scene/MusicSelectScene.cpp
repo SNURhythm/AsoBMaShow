@@ -3714,10 +3714,23 @@ void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial, bo
   context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
-        pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
+        queueGoalSelection(record, mode, profile);
       }, goalMode, recommendations,[this,profile](const folder_goals::Source &source,int mode) {
         pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
       }), true);
+}
+
+void MusicSelectScene::queueGoalSelection(const ChartMetaRecord &record, int mode, const std::string &profile) {
+  if (profile != context.profileManager.activeProfile().id) return;
+  // Check before resume reloads the selector, which may restore folders asynchronously.
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex < snapshot.rowCount()) {
+    const auto &selected = snapshot.rowAt(snapshot.selectedIndex).chart;
+    if (selected && !record.meta.SHA256.empty() &&
+        selected->meta.SHA256 == record.meta.SHA256) return;
+  }
+  pendingGoalSelection_ = std::pair{record, mode};
+  pendingGoalProfile_ = profile;
 }
 
 void MusicSelectScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
@@ -4900,7 +4913,7 @@ void MusicSelectScene::openFolderGoals(const folder_goals::Source &source) {
   const auto profile=context.profileManager.activeProfile().id;
   context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,SceneReturnTarget::Retained(this),source,
       [this,profile](const folder_goals::Source &target,int mode){pendingFolderGoalSelection_=std::pair{target,mode};pendingFolderGoalProfile_=profile;},
-      [this,profile](const ChartMetaRecord &record,int mode){pendingGoalSelection_=std::pair{record,mode};pendingGoalProfile_=profile;}),true);
+      [this,profile](const ChartMetaRecord &record,int mode){queueGoalSelection(record,mode,profile);}),true);
 }
 void MusicSelectScene::applyFolderGoalSelection(const folder_goals::Source &source,int mode) {
   if (!chartSession_ || !repositoryMetadata_) return;

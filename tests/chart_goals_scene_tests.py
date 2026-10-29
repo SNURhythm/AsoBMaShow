@@ -26,6 +26,88 @@ class ChartGoalsSceneTests(unittest.TestCase):
                 includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_selecting_current_chart_keeps_selector_context(self):
+        root = Path(__file__).resolve().parents[1]
+        methods, callbacks = [], []
+        for name in ("MainMenuScene", "MusicSelectScene"):
+            source = (root / f"src/scene/{name}.cpp").read_text()
+            signature = f"void {name}::queueGoalSelection("
+            if signature in source:
+                methods.append(extract(source, signature))
+            for entry in ("openChartGoals", "openFolderGoals"):
+                opening = extract(source, f"void {name}::{entry}(")
+                start = opening.index("[this,", opening.index("std::make_unique<"))
+                while "const ChartMetaRecord &record" not in opening[start:opening.index("{", start)]:
+                    start = opening.index("[this,", start + 1)
+                callback = extract(opening[start:], opening[start:opening.index("{", start)])
+                callbacks.append((name, entry, callback))
+        fixture = r'''
+#include <cassert>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+struct ChartMetaRecord { struct { std::string SHA256, BmsPath; } meta; };
+struct Profile { std::string id="profile"; };
+struct Manager { Profile activeProfile() const { return {}; } };
+struct Context { Manager profileManager; };
+struct Base {
+  Context context;
+  std::optional<std::pair<ChartMetaRecord,int>> pendingGoalSelection_;
+  std::string pendingGoalProfile_;
+};
+struct MainMenuScene : Base {
+  enum class Tab { Play, Course }; Tab activeTab_=Tab::Play;
+  std::optional<ChartMetaRecord> selectedChartRecord;
+  std::optional<ChartMetaRecord> selectedRecordSnapshot() const { return selectedChartRecord; }
+  void queueGoalSelection(const ChartMetaRecord &, int, const std::string &);
+  CALLBACKS_MAIN
+};
+struct Row { std::optional<ChartMetaRecord> chart; };
+struct Bars {
+  std::vector<Row> rows; size_t selectedIndex=0;
+  Bars readView() const { return *this; }
+  size_t rowCount() const { return rows.size(); }
+  const Row &rowAt(size_t i) const { return rows.at(i); }
+};
+struct MusicSelectScene : Base {
+  Bars bars_;
+  void queueGoalSelection(const ChartMetaRecord &, int, const std::string &);
+  CALLBACKS_SKIN
+};
+METHODS
+int main() {
+  ChartMetaRecord target{{"hash", "/resolved/chart"}}, selected{{"hash", "/selected/copy"}};
+  TESTS
+}
+'''
+        tests = []
+        for name, entry, callback in callbacks:
+            declaration = f"auto {entry}(const std::string &profile) {{ return {callback}; }}"
+            marker = "CALLBACKS_MAIN" if name == "MainMenuScene" else "CALLBACKS_SKIN"
+            fixture = fixture.replace(marker, declaration + "\n  " + marker)
+            set_selected = "s.selectedChartRecord=selected;" if name == "MainMenuScene" else "s.bars_.rows={Row{selected}};"
+            clear_selected = "s.selectedChartRecord.reset();" if name == "MainMenuScene" else "s.bars_.rows.clear();"
+            tests.append(f'''{{ {name} s; {set_selected}
+  auto select=s.{entry}("profile"); select(target,2);
+  assert(!s.pendingGoalSelection_ && s.pendingGoalProfile_.empty());
+  target.meta.SHA256="different"; select(target,2);
+  assert(s.pendingGoalSelection_ && s.pendingGoalSelection_->second==2);
+  assert(s.pendingGoalProfile_=="profile");
+  target.meta.SHA256="hash"; s.pendingGoalSelection_.reset(); s.pendingGoalProfile_.clear();
+  {clear_selected} select(target,1); assert(s.pendingGoalSelection_);
+  s.pendingGoalSelection_.reset(); s.pendingGoalProfile_.clear();
+  auto stale=s.{entry}("old-profile"); stale(target,1);
+  assert(!s.pendingGoalSelection_ && s.pendingGoalProfile_.empty());
+}}''')
+        fixture = fixture.replace("CALLBACKS_MAIN", "").replace("CALLBACKS_SKIN", "")
+        fixture = fixture.replace("METHODS", "\n".join(methods)).replace("TESTS", "\n".join(tests))
+        with tempfile.TemporaryDirectory(prefix="goals-existing-selection-") as directory:
+            source, binary = Path(directory) / "selection.cpp", Path(directory) / "selection"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment().build([source], binary, source.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_picker_orders_unfinished_first_without_reordering_each_group(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/scene/ChartGoalsScene.cpp").read_text(), "void orderGoalRows(")

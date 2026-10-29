@@ -5429,7 +5429,7 @@ void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::
   context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
-        pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
+        queueGoalSelection(record, mode, profile);
       }, mode, recommendations, [this,profile](const folder_goals::Source &source,int mode) {
         pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
       }, std::shared_ptr<goal_navigation::State>{}, [this,profile] {
@@ -5438,6 +5438,16 @@ void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::
           return true;
         },0,true);
       }),true);
+}
+
+void MainMenuScene::queueGoalSelection(const ChartMetaRecord &record, int mode, const std::string &profile) {
+  if (profile != context.profileManager.activeProfile().id) return;
+  // Check before resume reloads the selector, which may restore folders asynchronously.
+  const auto selected = selectedRecordSnapshot();
+  if (activeTab_ == Tab::Play && selected && !record.meta.SHA256.empty() &&
+      selected->meta.SHA256 == record.meta.SHA256) return;
+  pendingGoalSelection_ = std::pair{record, mode};
+  pendingGoalProfile_ = profile;
 }
 
 void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
@@ -9215,7 +9225,7 @@ void MainMenuScene::openFolderGoals(std::optional<folder_goals::Source> source) 
       [this,profile](const folder_goals::Source &source,int mode) {
         pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
       },[this,profile](const ChartMetaRecord &record,int mode) {
-        pendingGoalSelection_=std::pair{record,mode}; pendingGoalProfile_=profile;
+        queueGoalSelection(record,mode,profile);
       }, std::shared_ptr<goal_navigation::State>{}, [this,profile] {
         defer([this,profile] {
           if (profile==context.profileManager.activeProfile().id) selectTab(Tab::Play);
