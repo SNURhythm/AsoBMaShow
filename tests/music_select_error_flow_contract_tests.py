@@ -419,6 +419,9 @@ int main() {
     def test_folder_goal_opens_eager_children(self):
         self.run_directory_loading_fixture("testFolderGoalOpensEagerChildren")
 
+    def test_folder_goal_reopen_keeps_paged_rows(self):
+        self.run_directory_loading_fixture("testFolderGoalReopenDoesNotDuplicateProvider")
+
     def test_folder_goal_directory_restores_after_return(self):
         self.run_directory_loading_fixture("testFolderGoalDirectoryRestores")
 

@@ -48,14 +48,14 @@ int main() {
   CHECK(sqlite3_exec(db, "UPDATE folder_goals SET body=json_set(body,'$.version',999)", nullptr,nullptr,nullptr)==SQLITE_OK);
   rejected=false; try { (void)load(db); } catch (...) { rejected=true; } CHECK(rejected);
   CHECK(sqlite3_exec(db,"DELETE FROM folder_goals;"
-      "CREATE TABLE chart_meta(path TEXT PRIMARY KEY,sha256 TEXT,md5 TEXT,ln_mode INTEGER,total_long_notes INTEGER,total_backspin_notes INTEGER,total_notes INTEGER);"
+      "CREATE TABLE chart_meta(path TEXT PRIMARY KEY,sha256 TEXT,md5 TEXT,ln_mode INTEGER,total_long_notes INTEGER,total_backspin_notes INTEGER,total_notes INTEGER,source_priority INTEGER,source_archive_size INTEGER);"
       "CREATE INDEX hashes ON chart_meta(sha256); CREATE INDEX md5s ON chart_meta(md5);"
       "CREATE TABLE folder(path TEXT);"
       "CREATE TABLE difficulty_tables(id INTEGER PRIMARY KEY,source_url TEXT);"
       "CREATE TABLE difficulty_table_entries(table_id INTEGER,level TEXT,sha256 TEXT,md5 TEXT);"
       "INSERT INTO difficulty_tables VALUES(1,'https://table');"
       "INSERT INTO difficulty_table_entries VALUES(1,'1','a',''),(1,'1','a',''),(1,'1','missing',''),(1,'1','b','');"
-      "INSERT INTO chart_meta VALUES('/charts/a','a','',0,0,0,100),('/charts/a2','a','',0,0,0,100),('/charts/b','b','',0,1,0,500);"
+      "INSERT INTO chart_meta(path,sha256,md5,ln_mode,total_long_notes,total_backspin_notes,total_notes) VALUES('/charts/a','a','',0,0,0,100),('/charts/a2','a','',0,0,0,100),('/charts/b','b','',0,1,0,500);"
       "CREATE TABLE score_sha256_clear_rank_cache(chart_sha256 TEXT,ln_mode INTEGER,rank INTEGER);"
       "CREATE TABLE score_sha256_best_score_cache(chart_sha256 TEXT,ln_mode INTEGER,score INTEGER,max_score INTEGER);"
       "INSERT INTO score_sha256_clear_rank_cache VALUES('a',0,200),('b',1,300),('b',2,0);"
@@ -74,9 +74,25 @@ int main() {
   CHECK(projector.contains(goal.source,"a") && !projector.contains(goal.source,"missing"));
   goal.source={.kind=SourceKind::Directory,.identity="/charts",.name="Charts"};
   CHECK(projector.project(goal,evidence).available==2);
-  CHECK(sqlite3_exec(db,"INSERT INTO chart_meta VALUES('C:\\charts\\nested\\a.bms','win','',0,0,0,100)",nullptr,nullptr,nullptr)==SQLITE_OK);
+  CHECK(sqlite3_exec(db,"INSERT INTO chart_meta(path,sha256,md5,ln_mode,total_long_notes,total_backspin_notes,total_notes) VALUES('C:\\charts\\nested\\a.bms','win','',0,0,0,100)",nullptr,nullptr,nullptr)==SQLITE_OK);
   goal.source={.kind=SourceKind::Directory,.identity="C:\\charts",.name="Windows charts"};
   CHECK(projector.project(goal,evidence).available==1);
+  CHECK(sqlite3_exec(db,
+      "INSERT INTO difficulty_tables VALUES(2,'https://fallback');"
+      "INSERT INTO difficulty_table_entries VALUES(2,'1','a',''),(2,'1','advertised','match-md5'),(2,'1','advertised','match-md5');"
+      "INSERT INTO chart_meta VALUES('/a/archive','archive','match-md5',0,0,0,100,2,500),"
+      "('/z/direct','resolved','match-md5',0,0,0,100,0,NULL);",nullptr,nullptr,nullptr)==SQLITE_OK);
+  evidence["archive"][0].lamp=200;
+  for (const auto kind : {SourceKind::Table,SourceKind::Level}) {
+    Goal fallback{.source={.kind=kind,.identity="https://fallback",.level=kind==SourceKind::Level ? "1" : ""},
+        .target={.type=Type::Lamp,.lamp=200,.percent=10000}};
+    const auto progress=projector.project(fallback,evidence);
+    CHECK(progress.sourceAvailable && progress.available==2 && progress.missing==0);
+    CHECK(progress.qualifying==1 && !progress.achieved);
+    CHECK(projector.contains(fallback.source,"resolved") && !projector.contains(fallback.source,"archive"));
+    fallback.target={.type=Type::AverageEx,.percent=7000};
+    CHECK(projector.project(fallback,evidence).percent==25);
+  }
   goal.source={.kind=SourceKind::Table,.identity="gone",.name="Gone"};
   CHECK(!projector.project(goal,evidence).sourceAvailable);
   sqlite3_close(db);

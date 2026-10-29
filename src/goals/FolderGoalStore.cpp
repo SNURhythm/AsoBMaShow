@@ -1,6 +1,7 @@
 #include "FolderGoalStore.h"
 #include "../ClearLampOrder.h"
 #include "../repositories/SqliteRAII.h"
+#include "../repositories/ChartSqlExpressions.h"
 #include "../../yoga/lib/nlohmann/json.hpp"
 #include <limits>
 #include <algorithm>
@@ -120,9 +121,8 @@ const Projector::Membership &Projector::members(const Source &source) {
     result.exists=source.kind==SourceKind::Table;
     sql="SELECT COALESCE(NULLIF(cm.sha256,''),NULLIF(e.sha256,''),'md5:'||e.md5),cm.path,"
         "cm.ln_mode,cm.total_long_notes+cm.total_backspin_notes,cm.total_notes "
-        "FROM difficulty_table_entries e LEFT JOIN chart_meta cm ON cm.path=("
-        "SELECT m.path FROM chart_meta m WHERE (e.sha256<>'' AND m.sha256=e.sha256) OR "
-        "(e.sha256='' AND e.md5<>'' AND m.md5=e.md5) ORDER BY m.path LIMIT 1) WHERE e.table_id=?1";
+        "FROM difficulty_table_entries e LEFT JOIN chart_meta cm ON cm.path=" +
+        asobmshow::chart_sql::matchedChartPathSubquery("e") + " WHERE e.table_id=?1";
     if (source.kind==SourceKind::Level) sql+=" AND e.level=?2";
     require(prepareSqliteStatement(charts_,sql,q)==SQLITE_OK && sqlite3_bind_int(q,1,table)==SQLITE_OK,charts_);
     if (source.kind==SourceKind::Level) require(bindSqliteText(q,2,source.level),charts_);

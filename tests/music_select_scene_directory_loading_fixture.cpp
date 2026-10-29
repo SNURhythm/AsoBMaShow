@@ -89,6 +89,7 @@ struct FixtureRepository {
   int autoplayLoads = 0;
   bool emptyAutoplay = false;
   bool failNormal = false;
+  bool pagedPhysical = false;
   std::map<std::string, std::vector<MusicSelectBar>> directoryChildren;
   std::string songTitle = "Loaded song";
   int loadedMode = 0;
@@ -110,6 +111,21 @@ struct FailedRows : MusicSelectRowProvider {
     return {"ALL", "ALL"};
   }
   const std::string &diagnostic() const noexcept { return error; }
+};
+
+struct PagedRows : MusicSelectRowProvider {
+  MusicSelectBar row=song();
+  std::string error;
+  std::shared_ptr<MusicSelectRowProvider> clone() const override { return std::make_shared<PagedRows>(*this); }
+  std::size_t size() const noexcept override { return 1; }
+  const MusicSelectBar &at(std::size_t) const override { return row; }
+  std::optional<std::size_t> indexOf(const MusicSelectBarId &id) const override {
+    return id==row.id ? std::optional<std::size_t>{0} : std::nullopt;
+  }
+  std::pair<std::string,std::string> configure(const std::string &,const std::string &,const std::string &) override {
+    return {"ALL","ALL"};
+  }
+  const std::string &diagnostic() const noexcept override { return error; }
 };
 
 class MusicSelectDirectoryLoader {
@@ -171,6 +187,7 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
   ++repository.normalLoads;
   repository.loadedMode = mode;
   if (repository.failNormal) throw std::runtime_error("retry failed");
+  if (repository.pagedPhysical) return {.provider=std::make_shared<PagedRows>()};
   if (const auto found=repository.directoryChildren.find(directory.id.value);
       found!=repository.directoryChildren.end()) return {.children=found->second};
   auto child=song(); child.title=repository.songTitle;
@@ -520,6 +537,22 @@ void testFolderGoalOpensEagerChildren() {
          "opening a folder goal must install eager child IDs and enter the folder");
 }
 
+void testFolderGoalReopenDoesNotDuplicateProvider() {
+  MusicSelectScene scene;
+  scene.context.chartRepository.pagedPhysical=true;
+  const folder_goals::Source source{.kind=folder_goals::SourceKind::Directory,.identity="/charts",.name="Charts"};
+  scene.applyFolderGoalSelection(source,1);
+  expect(scene.bars_.readView().rowCount()==1, "initial folder goal uses a paged provider");
+  scene.reloadLibrary(true); // Resume restores the open folder before applying Open folder again.
+  scene.applyFolderGoalSelection(source,1);
+  const auto reopened=scene.bars_.readView();
+  expect(reopened.directory==std::vector<MusicSelectBarId>{{"folder-goal:/charts"}} && reopened.rowCount()==1,
+         "reopening a physical goal must keep one directory entry and its provider rows");
+  expect(scene.bars_.close(), "Back closes the reopened goal");
+  expect(scene.bars_.readView().directory.empty() && scene.bars_.readView().rowCount()==2,
+         "Back returns to root instead of leaving an empty ancestor sharing the provider ID");
+}
+
 void testFolderGoalDirectoryRestores() {
   MusicSelectScene scene;
   auto directory=folder("folder-goal:/charts", "Charts"); directory.directoryPath="/charts";
@@ -751,6 +784,7 @@ int main(int argc, char **argv) {
   else if (test == "testFailedPageRecovery") testFailedPageRecovery();
   else if (test == "testPersonalGoalDirectoryRestores") testPersonalGoalDirectoryRestores();
   else if (test == "testFolderGoalOpensEagerChildren") testFolderGoalOpensEagerChildren();
+  else if (test == "testFolderGoalReopenDoesNotDuplicateProvider") testFolderGoalReopenDoesNotDuplicateProvider();
   else if (test == "testFolderGoalDirectoryRestores") testFolderGoalDirectoryRestores();
   else if (test == "testFolderGoalChangesTableMode") testFolderGoalChangesTableMode();
   else if (test == "testSearchOpensAsynchronouslyAndRestores") testSearchOpensAsynchronouslyAndRestores();

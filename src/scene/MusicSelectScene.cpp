@@ -4914,6 +4914,9 @@ void MusicSelectScene::applyFolderGoalSelection(const folder_goals::Source &sour
     bars_.configure({.modeFilter="ALL",.difficultyFilter="ALL",.sortId=context.settings.skinSortId});
   }
   if (source.kind==folder_goals::SourceKind::Directory) {
+    // Open folder is a fresh navigation target, not another copy of an existing
+    // transient directory whose provider is keyed by the same stable ID.
+    while(bars_.close()) {}
     auto path=std::filesystem::path(utf8_to_path_t(source.identity)); chart_storage_identity::ToAbsolutePath(path);
     MusicSelectBar directory{.id={"folder-goal:"+source.identity},.kind=skin::MusicSelectBarKind::Folder,
         .title=source.name,.directoryPath=path,.presentation={.kind=skin::MusicSelectBarKind::Folder,.title=source.name,.exists=true},
