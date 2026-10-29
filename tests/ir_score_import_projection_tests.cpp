@@ -1,6 +1,7 @@
 #include "ir/IrRemoteScoreModels.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
+#include "repositories/ScoreCacheQueries.h"
 #include "sqlite3.h"
 #include "kombo/KomboStore.h"
 #include "goals/ChartGoal.h"
@@ -894,6 +895,50 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
 }
 
+void testLegacyGoalsAfterSelectorAttachesScores() {
+  for (bool editFirst : {false, true}) {
+    const auto root = testRoot(editFirst ? "legacy-goal-edit" : "legacy-goal-create");
+    const auto path = root / "scores.db";
+    ScoreRepository scores(path);
+    assert(scores.EnsureSchema());
+    std::string error;
+    chart_goals::Goal original;
+    original.chart.SHA256 = std::string(64, 'e');
+    original.target.lamp = 400;
+    assert(scores.SaveChartGoal(original, error));
+    const auto originalId = original.id;
+    const auto originalDate = original.setAtUnixMillis;
+    sqlite3 *db = nullptr;
+    assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+    assert(sqlite3_exec(db,
+        "CREATE TABLE legacy_goals(sha256 TEXT NOT NULL,ln_mode INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(sha256,ln_mode));"
+        "INSERT INTO legacy_goals(rowid,sha256,ln_mode,body) SELECT rowid,sha256,ln_mode,body FROM chart_goals;"
+        "DROP TABLE chart_goals; ALTER TABLE legacy_goals RENAME TO chart_goals;",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    sqlite3_close(db);
+    // The live selector installs the score trigger through an attached alias,
+    // after the score repository has already initialized its own connection.
+    sqlite3 *charts = nullptr;
+    assert(sqlite3_open(":memory:", &charts) == SQLITE_OK);
+    assert(!score_cache_queries::prepareScoreQueryDatabase(charts, path));
+    auto added = original; added.id = 0; added.target = {.scoreNumerator=24};
+    auto &first = editFirst ? original : added;
+    const bool saved = scores.SaveChartGoal(first, error);
+    if (!saved) std::cerr << "Legacy goal migration: " << error << '\n';
+    assert(saved);
+    assert(scores.SaveChartGoal(editFirst ? added : original, error));
+    const auto goals = scores.LoadChartGoalsForChart(original.chart, error);
+    assert(goals && goals->size() == 2 && error.empty());
+    assert(original.id == originalId && original.setAtUnixMillis == originalDate);
+    assert(added.id != originalId);
+    original.target.lamp = 500;
+    assert(scores.SaveChartGoal(original, error));
+    assert(scores.LoadChartGoal(original.chart, 0, error, originalId)->goal.target.lamp == 500);
+    assert(scores.LoadChartGoal(added.chart, 0, error, added.id)->goal.target.scoreNumerator == 24);
+    sqlite3_close(charts);
+  }
+}
+
 void testIndependentChartGoals() {
   const auto root = testRoot("multiple-chart-goals");
   ScoreRepository scores(root / "scores.db");
@@ -1034,6 +1079,7 @@ void testFolderGoalPersistenceAndPlayCredit() {
 }
 
 int main() {
+  testLegacyGoalsAfterSelectorAttachesScores();
   testIndependentChartGoals();
   testFolderGoalPersistenceAndPlayCredit();
   testGaugeRecommendationSummaries();
