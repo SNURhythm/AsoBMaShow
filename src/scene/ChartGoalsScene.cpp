@@ -580,6 +580,7 @@ void ChartGoalsScene::build() {
       navigation->addView(makeGoalKindCycleButton(false, [this] { switchGoalKind(); }));
       label(navigation, i18n::tr("goals.ui.scope_chart"), 17)->setThemedColor(app_theme::textSecondary);
       tab(i18n::tr("goals.ui.in_progress"), OverviewTab::Ongoing);
+      tab(i18n::tr("goals.ui.achieved"), OverviewTab::Achieved);
       tab(i18n::tr("goals.ui.recommendations"), OverviewTab::Recommendations);
     }
     navigation->addView(statusNavigation);
@@ -595,7 +596,6 @@ void ChartGoalsScene::build() {
           sub->addView(new GoalLampTabAccent(rank));
       }
     }
-    if (!recommendationChart_) tab(i18n::tr("goals.ui.achieved"), OverviewTab::Achieved);
     for (auto *child : statusNavigation->getChildren())
       if (auto *button = dynamic_cast<Button *>(child))
         if (auto *text = dynamic_cast<TextView *>(button->getContentView())) text->setWrap(true);

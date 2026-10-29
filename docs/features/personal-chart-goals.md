@@ -89,7 +89,7 @@ backfill gauge evidence.
 ## Using goals
 
 Use the cycling button to switch between **Chart goals** and **Folder goals**.
-Chart goals has In progress, Recommended goals, and Achieved tabs; Folder goals
+Chart goals has In progress, Achieved, and Recommended goals tabs; Folder goals
 has In progress and Achieved. Each section remembers its tab, page, and scroll
 position while switching. Wide screens use a vertical sidebar and centered
 content; compact screens put navigation above full-width content. Recommendation
