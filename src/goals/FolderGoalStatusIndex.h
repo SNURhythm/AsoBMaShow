@@ -7,7 +7,11 @@
 #include <utility>
 
 namespace folder_goals {
-struct Status { bool present=false, achieved=false; };
+struct PendingTarget { Target target; double percent=0; };
+struct Status {
+  bool present=false, achieved=false;
+  std::optional<PendingTarget> pendingLamp, pendingEx;
+};
 // Selection is deliberately absent from this key: cursor motion must never
 // scan score summaries or reaggregate large collections.
 class StatusIndex {
@@ -23,6 +27,9 @@ public:
       auto &status=values_[sourceKey(row.goal.source)][row.goal.longNoteMode-1];
       status.achieved=(!status.present || status.achieved) && row.progress.achieved;
       status.present=true;
+      if (!row.progress.achieved) {
+        (row.goal.target.type==Type::Lamp ? status.pendingLamp : status.pendingEx)=PendingTarget{row.goal.target,row.progress.percent};
+      }
     }
     revision_=revision;
     return true;

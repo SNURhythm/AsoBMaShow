@@ -11,12 +11,12 @@
 struct GoalBubblePlacement { int x, y, width, height; };
 inline GoalBubblePlacement placeGoalBubble(int anchorX, int anchorY, int anchorWidth, int anchorHeight,
                                           int viewportWidth, int viewportHeight,
-                                          rendering::UiSafeAreaInsets safe) {
+                                          rendering::UiSafeAreaInsets safe, int preferredWidth = 150) {
   const int left = std::clamp(safe.left + 4, 0, std::max(0, viewportWidth));
   const int right = std::clamp(viewportWidth - safe.right - 4, left, std::max(left, viewportWidth));
   const int top = std::clamp(safe.top + 4, 0, std::max(0, viewportHeight));
   const int bottom = std::clamp(viewportHeight - safe.bottom - 4, top, std::max(top, viewportHeight));
-  const int width = std::min(150, right - left), height = std::min(48, bottom - top);
+  const int width = std::min(preferredWidth, right - left), height = std::min(48, bottom - top);
   const int x = anchorX + (anchorWidth - width) / 2;
   const int above = anchorY - height - 4;
   const int y = above >= top ? above : anchorY + anchorHeight + 4;
@@ -51,13 +51,16 @@ public:
     score_ = new TextView(main_menu_theme::font, 15);
     score_->setName("chartGoalBubbleScore"); score_->setHeight(19)->setFlexShrink(0);
     score_->setAlign(TextView::CENTER); score_->setVAlign(TextView::MIDDLE);
+    score_->setMinimumFontSize(10); score_->setOverflow(TextView::TextOverflow::Hidden);
     score_->setThemedColor(app_theme::textPrimary);
     addView(score_); setVisible(false);
   }
   void setTarget(int rank, const std::string &lamp, const std::string &score) {
     hasTarget_ = !lamp.empty() || !score.empty();
     lamp_->setText(lamp); score_->setText(score);
-    lamp_->setWidth(std::min(126, lamp_->measureTextWidth(lamp) + 2));
+    preferredWidth_ = std::clamp(std::max(lamp_->measureTextWidth(lamp) + 26,
+                                        score_->measureTextWidth(score) + 10), 150, 280);
+    lamp_->setWidth(std::min(preferredWidth_ - 24, lamp_->measureTextWidth(lamp) + 2));
     lampRow_->setVisible(!lamp.empty()); lampRow_->setDisplay(lamp.empty() ? YGDisplayNone : YGDisplayFlex);
     score_->setVisible(!score.empty()); score_->setDisplay(score.empty() ? YGDisplayNone : YGDisplayFlex);
     const bool colored = !lamp.empty() && hasClearLampColor(rank);
@@ -68,7 +71,7 @@ public:
   void placeFor(const View &anchor, const View &container, int viewportWidth, int viewportHeight,
                 bool rootCoordinates = false) {
     const auto placement = placeGoalBubble(anchor.getX(), anchor.getY(), anchor.getWidth(), anchor.getHeight(),
-                                           viewportWidth, viewportHeight, rendering::uiSafeAreaInsets());
+                                           viewportWidth, viewportHeight, rendering::uiSafeAreaInsets(), preferredWidth_);
     if (placement.width != placedWidth_) { placedWidth_ = placement.width; setWidth(placement.width); }
     if (placement.height != placedHeight_) { placedHeight_ = placement.height; setHeight(placement.height); }
     setPositionNoLayout(placement.x - (rootCoordinates ? 0 : container.getX()),
@@ -91,6 +94,7 @@ private:
   TextView *lamp_ = nullptr, *score_ = nullptr;
   bool hasTarget_ = false;
   int placedWidth_ = -1, placedHeight_ = -1;
+  int preferredWidth_ = 150;
   std::uint64_t startedAt_ = 0;
 };
 

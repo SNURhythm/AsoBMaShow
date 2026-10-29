@@ -73,6 +73,7 @@
 #include "KomboScene.h"
 #include "ChartGoalsScene.h"
 #include "FolderGoalsScene.h"
+#include "../goals/FolderGoalPresentation.h"
 #include "../repositories/ChartStorageIdentity.h"
 #include "../goals/GoalTargetPresentation.h"
 #include "MusicSelectScene.h"
@@ -134,9 +135,10 @@
 #include <sstream>
 namespace {
 // Paint the selected row's bubble outside the recycler clip, beneath modals.
-class SelectedChartGoalOverlay final : public View {
+template<class Row>
+class SelectedGoalOverlay final : public View {
 public:
-  explicit SelectedChartGoalOverlay(std::function<ChartListItemView *()> selected)
+  explicit SelectedGoalOverlay(std::function<Row *()> selected)
       : selected_(std::move(selected)) {
     setPositionType(YGPositionTypeAbsolute);
     for (auto edge : {Edge::Left, Edge::Top, Edge::Right, Edge::Bottom}) setPosition(edge, 0);
@@ -147,7 +149,7 @@ protected:
     if (auto *row = selected_()) row->renderGoalBubble(context);
   }
 private:
-  std::function<ChartListItemView *()> selected_;
+  std::function<Row *()> selected_;
 };
 
 using modal_view::makeModalButton;
@@ -1670,7 +1672,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   static constexpr int kFolderListItemHeight = 50;
   folderRecyclerView->onCreateView = [](const LibraryFolderItem &item) {
     return new LibraryFolderItemView(0, 0, kLibraryControlWidth,
-                                     kFolderListItemHeight);
+                                     kFolderListItemHeight, true);
   };
   folderRecyclerView->itemHeight = kFolderListItemHeight;
   folderRecyclerView->onBind = [this](View *view, const LibraryFolderItem &item,
@@ -1709,15 +1711,23 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }
       const bool supportsGoal=!item.sectionHeader && (item.type==LibraryFolderItem::Type::DifficultyTable ||
           item.type==LibraryFolderItem::Type::DifficultyLevel);
-      folderView->setGoalAction(supportsGoal ? std::function<void()>([this,item] {
-        if (!chartSession) return;
-        for (const auto &table:chartSession->SelectDifficultyTables()) if (table.id==item.tableId) {
-          folder_goals::Source source{.kind=item.type==LibraryFolderItem::Type::DifficultyTable ? folder_goals::SourceKind::Table : folder_goals::SourceKind::Level,
+      std::optional<folder_goals::Source> goalSource;
+      if (supportsGoal) {
+        for (const auto &table : folderMetadataCache.tables) if (table.id == item.tableId) {
+          goalSource = folder_goals::Source{
+              .kind=item.type==LibraryFolderItem::Type::DifficultyTable ? folder_goals::SourceKind::Table : folder_goals::SourceKind::Level,
               .identity=table.sourceUrl,.level=item.tableLevel,.name=item.label};
-          const auto profile=this->context.profileManager.activeProfile().id;
-          defer([this,source,profile] { if (profile==this->context.profileManager.activeProfile().id) openFolderGoals(source); return true; },0,true);
           break;
         }
+      }
+      const auto goalStatus = goalSource ? folderGoalStatusIndex.status(*goalSource,
+          long_note_mode::valueFromId(this->context.settings.selectedLnMode)) : folder_goals::Status{};
+      folderView->setGoalState(goalStatus.present, goalStatus.achieved);
+      const auto goalLabels = folder_goals::bubbleLabels(goalStatus);
+      folderView->setGoalTarget(goalLabels.lampRank, goalLabels.lamp, goalLabels.score);
+      folderView->setGoalAction(goalSource ? std::function<void()>([this,source=*goalSource] {
+          const auto profile=this->context.profileManager.activeProfile().id;
+          defer([this,source,profile] { if (profile==this->context.profileManager.activeProfile().id) openFolderGoals(source); return true; },0,true);
       }) : std::function<void()>{});
       if (item.sectionHeader) label = i18n::tr("menu.selector.difficulty_tables.label");
       folderView->setItem(label, item.depth, item.count, isSelected,
@@ -2105,7 +2115,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   });
   libraryActions->addView(addFolderButton);
   TextView *folderGoalText=nullptr;
-  auto *folderGoalButton=makeSelectorButton(i18n::message("folder_goals.title"),18,&folderGoalText,0xf024);
+  auto *folderGoalButton=makeSelectorButton(i18n::message("folder_goals.ui.title"),18,&folderGoalText,0xf024);
   styleMenuButton(folderGoalButton,folderGoalText);
   folderGoalButton->setOnClickListener([this] {
     std::optional<folder_goals::Source> source;
@@ -2612,9 +2622,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   buildFindBmsModal();
   buildUnzipProgressModal();
-  rootLayout->addView(new SelectedChartGoalOverlay([this]() -> ChartListItemView * {
+  rootLayout->addView(new SelectedGoalOverlay<ChartListItemView>([this]() -> ChartListItemView * {
     return activeTab_ == Tab::Play && !pendingTab_ && recyclerView && recyclerView->getVisible()
         ? dynamic_cast<ChartListItemView *>(recyclerView->getViewByIndex(recyclerView->selectedIndex)) : nullptr;
+  }));
+  rootLayout->addView(new SelectedGoalOverlay<LibraryFolderItemView>([this]() -> LibraryFolderItemView * {
+    return activeTab_ == Tab::Play && !pendingTab_ && folderRecyclerView && folderRecyclerView->getVisible()
+        ? dynamic_cast<LibraryFolderItemView *>(folderRecyclerView->getViewByIndex(folderRecyclerView->selectedIndex)) : nullptr;
   }));
   rootLayout->addView(overlayPortal);
   reloadProfileSelectionsFromSettings();
@@ -2929,6 +2943,11 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     folderMetadataCache.valid = true;
   }
   std::string goalError;
+  if (!folderGoalStatusIndex.refresh(context.profileManager.activeProfile().id,
+          context.scoreRepository.GetRevision(), currentLibraryRevision,
+          [this, &goalError] { return context.scoreRepository.LoadFolderGoals(goalError); })) {
+    SDL_Log("Unable to load folder goal status: %s", goalError.c_str());
+  }
   const auto goals = context.scoreRepository.LoadChartGoalIndex(goalError);
   chartGoalIndex = goals.value_or(chart_goals::Index{});
   chartGoalHashes = chartGoalIndex.activeHashes();

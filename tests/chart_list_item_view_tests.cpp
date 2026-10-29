@@ -42,7 +42,8 @@ void require(bool condition, const char *message) {
   }
 }
 
-bool sameColor(const Color &actual, const Color &expected) {
+template<class T>
+bool sameColor(const T &actual, const Color &expected) {
   return actual.r == expected.r && actual.g == expected.g &&
          actual.b == expected.b && actual.a == expected.a;
 }
@@ -138,6 +139,51 @@ void testFolderBindingOnlyMaterializesVisibleLabel() {
     require(displayedLabels == 1, "recycling root, leaf and section rows binds exactly one current label");
   }
 }
+
+void testFolderGoalFlagStates() {
+  LibraryFolderItemView row(0, 0, 350, 50);
+  row.setGoalAction([] {});
+  auto *button = dynamic_cast<Button *>(row.findViewByName("folderGoalButton"));
+  auto *flag = dynamic_cast<TextView *>(button->getContentView()->findViewByName("folderGoalFlag"));
+  auto *outline = dynamic_cast<TextView *>(button->getContentView()->findViewByName("folderGoalOutline"));
+  require(flag && outline, "folder goals have filled and outline flags");
+  auto *bubble = row.findViewByName("chartGoalBubble");
+  auto *lamp = dynamic_cast<TextView *>(row.findViewByName("chartGoalBubbleLamp"));
+  auto *score = dynamic_cast<TextView *>(row.findViewByName("chartGoalBubbleScore"));
+  for (auto theme : {ui_theme::ThemeMode::Dark, ui_theme::ThemeMode::Light}) {
+    ui_theme::setActiveMode(theme);
+    row.propagateThemeChange();
+    for (bool selected : {false, true}) {
+      row.setItem("Goal folder", 1, 4, selected, kNoClearTypeRank, false, false, false);
+      row.setGoalState(true);
+      row.setGoalTarget(400, "HARD 60%/80%", "Avg EX 72.5%/85%");
+      require(bubble->getVisible() == selected && lamp->getText() == "HARD 60%/80%" &&
+                  score->getText() == "Avg EX 72.5%/85%", "selected unfinished folder goals show current and target percentages");
+      require(button->isSelected() && flag->getVisible() && !outline->getVisible() &&
+                  sameColor(flag->currentColor(), selected ? main_menu_theme::selectedAccent() : main_menu_theme::accent()),
+              "active folder flags follow chart goal colors in both themes and selection states");
+      row.setGoalState(true, true);
+      require(!bubble->getVisible(), "achieved folder goals hide their progress bubble");
+      require(sameColor(flag->currentColor(), app_theme::lime()), "achieved folder flags use chart goal lime");
+      row.setGoalState(false);
+      require(!bubble->getVisible(), "removing a folder goal hides its progress bubble");
+      require(!button->isSelected() && !flag->getVisible() && outline->getVisible() &&
+                  sameColor(outline->currentColor(), selected ? main_menu_theme::onSelected() : main_menu_theme::secondary()),
+              "removing a folder goal restores the neutral outline on a recycled row");
+    }
+    row.setGoalState(true);
+    row.onUnselected();
+    require(!bubble->getVisible(), "unselecting hides the folder progress bubble");
+    require(sameColor(flag->currentColor(), main_menu_theme::accent()), "unselecting refreshes the folder flag color");
+    row.onSelected();
+    require(bubble->getVisible(), "selecting restores the folder progress bubble");
+    require(sameColor(flag->currentColor(), main_menu_theme::selectedAccent()), "selecting refreshes the folder flag color");
+    row.setGoalTarget(50, "LIGHT ASSIST EASY 99.99%/100.00%", "Avg EX 72.50%/85.00%");
+    row.applyYogaLayout();
+    require(bubble->getWidth() > 150 && bubble->getWidth() <= 280,
+            "folder progress bubbles widen for long lamp names and precise percentages");
+  }
+}
 } // namespace
 
 int main() {
@@ -147,9 +193,10 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart list row");
 
+  for (int bubbleWidth : {150, 280})
   for (const auto [x, y] : {std::pair{0, 0}, std::pair{310, 0}, std::pair{0, 190}, std::pair{310, 190}}) {
     const auto p = placeGoalBubble(x, y, 36, 48, 320, 200,
-                                   {.top=12, .right=14, .bottom=10, .left=16});
+                                   {.top=12, .right=14, .bottom=10, .left=16}, bubbleWidth);
     require(p.x >= 20 && p.y >= 16 && p.x + p.width <= 302 && p.y + p.height <= 186,
             "goal bubble stays inside every safe-area edge");
   }
@@ -157,6 +204,7 @@ int main() {
   require(aboveFlag.x + aboveFlag.width / 2 == 180 && aboveFlag.y + aboveFlag.height == 96,
           "goal bubble is centered above the flag with a four-pixel gap");
   testFolderBindingOnlyMaterializesVisibleLabel();
+  testFolderGoalFlagStates();
   testGoalLampAccentDrawsAfterParentLayoutAndScroll();
   testFolderGoalProgressGeometry();
 

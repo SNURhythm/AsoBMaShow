@@ -173,6 +173,12 @@ have flags; **Folder goals** also opens the current physical folder when browsin
 one. In the custom selector, the toolbar flag supports folders, tables and levels.
 **Personal goals → Folder goals** lists all saved folder goals.
 
+Folder flags follow chart-goal colors: neutral when unset, accent while active,
+and lime when all goals for the selected LN mode are achieved. Selecting an
+unfinished goal shows a bubble with current/target percentages, such as
+**HARD 60.00%/80.00%** and **Avg EX 72.50%/85.00%**. Each unfinished goal type
+has its own line; completed targets are omitted.
+
 Two independent targets are available for each folder and selected LN mode:
 
 - **Lamp coverage:** a percentage of charts at a chosen lamp or better.

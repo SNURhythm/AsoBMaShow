@@ -476,7 +476,7 @@ void ChartGoalsScene::build() {
       }); },
           overviewTab_ == value ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
     };
-    action(navigation, i18n::tr("folder_goals.title"), [this] {
+    action(navigation, i18n::tr("folder_goals.ui.title"), [this] {
       const auto profile=profileId_;
       defer([this,profile] {
         if (profile!=context.profileManager.activeProfile().id) return true;

@@ -17,6 +17,7 @@
 #include "../PlatformDocumentHandoff.h"
 #include "../replay/ReplayFileActionSelection.h"
 #include "../repositories/ScoreRepository.h"
+#include "../goals/FolderGoalStatusIndex.h"
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
@@ -387,6 +388,7 @@ private:
 
   LibraryFolderItem activeFolder;
   LibraryFolderMetadataCache folderMetadataCache;
+  folder_goals::StatusIndex folderGoalStatusIndex;
   ScoreClearRankCache scoreClearRanks;
   ScoreBestCache scoreBestScores;
   main_menu_library::RandomAvailabilityCache randomAvailabilityCache;

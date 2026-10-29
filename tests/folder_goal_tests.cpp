@@ -93,5 +93,25 @@ int main() {
   CHECK(loads==1 && index.status(goal.source,goal.longNoteMode).achieved);
   CHECK(index.refresh("profile",2,1,loader) && loads==2);
   CHECK(index.refresh("other-profile",2,1,loader) && loads==3);
+  auto lampGoal=goal;
+  lampGoal.target={.type=Type::Lamp,.lamp=400,.percent=8000};
+  auto exGoal=goal;
+  exGoal.target={.type=Type::AverageEx,.percent=8500};
+  CHECK(index.refresh("other-profile",3,1,[&]() -> std::optional<std::vector<GoalProgress>> {
+    return std::vector<GoalProgress>{{lampGoal,{.percent=60}},{exGoal,{.percent=72.5}}};
+  }));
+  auto status=index.status(goal.source,goal.longNoteMode);
+  CHECK(status.present && !status.achieved && status.pendingLamp && status.pendingEx);
+  CHECK(status.pendingLamp->percent==60 && status.pendingLamp->target.percent==8000);
+  CHECK(status.pendingEx->percent==72.5 && status.pendingEx->target.percent==8500);
+  CHECK(!index.status(goal.source,2).present);
+  CHECK(index.refresh("other-profile",4,1,[&]() -> std::optional<std::vector<GoalProgress>> {
+    return std::vector<GoalProgress>{{lampGoal,{.percent=100,.achieved=true}},{exGoal,{.percent=80}}};
+  }));
+  status=index.status(goal.source,goal.longNoteMode);
+  CHECK(status.present && !status.achieved && !status.pendingLamp && status.pendingEx);
+  CHECK(status.pendingEx->percent==80);
+  CHECK(index.refresh("other-profile",5,1,[]() -> std::optional<std::vector<GoalProgress>> { return {}; })==false);
+  CHECK(!index.status(goal.source,goal.longNoteMode).present);
   std::cout << "folder goal tests passed\n";
 }

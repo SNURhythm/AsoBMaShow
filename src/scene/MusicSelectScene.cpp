@@ -12,6 +12,7 @@
 #include "FolderGoalsScene.h"
 #include "../repositories/ChartStorageIdentity.h"
 #include "../goals/GoalTargetPresentation.h"
+#include "../goals/FolderGoalPresentation.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
 #include "MusicSelectRecords.h"
@@ -4073,7 +4074,8 @@ void MusicSelectScene::refreshToolbarGoal() {
     toolbarFolderGoals_.refresh(context.profileManager.activeProfile().id,context.scoreRepository.GetRevision(),libraryRevision_,
         [this,&error]{return context.scoreRepository.LoadFolderGoals(error);});
     const auto status=toolbarFolderGoals_.status(*source,long_note_mode::valueFromId(context.settings.selectedLnMode));
-    toolbar_->setGoalState(status.present,status.achieved,-1,{},{});
+    const auto labels=folder_goals::bubbleLabels(status);
+    toolbar_->setGoalState(status.present,status.achieved,labels.lampRank,labels.lamp,labels.score);
     return;
   }
 

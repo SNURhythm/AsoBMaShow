@@ -37,7 +37,7 @@ View *card(View *parent) {
 }
 void progress(View *parent,const folder_goals::Goal &goal,const folder_goals::Progress &p) {
   text(parent,folder_goals::targetText(goal),21);
-  if (!p.sourceAvailable) { text(parent,i18n::tr("folder_goals.unavailable")); return; }
+  if (!p.sourceAvailable) { text(parent,i18n::tr("folder_goals.ui.unavailable")); return; }
   auto *numbers=row(parent);
   auto *value=text(numbers,folder_goals::percentText(p.percent),36); value->setFlex(1)->setMinWidth(0);
   value->setThemedColor(p.achieved ? app_theme::lime : app_theme::textPrimary);
@@ -45,15 +45,15 @@ void progress(View *parent,const folder_goals::Goal &goal,const folder_goals::Pr
   state->setVAlign(TextView::MIDDLE);
   parent->addView(new GoalProgressBar(p.percent,goal.target.percent/100.0,
       goal.target.type==folder_goals::Type::Lamp ? goal.target.lamp : -1,p.achieved));
-  text(parent,i18n::format("folder_goals.target_marker",{{"percent",folder_goals::percentText(goal.target.percent/100.0)}}),17)
+  text(parent,i18n::format("folder_goals.ui.target_marker",{{"percent",folder_goals::percentText(goal.target.percent/100.0)}}),17)
       ->setThemedColor(app_theme::textSecondary);
   if (goal.target.type==folder_goals::Type::Lamp)
-    text(parent,i18n::format("folder_goals.counts",{{"count",std::to_string(p.qualifying)},{"total",std::to_string(p.available)},
+    text(parent,i18n::format("folder_goals.ui.counts",{{"count",std::to_string(p.qualifying)},{"total",std::to_string(p.available)},
         {"required",std::to_string(p.required)}}),18);
-  else text(parent,i18n::format("folder_goals.available",{{"count",std::to_string(p.available)}}),18);
-  if (p.missing) text(parent,i18n::format("folder_goals.missing",{{"count",std::to_string(p.missing)}}),17)->setThemedColor(app_theme::textSecondary);
-  if (p.unknownScore) text(parent,i18n::format("folder_goals.unknown",{{"count",std::to_string(p.unknownScore)}}),17);
-  if (!p.available) text(parent,i18n::tr("folder_goals.empty_source"),18);
+  else text(parent,i18n::format("folder_goals.ui.available",{{"count",std::to_string(p.available)}}),18);
+  if (p.missing) text(parent,i18n::format("folder_goals.ui.missing",{{"count",std::to_string(p.missing)}}),17)->setThemedColor(app_theme::textSecondary);
+  if (p.unknownScore) text(parent,i18n::format("folder_goals.ui.unknown",{{"count",std::to_string(p.unknownScore)}}),17);
+  if (!p.available) text(parent,i18n::tr("folder_goals.ui.empty_source"),18);
 }
 }
 FolderGoalsScene::FolderGoalsScene(ApplicationContext &c,SceneReturnTarget target,
@@ -101,7 +101,7 @@ void FolderGoalsScene::choose(folder_goals::Source source,int mode,folder_goals:
 }
 void FolderGoalsScene::saveGoal() {
   auto value=chart_goals::parseRate(rate_);
-  if (!value || *value==0) { message_=i18n::tr("folder_goals.invalid_percent"); return; }
+  if (!value || *value==0) { message_=i18n::tr("folder_goals.ui.invalid_percent"); return; }
   draft_.target.percent=*value;
   if (!context.scoreRepository.SaveFolderGoal(draft_,message_)) return;
   editing_=false; reload();
@@ -132,17 +132,17 @@ void FolderGoalsScene::build() {
   YGNodeStyleSetMaxWidth(body->getNode(),960); outer->addView(body); scroll_->setContentView(outer);
   portal_=new OverlayPortal(0,0,rendering::window_width,rendering::window_height);
   portal_->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left,0)->setPosition(Edge::Top,0)->setZIndex(900);
-  text(body,i18n::tr("folder_goals.title"),30);
+  text(body,i18n::tr("folder_goals.ui.title"),30);
   if (failed_) button(body,i18n::tr("kombo.ui.retry"),[this]{later([this]{reload();});});
   else if (detail_) {
     auto *panel=card(body);
     text(panel,draft_.source.name.empty() ? draft_.source.identity : draft_.source.name,27);
-    text(panel,i18n::tr("folder_goals.scope_help"),17)->setThemedColor(app_theme::textSecondary);
+    text(panel,i18n::tr("folder_goals.ui.scope_help"),17)->setThemedColor(app_theme::textSecondary);
     auto *modes=row(panel);
     for (int mode:{1,2,3}) button(modes,long_note_mode::idFromValue(mode),[this,mode]{later([this,mode]{choose(draft_.source,mode,draft_.target.type);});},mode==draft_.longNoteMode)->setFlex(1);
     auto *types=row(panel);
     for (auto type:{folder_goals::Type::Lamp,folder_goals::Type::AverageEx})
-      button(types,i18n::tr(type==folder_goals::Type::Lamp ? "folder_goals.lamp" : "folder_goals.ex"),
+      button(types,i18n::tr(type==folder_goals::Type::Lamp ? "folder_goals.ui.lamp" : "folder_goals.ui.ex"),
           [this,type]{later([this,type]{choose(draft_.source,draft_.longNoteMode,type);});},type==draft_.target.type)->setFlex(1);
     progressPanel_=new View();
     progressPanel_->setFlexDirection(FlexDirection::Column)->setGap(12)->setFlexShrink(0);
@@ -150,7 +150,7 @@ void FolderGoalsScene::build() {
     if (progress_) progress(progressPanel_,draft_,*progress_);
     if (editing_) {
       if (draft_.target.type==folder_goals::Type::Lamp) {
-        text(panel,i18n::tr("folder_goals.minimum_lamp"),18);
+        text(panel,i18n::tr("folder_goals.ui.minimum_lamp"),18);
         auto state=std::make_shared<DropdownView::State>(); state->selectedId=std::to_string(draft_.target.lamp); state->maxVisibleItems=7;
         for (int lamp:{0,50,100,200,300,400,500,600}) state->options.push_back({.id=std::to_string(lamp),.label=kombo::lampLabel(lamp),.leadingColor=clearLampColorForRank(lamp)});
         auto *dropdown=new DropdownView({.onOptionSelected=[this](const std::string &id){later([this,id]{
@@ -160,7 +160,7 @@ void FolderGoalsScene::build() {
         });}},portal_);
         dropdown->setHeight(60)->setFlexShrink(0); dropdown->setTriggerWidth(300); dropdown->refresh(*state); panel->addView(dropdown);
       }
-      text(panel,i18n::tr("folder_goals.target_percent"),18);
+      text(panel,i18n::tr("folder_goals.ui.target_percent"),18);
       auto *input=new TextInputBox(app_theme::font,24);
       input->setHeight(60)->setPadding(Edge::All,12)->setCornerRadius(14)->setFlexShrink(0);
       input->setThemedColor(app_theme::textPrimary); input->setThemedBackgroundColor(app_theme::insetSurface);
@@ -186,7 +186,7 @@ void FolderGoalsScene::build() {
     } else {
       text(panel,i18n::format("goals.ui.set_date",{{"date",chart_goals::localDateTime(draft_.setAt)}}),17);
       if (draft_.achievedAt) text(panel,i18n::format("goals.ui.achieved_date",{{"date",chart_goals::localDateTime(draft_.achievedAt)}}),17);
-      button(panel,i18n::tr("folder_goals.open"),[this]{navigate();},true)->setEnabled(onSelect_ && progress_ && progress_->sourceAvailable);
+      button(panel,i18n::tr("folder_goals.ui.open"),[this]{navigate();},true)->setEnabled(onSelect_ && progress_ && progress_->sourceAvailable);
       button(panel,i18n::tr("goals.ui.edit"),[this]{later([this]{editing_=true;});});
       if (confirmRemove_) {
         text(panel,i18n::tr("goals.ui.remove_confirm"));
@@ -194,22 +194,22 @@ void FolderGoalsScene::build() {
         button(panel,i18n::tr("goals.ui.cancel"),[this]{later([this]{confirmRemove_=false;});});
       } else button(panel,i18n::tr("goals.ui.remove"),[this]{later([this]{confirmRemove_=true;});});
     }
-    text(body,i18n::tr("folder_goals.live_help"),17)->setThemedColor(app_theme::textSecondary);
+    text(body,i18n::tr("folder_goals.ui.live_help"),17)->setThemedColor(app_theme::textSecondary);
   } else {
-    text(body,i18n::tr("folder_goals.intro"),19);
+    text(body,i18n::tr("folder_goals.ui.intro"),19);
     auto *tabs=row(body);
     for (bool achieved:{false,true}) button(tabs,i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),
         [this,achieved]{later([this,achieved]{achieved_=achieved;offset_=0;});},achieved_==achieved)->setFlex(1);
     std::vector<const folder_goals::GoalProgress *> entries;
     for (const auto &g:goals_) if (g.progress.achieved==achieved_) entries.push_back(&g);
     offset_=std::min(offset_,entries.empty() ? 0 : static_cast<int>((entries.size()-1)/20*20));
-    if (entries.empty()) text(body,i18n::tr("folder_goals.empty"),19);
+    if (entries.empty()) text(body,i18n::tr("folder_goals.ui.empty"),19);
     for (int i=offset_;i<std::min(static_cast<int>(entries.size()),offset_+20);++i) {
       const auto &g=*entries[i]; auto *panel=card(body);
       text(panel,g.goal.source.name,25);
       text(panel,long_note_mode::idFromValue(g.goal.longNoteMode),17)->setThemedColor(app_theme::textSecondary);
       progress(panel,g.goal,g.progress);
-      button(panel,i18n::tr("folder_goals.details"),[this,goal=g.goal]{later([this,goal]{choose(goal.source,goal.longNoteMode,goal.target.type);});});
+      button(panel,i18n::tr("folder_goals.ui.details"),[this,goal=g.goal]{later([this,goal]{choose(goal.source,goal.longNoteMode,goal.target.type);});});
     }
     if (offset_>0) button(body,i18n::tr("goals.ui.previous"),[this]{later([this]{offset_-=20;});});
     if (offset_+20<static_cast<int>(entries.size())) button(body,i18n::tr("goals.ui.next"),[this]{later([this]{offset_+=20;});});
