@@ -10,7 +10,7 @@ public:
   using SelectFolder=std::function<void(const folder_goals::Source &,int)>;
   using SelectChart=std::function<void(const ChartMetaRecord &,int)>;
   FolderGoalsScene(ApplicationContext &,SceneReturnTarget,std::optional<folder_goals::Source> = {},SelectFolder = {},
-                   SelectChart = {},std::shared_ptr<goal_navigation::State> = {});
+                   SelectChart = {},std::shared_ptr<goal_navigation::State> = {}, std::function<void()> onBrowse = {});
   void init() override;
   void update(float) override;
   void onPause() override;
@@ -28,13 +28,21 @@ private:
   void reload();
   void switchGoalKind();
   void choose(folder_goals::Source,int,folder_goals::Type);
+  void openSource();
+  void addGoal();
+  void changeScope(int,folder_goals::Type);
+  bool occupied() const;
+  void cancelEditor();
+  void rememberScroll();
   void saveGoal();
   void removeGoal();
   void build();
   void layout();
   void back();
   void navigate();
+  void browseFolders();
   SceneReturnTarget returnTarget_;
+  std::function<void()> onBrowse_;
   SelectFolder onSelect_;
   SelectChart onSelectChart_;
   std::shared_ptr<goal_navigation::State> navigationState_;
@@ -44,10 +52,14 @@ private:
   folder_goals::Goal draft_;
   std::optional<folder_goals::Progress> progress_;
   bool detail_=false,editing_=false,confirmRemove_=false,failed_=false,achieved_=false;
+  bool picker_=false,newGoal_=false,sourceOrigin_=false;
+  std::optional<folder_goals::Goal> editorReturn_;
+  std::string renderedPage_;
   int offset_=0;
   View *root_=nullptr;
   View *content_=nullptr;
   ScrollView *navigationScroll_=nullptr;
+  View *navigationTabs_=nullptr;
   View *progressPanel_=nullptr;
   ScrollView *scroll_=nullptr;
   OverlayPortal *portal_=nullptr;

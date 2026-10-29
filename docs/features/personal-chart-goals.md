@@ -88,12 +88,19 @@ backfill gauge evidence.
 
 ## Using goals
 
-Use the cycling button above the sidebar to switch between **Chart goals** and
-**Folder goals**. Chart goals has vertical In progress, Recommended goals, and
-Achieved tabs; Folder goals has In progress and Achieved. Each section remembers
-its selected tab while switching. The selector uses the shared compact cycle
-button, and the sidebar sits close to the main view. On wide screens, the main
-view stays centered in the safe area; narrower screens use the remaining space.
+Use the cycling button to switch between **Chart goals** and **Folder goals**.
+Chart goals has In progress, Recommended goals, and Achieved tabs; Folder goals
+has In progress and Achieved. Each section remembers its tab, page, and scroll
+position while switching. Wide screens use a vertical sidebar and centered
+content; compact screens put navigation above full-width content. Recommendation
+targets use a dropdown in compact layouts to keep the header short.
+
+Back follows the entry path: a single goal opened from a flag returns directly
+to the selector; a goal opened from a multi-goal list returns to that list.
+**All goals** explicitly opens the overview. Goal rows are fully clickable and
+show target, scope, status, and current progress; source lists put unfinished
+goals first. Empty lists offer **Browse charts/folders** or a link to achieved
+goals where available.
 
 - In PLAY, tap the small flag on a chart row in the built-in selector or the flag
   in the custom selector toolbar. The row flag is filled when that chart has a goal.
@@ -123,11 +130,13 @@ view stays centered in the safe area; narrower screens use the remaining space.
 - A newly achieved goal shows a short flag-burst celebration on the result
   screen after the score is saved. It waits for the Kombo panel to close and
   does not replay for later clears, view rebuilds, replay, practice, or autoplay.
-- **PLAY** selects the chart and its LN mode in the originating selector.
+- **Select chart** selects the chart and its LN mode in the originating selector.
   It does not start gameplay. **Practice chart** opens the existing chart viewer
   and practice tools, with a return path to the goal.
-- Edit or remove goals at any time. Removal asks for confirmation and preserves
-  all score records.
+- Editors provide **Save goal** and **Cancel**. Cancel or Back restores the
+  existing goal detail or the source of a new draft without saving. Edit or
+  remove goals at any time; removal asks for confirmation and preserves all
+  score records.
 
 ## Records, scope, and missing charts
 
@@ -193,7 +202,12 @@ Use a folder or difficulty-table flag to set a goal for the entire indexed
 folder subtree, table, or level. In the built-in selector, table and level rows
 have flags; **Folder goals** also opens the current physical folder when browsing
 one. In the custom selector, the toolbar flag supports folders, tables and levels.
-**Personal goals → Folder goals** lists all saved folder goals.
+**Personal goals → Folder goals** lists all saved folder goals. Folder flags
+open a new editor when no goal exists, the saved goal directly when there is one
+(including an Average EX goal), or a source list when there are several.
+**Add goal** creates another target. New drafts retain entered values when
+switching LN mode or goal type. Editing keeps the existing source, LN mode, and
+goal type fixed; adding cannot overwrite an occupied mode/type slot.
 
 Folder flags follow chart-goal colors: neutral when unset, accent while active,
 and lime when all goals for the selected LN mode are achieved. Selecting an

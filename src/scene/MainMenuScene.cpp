@@ -5432,7 +5432,12 @@ void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::
         pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
       }, mode, recommendations, [this,profile](const folder_goals::Source &source,int mode) {
         pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
-      }), true);
+      }, std::shared_ptr<goal_navigation::State>{}, [this,profile] {
+        defer([this,profile] {
+          if (profile==context.profileManager.activeProfile().id) selectTab(Tab::Play);
+          return true;
+        },0,true);
+      }),true);
 }
 
 void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
@@ -9211,6 +9216,11 @@ void MainMenuScene::openFolderGoals(std::optional<folder_goals::Source> source) 
         pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
       },[this,profile](const ChartMetaRecord &record,int mode) {
         pendingGoalSelection_=std::pair{record,mode}; pendingGoalProfile_=profile;
+      }, std::shared_ptr<goal_navigation::State>{}, [this,profile] {
+        defer([this,profile] {
+          if (profile==context.profileManager.activeProfile().id) selectTab(Tab::Play);
+          return true;
+        },0,true);
       }),true);
 }
 void MainMenuScene::applyFolderGoalSelection(const folder_goals::Source &source,int mode) {

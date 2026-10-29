@@ -15,3 +15,8 @@ add_test(NAME folder_goal_tests COMMAND folder_goal_tests)
 
 add_test(NAME folder_goals_scene_tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/folder_goals_scene_tests.py -v)
+
+add_test(NAME goal_navigation_layout_tests COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_SOURCE_DIR}/tests/goal_navigation_layout_tests.py -v)
+set_tests_properties(goal_navigation_layout_tests PROPERTIES
+    ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT};ASOBMASHOW_TEST_YOGA_LIBRARY=$<TARGET_FILE:yogacore>")

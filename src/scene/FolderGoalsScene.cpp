@@ -10,6 +10,7 @@
 #include "../view/DropdownView.h"
 #include "../view/GoalProgressBar.h"
 #include "../view/GoalKindCycleButton.h"
+#include "../view/GoalListRow.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
@@ -25,7 +26,7 @@ TextView *text(View *parent,const std::string &value,int size=20) {
 }
 Button *button(View *parent,const std::string &value,std::function<void()> click,bool primary=false) {
   auto *b=new Button(); b->setHeight(rendering::compactMenuCanvasActive ? 66 : 52)->setMinWidth(0)->setFlexShrink(0)->setCornerRadius(16);
-  auto *label=new TextView(app_theme::font,21); label->setText(value); label->setAlign(TextView::CENTER); label->setVAlign(TextView::MIDDLE);
+  auto *label=new TextView(app_theme::font,21); label->setText(value); label->setWrap(true); label->setAlign(TextView::CENTER); label->setVAlign(TextView::MIDDLE);
   b->setContentView(label); action_button::applyStyle(b,label,primary ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
   b->setOnClickListener(std::move(click)); parent->addView(b); return b;
 }
@@ -37,8 +38,8 @@ View *card(View *parent) {
       ->setCornerRadius(24)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panel);
   parent->addView(v); return v;
 }
-void progress(View *parent,const folder_goals::Goal &goal,const folder_goals::Progress &p) {
-  text(parent,folder_goals::targetText(goal),21);
+void progress(View *parent,const folder_goals::Goal &goal,const folder_goals::Progress &p,bool showTarget=true) {
+  if (showTarget) text(parent,folder_goals::targetText(goal),21);
   if (!p.sourceAvailable) { text(parent,i18n::tr("folder_goals.ui.unavailable")); return; }
   auto *numbers=row(parent);
   auto *value=text(numbers,folder_goals::percentText(p.percent),36); value->setFlex(1)->setMinWidth(0);
@@ -60,13 +61,16 @@ void progress(View *parent,const folder_goals::Goal &goal,const folder_goals::Pr
 }
 FolderGoalsScene::FolderGoalsScene(ApplicationContext &c,SceneReturnTarget target,
     std::optional<folder_goals::Source> initial,SelectFolder select,SelectChart selectChart,
-    std::shared_ptr<goal_navigation::State> navigationState)
-    : Scene(c),returnTarget_(std::move(target)),onSelect_(std::move(select)),onSelectChart_(std::move(selectChart)),
+    std::shared_ptr<goal_navigation::State> navigationState, std::function<void()> onBrowse)
+    : Scene(c),returnTarget_(std::move(target)),onBrowse_(std::move(onBrowse)),onSelect_(std::move(select)),onSelectChart_(std::move(selectChart)),
       navigationState_(navigationState ? std::move(navigationState) : std::make_shared<goal_navigation::State>()),initial_(std::move(initial)),
-      profile_(c.profileManager.activeProfile().id),achieved_(navigationState_->folderAchieved) {}
+      profile_(c.profileManager.activeProfile().id),achieved_(navigationState_->folderAchieved) {
+  offset_=achieved_ ? navigationState_->folderAchievedOffset : navigationState_->folderOffset;
+}
 bool FolderGoalsScene::checkProfile() {
   if (profile_==context.profileManager.activeProfile().id) return true;
   profile_=context.profileManager.activeProfile().id;
+  picker_=newGoal_=sourceOrigin_=false; editorReturn_.reset(); renderedPage_.clear();
   initial_.reset(); goals_.clear(); draft_={}; progress_.reset();
   *navigationState_={};
   detail_=editing_=confirmRemove_=failed_=achieved_=false; offset_=0; rate_="100"; message_.clear();
@@ -76,21 +80,22 @@ void FolderGoalsScene::later(std::function<void()> f) {
   const auto profile=profile_;
   defer([this,profile,f=std::move(f)] {
     if (!checkProfile() || profile!=profile_) { reload(); build(); return true; }
-    f(); build(); return true;
+    rememberScroll(); f(); build(); return true;
   },0,true);
 }
 void FolderGoalsScene::init() {
   reload();
-  if (initial_ && !failed_) choose(*initial_,long_note_mode::valueFromId(context.settings.selectedLnMode),folder_goals::Type::Lamp);
+  if (initial_ && !failed_) { sourceOrigin_=true; openSource(); }
   build();
 }
 void FolderGoalsScene::switchGoalKind() {
   const auto profile=context.profileManager.activeProfile().id;
   defer([this,profile] {
     if (profile!=context.profileManager.activeProfile().id) return true;
+    rememberScroll();
     navigationState_->folderAchieved=achieved_;
     context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
-        returnTarget_,std::nullopt,onSelectChart_,std::nullopt,false,onSelect_,navigationState_));
+        returnTarget_,std::nullopt,onSelectChart_,std::nullopt,false,onSelect_,navigationState_,onBrowse_));
     return false;
   },0,true);
 }
@@ -107,23 +112,67 @@ void FolderGoalsScene::reload() {
 void FolderGoalsScene::choose(folder_goals::Source source,int mode,folder_goals::Type type) {
   draft_={.source=std::move(source),.longNoteMode=std::clamp(mode,1,3),.target={.type=type}};
   const auto found=std::find_if(goals_.begin(),goals_.end(),[this](const auto &g){return folder_goals::key(g.goal)==folder_goals::key(draft_);});
-  editing_=found==goals_.end();
+  editing_=newGoal_=found==goals_.end();
+  editorReturn_.reset();
   if (!editing_) draft_=found->goal;
   detail_=true; confirmRemove_=false; message_.clear();
   rate_=folder_goals::percentText(draft_.target.percent/100.0); rate_.pop_back();
   auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
   progress_=preview ? std::optional(preview->progress) : std::nullopt;
 }
+void FolderGoalsScene::openSource() {
+  std::vector<const folder_goals::GoalProgress *> entries;
+  for (const auto &g:goals_) if (folder_goals::sourceKey(g.goal.source)==folder_goals::sourceKey(*initial_)) entries.push_back(&g);
+  picker_=entries.size()>1;
+  if (entries.size()==1) {
+    const auto goal=entries.front()->goal;
+    choose(goal.source,goal.longNoteMode,goal.target.type);
+  } else if (entries.empty()) {
+    choose(*initial_,long_note_mode::valueFromId(context.settings.selectedLnMode),folder_goals::Type::Lamp);
+  } else detail_=editing_=false;
+}
+void FolderGoalsScene::addGoal() {
+  const auto previous=detail_ ? std::optional(draft_) : std::nullopt;
+  const auto source=detail_ ? draft_.source : *initial_;
+  draft_={.source=source,.longNoteMode=long_note_mode::valueFromId(context.settings.selectedLnMode)};
+  rate_="100"; detail_=editing_=newGoal_=true; confirmRemove_=false; message_.clear();
+  editorReturn_=previous;
+  changeScope(draft_.longNoteMode,draft_.target.type);
+}
+void FolderGoalsScene::changeScope(int mode,folder_goals::Type type) {
+  if (!newGoal_) return;
+  draft_.longNoteMode=std::clamp(mode,1,3); draft_.target.type=type;
+  auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
+  progress_=preview ? std::optional(preview->progress) : std::nullopt;
+}
+bool FolderGoalsScene::occupied() const {
+  return newGoal_ && std::any_of(goals_.begin(),goals_.end(),[this](const auto &g){return folder_goals::key(g.goal)==folder_goals::key(draft_);});
+}
+void FolderGoalsScene::cancelEditor() {
+  if (editorReturn_) {
+    const auto goal=*editorReturn_; choose(goal.source,goal.longNoteMode,goal.target.type); return;
+  }
+  if (!newGoal_) { choose(draft_.source,draft_.longNoteMode,draft_.target.type); return; }
+  detail_=editing_=newGoal_=false; message_.clear(); progress_.reset();
+}
+void FolderGoalsScene::rememberScroll() {
+  if (scroll_ && !renderedPage_.empty()) navigationState_->folderScrollOffsets[renderedPage_]=scroll_->getScrollOffset();
+  if (navigationScroll_ && !renderedPage_.empty()) navigationState_->folderNavigationOffset=navigationScroll_->getScrollOffset();
+  navigationState_->folderAchieved=achieved_;
+  (achieved_ ? navigationState_->folderAchievedOffset : navigationState_->folderOffset)=offset_;
+}
 void FolderGoalsScene::saveGoal() {
+  if (occupied()) { message_=i18n::tr("folder_goals.ui.occupied"); return; }
   auto value=chart_goals::parseRate(rate_);
   if (!value || *value==0) { message_=i18n::tr("folder_goals.ui.invalid_percent"); return; }
   draft_.target.percent=*value;
   if (!context.scoreRepository.SaveFolderGoal(draft_,message_)) return;
-  editing_=false; reload();
+  editing_=newGoal_=false; editorReturn_.reset(); reload();
 }
 void FolderGoalsScene::removeGoal() {
   if (!context.scoreRepository.RemoveFolderGoal(draft_,message_)) return;
-  detail_=editing_=confirmRemove_=false; progress_.reset(); reload();
+  detail_=editing_=newGoal_=confirmRemove_=false; progress_.reset(); reload();
+  if (sourceOrigin_) picker_=true;
 }
 void FolderGoalsScene::navigate() {
   if (!onSelect_ || !progress_ || !progress_->sourceAvailable) return;
@@ -134,24 +183,40 @@ void FolderGoalsScene::navigate() {
     callback(source,mode); (void)returnToScene(*manager,target); return false;
   },0,true);
 }
+void FolderGoalsScene::browseFolders() {
+  defer([this] {
+    if (!checkProfile()) { reload(); build(); return true; }
+    auto callback = onBrowse_; auto target = returnTarget_; auto *manager = context.sceneManager;
+    if (callback) callback();
+    (void)returnToScene(*manager, target); return false;
+  }, 0, true);
+}
 void FolderGoalsScene::build() {
+  rememberScroll();
   for (auto *v:views) delete v; views.clear();
+  scroll_=nullptr; navigationScroll_=nullptr;
   progressPanel_=nullptr;
   root_=new View(0,0,rendering::window_width,rendering::window_height);
   root_->setFlexDirection(FlexDirection::Column)->setGap(12)->setPadding(Edge::All,18)->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(root_);
-  button(root_,i18n::tr("kombo.ui.back"),[this]{back();})->setWidth(140);
+  auto *top=row(root_);
+  button(top,i18n::tr("kombo.ui.back"),[this]{back();})->setWidth(140);
+  if (detail_ || picker_) button(top,i18n::tr("goals.ui.all_goals"),[this]{later([this]{
+    detail_=editing_=newGoal_=picker_=sourceOrigin_=false; editorReturn_.reset(); message_.clear();
+  });})->setWidth(180)->setFlexShrink(1);
   content_=new View(); content_->setFlexDirection(FlexDirection::Row)->setGap(goal_navigation::columnGap)->setFlex(1)->setMinHeight(0);
   root_->addView(content_);
-  navigationScroll_=nullptr;
-  if (!detail_) {
+  navigationScroll_=nullptr; navigationTabs_=nullptr;
+  if (!detail_ && !picker_) {
     navigationScroll_=new ScrollView(); navigationScroll_->setWidth(280)->setMinHeight(0)->setFlexShrink(0);
     content_->addView(navigationScroll_);
     auto *navigation=new View(); navigation->setFlexDirection(FlexDirection::Column)->setGap(6);
     navigation->addView(makeGoalKindCycleButton(true,[this]{switchGoalKind();}));
+    text(navigation,i18n::tr("goals.ui.scope_folder"),17)->setThemedColor(app_theme::textSecondary);
+    navigationTabs_=new View(); navigationTabs_->setGap(6)->setFlexShrink(0); navigation->addView(navigationTabs_);
     for (bool achieved:{false,true}) {
-      auto *tab=button(navigation,i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),
-          [this,achieved]{later([this,achieved]{achieved_=achieved;offset_=0;});},achieved_==achieved);
+      auto *tab=button(navigationTabs_,i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),
+          [this,achieved]{later([this,achieved]{achieved_=achieved;offset_=achieved ? navigationState_->folderAchievedOffset : navigationState_->folderOffset;});},achieved_==achieved);
       if (auto *label=dynamic_cast<TextView *>(tab->getContentView())) label->setWrap(true);
     }
     navigationScroll_->setContentView(navigation);
@@ -168,12 +233,17 @@ void FolderGoalsScene::build() {
     auto *panel=card(body);
     text(panel,draft_.source.name.empty() ? draft_.source.identity : draft_.source.name,27);
     text(panel,i18n::tr("folder_goals.ui.scope_help"),17)->setThemedColor(app_theme::textSecondary);
-    auto *modes=row(panel);
-    for (int mode:{1,2,3}) button(modes,long_note_mode::idFromValue(mode),[this,mode]{later([this,mode]{choose(draft_.source,mode,draft_.target.type);});},mode==draft_.longNoteMode)->setFlex(1);
-    auto *types=row(panel);
-    for (auto type:{folder_goals::Type::Lamp,folder_goals::Type::AverageEx})
+    if (editing_ && newGoal_) {
+      auto *modes=row(panel);
+      for (int mode:{1,2,3}) button(modes,long_note_mode::idFromValue(mode),[this,mode]{later([this,mode]{changeScope(mode,draft_.target.type);});},mode==draft_.longNoteMode)->setFlex(1);
+      auto *types=row(panel);
+      for (auto type:{folder_goals::Type::Lamp,folder_goals::Type::AverageEx})
       button(types,i18n::tr(type==folder_goals::Type::Lamp ? "folder_goals.ui.lamp" : "folder_goals.ui.ex"),
-          [this,type]{later([this,type]{choose(draft_.source,draft_.longNoteMode,type);});},type==draft_.target.type)->setFlex(1);
+          [this,type]{later([this,type]{changeScope(draft_.longNoteMode,type);});},type==draft_.target.type)->setFlex(1);
+    } else {
+      text(panel,long_note_mode::idFromValue(draft_.longNoteMode)+" · "+i18n::tr(draft_.target.type==folder_goals::Type::Lamp ? "folder_goals.ui.lamp" : "folder_goals.ui.ex"),18)
+          ->setThemedColor(app_theme::textSecondary);
+    }
     progressPanel_=new View();
     progressPanel_->setFlexDirection(FlexDirection::Column)->setGap(12)->setFlexShrink(0);
     panel->addView(progressPanel_);
@@ -212,37 +282,64 @@ void FolderGoalsScene::build() {
         },0,true);
       });
       panel->addView(input);
-      button(panel,i18n::tr("goals.ui.save"),[this]{later([this]{saveGoal();});},true)->setEnabled(progress_ && progress_->sourceAvailable && progress_->available>0);
+      if (occupied()) text(panel,i18n::tr("folder_goals.ui.occupied"),18)->setThemedColor(app_theme::coral);
+      auto *actions=row(panel);
+      button(actions,i18n::tr("goals.ui.save"),[this]{later([this]{saveGoal();});},true)->setEnabled(!occupied() && progress_ && progress_->sourceAvailable && progress_->available>0);
+      button(actions,i18n::tr("goals.ui.cancel"),[this]{back();});
+      for (auto *child:actions->getChildren()) child->setFlex(1)->setMinWidth(0);
     } else {
-      text(panel,i18n::format("goals.ui.set_date",{{"date",chart_goals::localDateTime(draft_.setAt)}}),17);
-      if (draft_.achievedAt) text(panel,i18n::format("goals.ui.achieved_date",{{"date",chart_goals::localDateTime(draft_.achievedAt)}}),17);
       button(panel,i18n::tr("folder_goals.ui.open"),[this]{navigate();},true)->setEnabled(onSelect_ && progress_ && progress_->sourceAvailable);
-      button(panel,i18n::tr("goals.ui.edit"),[this]{later([this]{editing_=true;});});
+      auto *management=row(panel);
+      button(management,i18n::tr("goals.ui.edit"),[this]{later([this]{editing_=true;newGoal_=false;});})->setFlex(1);
+      button(management,i18n::tr("goals.ui.add"),[this]{later([this]{addGoal();});})->setFlex(1);
       if (confirmRemove_) {
         text(panel,i18n::tr("goals.ui.remove_confirm"));
-        button(panel,i18n::tr("goals.ui.remove"),[this]{later([this]{removeGoal();});});
+        auto *remove=button(panel,i18n::tr("goals.ui.remove"),[this]{later([this]{removeGoal();});});
+        action_button::applyStyle(remove,dynamic_cast<TextView *>(remove->getContentView()),app_theme::ActionCategory::Destructive);
         button(panel,i18n::tr("goals.ui.cancel"),[this]{later([this]{confirmRemove_=false;});});
-      } else button(panel,i18n::tr("goals.ui.remove"),[this]{later([this]{confirmRemove_=true;});});
+      } else {
+        auto *remove=button(management,i18n::tr("goals.ui.remove"),[this]{later([this]{confirmRemove_=true;});}); remove->setFlex(1);
+        action_button::applyStyle(remove,dynamic_cast<TextView *>(remove->getContentView()),app_theme::ActionCategory::Destructive);
+      }
+      text(panel,i18n::format("goals.ui.set_date",{{"date",chart_goals::localDateTime(draft_.setAt)}}),17);
+      if (draft_.achievedAt) text(panel,i18n::format("goals.ui.achieved_date",{{"date",chart_goals::localDateTime(draft_.achievedAt)}}),17);
     }
     text(body,i18n::tr("folder_goals.ui.live_help"),17)->setThemedColor(app_theme::textSecondary);
   } else {
-    text(body,i18n::tr("folder_goals.ui.intro"),19);
+    text(body,picker_ ? initial_->name : i18n::tr("folder_goals.ui.intro"),19);
     std::vector<const folder_goals::GoalProgress *> entries;
-    for (const auto &g:goals_) if (g.progress.achieved==achieved_) entries.push_back(&g);
-    offset_=std::min(offset_,entries.empty() ? 0 : static_cast<int>((entries.size()-1)/20*20));
-    if (entries.empty()) text(body,i18n::tr("folder_goals.ui.empty"),19);
-    for (int i=offset_;i<std::min(static_cast<int>(entries.size()),offset_+20);++i) {
-      const auto &g=*entries[i]; auto *panel=card(body);
-      text(panel,g.goal.source.name,25);
-      text(panel,long_note_mode::idFromValue(g.goal.longNoteMode),17)->setThemedColor(app_theme::textSecondary);
-      progress(panel,g.goal,g.progress);
-      button(panel,i18n::tr("folder_goals.ui.details"),[this,goal=g.goal]{later([this,goal]{choose(goal.source,goal.longNoteMode,goal.target.type);});});
+    for (const auto &g:goals_) if (picker_ ? folder_goals::sourceKey(g.goal.source)==folder_goals::sourceKey(*initial_) : g.progress.achieved==achieved_) entries.push_back(&g);
+    if (picker_) {
+      std::stable_sort(entries.begin(),entries.end(),[](const auto *a,const auto *b){return a->progress.achieved<b->progress.achieved;});
+      const auto done=std::count_if(entries.begin(),entries.end(),[](const auto *g){return g->progress.achieved;});
+      text(body,i18n::format("goals.ui.source_counts",{{"active",std::to_string(entries.size()-done)},{"achieved",std::to_string(done)}}),18);
+      button(body,i18n::tr("goals.ui.add"),[this]{later([this]{addGoal();});},true);
     }
-    if (offset_>0) button(body,i18n::tr("goals.ui.previous"),[this]{later([this]{offset_-=20;});});
-    if (offset_+20<static_cast<int>(entries.size())) button(body,i18n::tr("goals.ui.next"),[this]{later([this]{offset_+=20;});});
+    int start=picker_ ? 0 : offset_;
+    start=std::min(start,entries.empty() ? 0 : static_cast<int>((entries.size()-1)/20*20));
+    if (!picker_) offset_=start;
+    if (entries.empty()) {
+      text(body,i18n::tr(goals_.empty() ? "folder_goals.ui.empty" : achieved_ ? "folder_goals.ui.empty_achieved" : "folder_goals.ui.empty_active"),19);
+      if (!picker_ && !achieved_ && !goals_.empty()) button(body,i18n::tr("goals.ui.view_achieved"),[this]{later([this]{achieved_=true;offset_=navigationState_->folderAchievedOffset;});},true);
+      button(body,i18n::tr("folder_goals.ui.browse"),[this]{browseFolders();});
+    }
+    for (int i=start;i<std::min(static_cast<int>(entries.size()),picker_ ? static_cast<int>(entries.size()) : start+20);++i) {
+      const auto &g=*entries[i];
+      auto *panel=goal_ui::clickableRow(body,[this,goal=g.goal]{later([this,goal]{choose(goal.source,goal.longNoteMode,goal.target.type);});});
+      text(panel,folder_goals::targetText(g.goal),23);
+      text(panel,g.goal.source.name.empty() ? g.goal.source.identity : g.goal.source.name,18);
+      text(panel,long_note_mode::idFromValue(g.goal.longNoteMode),17)->setThemedColor(app_theme::textSecondary);
+      progress(panel,g.goal,g.progress,false);
+      text(panel,std::string(i18n::tr("folder_goals.ui.details"))+"  ›",17)->setThemedColor(app_theme::textSecondary);
+    }
+    if (!picker_ && offset_>0) button(body,i18n::tr("goals.ui.previous"),[this]{later([this]{offset_-=20;});});
+    if (!picker_ && offset_+20<static_cast<int>(entries.size())) button(body,i18n::tr("goals.ui.next"),[this]{later([this]{offset_+=20;});});
   }
   if (!message_.empty()) text(body,message_,19)->setThemedColor(app_theme::coral);
+  renderedPage_=detail_ ? std::string(editing_ ? "edit:" : "detail:")+folder_goals::key(draft_) : picker_ ? "source:"+folder_goals::sourceKey(*initial_) : std::string(achieved_ ? "achieved:" : "active:")+std::to_string(offset_);
   addView(portal_); layout();
+  scroll_->setScrollOffset(navigationState_->folderScrollOffsets[renderedPage_]);
+  if (navigationScroll_) navigationScroll_->setScrollOffset(navigationState_->folderNavigationOffset);
 }
 void FolderGoalsScene::layout() {
   if (!root_) return;
@@ -254,18 +351,41 @@ void FolderGoalsScene::layout() {
   root_->setPadding(Edge::Top,18+safe.top*rendering::window_height)->setPadding(Edge::Bottom,18+safe.bottom*rendering::window_height)
       ->setPadding(Edge::Left,18+safe.left*rendering::window_width)->setPadding(Edge::Right,18+safe.right*rendering::window_width);
 #endif
-  const auto columns=goal_navigation::columns(contentWidth,navigationScroll_!=nullptr);
+  const bool stacked=goal_navigation::stackedNavigation(contentWidth,rendering::compactMenuCanvasActive);
+  content_->setFlexDirection(stacked ? FlexDirection::Column : FlexDirection::Row);
+  const auto columns=goal_navigation::columns(contentWidth,navigationScroll_!=nullptr,stacked);
   content_->setPadding(Edge::Left,columns.leftPadding)->setPadding(Edge::Right,columns.rightPadding);
-  if (navigationScroll_) navigationScroll_->setWidth(columns.navigationWidth);
+  if (navigationScroll_) {
+    navigationScroll_->setWidth(stacked ? columns.bodyWidth : columns.navigationWidth);
+    if (stacked) navigationScroll_->setHeight(rendering::compactMenuCanvasActive ? 176 : 148);
+    else YGNodeStyleSetHeightAuto(navigationScroll_->getNode());
+    navigationTabs_->setFlexDirection(stacked ? FlexDirection::Row : FlexDirection::Column);
+    for (auto *tab:navigationTabs_->getChildren()) {
+      if (stacked) tab->setFlex(1)->setMinWidth(0);
+      else {YGNodeStyleSetFlex(tab->getNode(),YGUndefined); tab->setFlexShrink(0);}
+    }
+  }
   root_->applyYogaLayout(); scroll_->refreshContentLayout();
   if (navigationScroll_) navigationScroll_->refreshContentLayout();
 }
 void FolderGoalsScene::back() {
   if (confirmRemove_) { later([this]{confirmRemove_=false;}); return; }
-  if (detail_) { later([this]{detail_=editing_=false;message_.clear();reload();}); return; }
+  if (editing_) {
+    if (newGoal_ && !editorReturn_ && sourceOrigin_ && !picker_) {
+      defer([this]{(void)returnToScene(*context.sceneManager,returnTarget_);return false;},0,true); return;
+    }
+    later([this]{cancelEditor();}); return;
+  }
+  if (detail_) {
+    if (sourceOrigin_ && !picker_) {
+      defer([this]{(void)returnToScene(*context.sceneManager,returnTarget_);return false;},0,true); return;
+    }
+    later([this]{detail_=false;message_.clear();reload();}); return;
+  }
   defer([this]{(void)returnToScene(*context.sceneManager,returnTarget_);return false;},0,true);
 }
 void FolderGoalsScene::onPause() {
+  rememberScroll();
   const auto finish=[](View *v,const auto &self)->void {
     if (auto *input=dynamic_cast<TextInputBox *>(v)) input->endEditing();
     for (auto *child:v->getChildren()) self(child,self);
@@ -284,4 +404,4 @@ EventHandleResult FolderGoalsScene::handleEvents(SDL_Event &e) {
   if (e.type==SDL_EVENT_KEY_DOWN && e.key.key==SDLK_ESCAPE) back();
   return {};
 }
-void FolderGoalsScene::cleanupScene() {root_=nullptr;content_=nullptr;navigationScroll_=nullptr;scroll_=nullptr;portal_=nullptr;progressPanel_=nullptr;}
+void FolderGoalsScene::cleanupScene() {root_=nullptr;content_=nullptr;navigationScroll_=nullptr;navigationTabs_=nullptr;scroll_=nullptr;portal_=nullptr;progressPanel_=nullptr;}

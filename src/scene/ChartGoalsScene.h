@@ -13,7 +13,7 @@ public:
   ChartGoalsScene(ApplicationContext &, SceneReturnTarget,
                   std::optional<ChartMetaRecord> initial = {}, SelectChart = {},
                   std::optional<int> initialMode = {}, bool initialRecommendations = false, FolderGoalsScene::SelectFolder = {},
-                  std::shared_ptr<goal_navigation::State> = {});
+                  std::shared_ptr<goal_navigation::State> = {}, std::function<void()> onBrowse = {});
   void init() override;
   void onPause() override;
   void onResume() override;
@@ -60,18 +60,24 @@ private:
   void build();
   void layout();
   void back();
+  void allGoals();
+  void browseCharts();
+  void rememberNavigation();
   SceneReturnTarget returnTarget_;
+  std::function<void()> onBrowse_;
   SelectChart onSelectChart_;
   FolderGoalsScene::SelectFolder onSelectFolder_;
   std::optional<ChartMetaRecord> initial_, resolved_, recommendationChart_, pickerChart_;
   std::optional<int> initialMode_;
   bool initialRecommendations_ = false;
+  bool sourcePicker_ = false;
+  std::optional<chart_goals::Goal> editorReturnGoal_;
   std::string profileId_, message_, customRate_;
   chart_goals::ProgressPage page_;
   std::optional<chart_goals::GoalProgress> selected_;
   chart_goals::Goal draft_;
   bool editing_ = false, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
-  int offset_ = 0, achievedOffset_ = 0;
+  int offset_ = 0, achievedOffset_ = 0, pickerOffset_ = 0;
   View *root_ = nullptr;
   View *content_ = nullptr;
   ScrollView *scroll_ = nullptr;
