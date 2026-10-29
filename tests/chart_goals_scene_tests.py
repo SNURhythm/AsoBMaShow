@@ -121,6 +121,20 @@ int main() {
             FixtureCompiler.from_environment().build([source], binary, source.parent, includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_result_goal_target_is_frozen_for_recalled_and_live_results(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src/scene/ResultScene.cpp").read_text()
+        methods = extract(source, "std::optional<ResultPacemakerData>\nResultScene::pacemakerDataForCurrentResult(")
+        signature = "void ResultScene::initializeGoalPacemaker("
+        methods += "\n" + (extract(source, signature) if signature in source else
+                            "void ResultScene::initializeGoalPacemaker() {}")
+        fixture = (root / "tests/goal_result_fixture.cpp").read_text().replace("METHODS", methods)
+        with tempfile.TemporaryDirectory(prefix="goal-result-") as directory:
+            source_path, binary = Path(directory) / "result.cpp", Path(directory) / "result"
+            source_path.write_text(fixture)
+            FixtureCompiler.from_environment().build([source_path], binary, source_path.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_picker_orders_unfinished_first_without_reordering_each_group(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/scene/ChartGoalsScene.cpp").read_text(), "void orderGoalRows(")
@@ -330,7 +344,7 @@ int main() {
             binary = Path(directory) / "navigation"
             source.write_text(fixture)
             FixtureCompiler.from_environment(shared_headers=True).build(
-                [source], binary, source.parent, includes=(root / "src",))
+                [source, root / "src/settings/AudioVideoSettings.cpp"], binary, source.parent, standard=23, includes=(root / "src", root / "SDL/include"))
             subprocess.run([str(binary)], check=True, timeout=5)
 
     def test_best_score_displays_selector_rank(self):

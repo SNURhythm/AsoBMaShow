@@ -3,6 +3,7 @@
 #include "../view/KomboFlameView.h"
 #include "../view/GoalAchievementView.h"
 #include "../goals/FolderGoalPresentation.h"
+#include "../goals/GoalPacemaker.h"
 #include "../LongNoteModeUtils.h"
 #include "../view/AssignmentProgressView.h"
 #include "../view/ActionButtonStyle.h"
@@ -606,6 +607,7 @@ ResultScene::ResultScene(
           .guidedAccessReminderSkipped = guidedAccessReminderSkipped,
       }), resultSkinPreviousIrRank(previousIrRank) {
   auto &local = *localSource();
+  initializeGoalPacemaker();
   local.replayResult = local.replayResult && !local.practiceOptions.enabled &&
                        local.courseOptions.mode == ResultCourseMode::None;
   local.reusableRetryChart = local.ownedReusableRetryChart != nullptr
@@ -829,6 +831,23 @@ bool ResultScene::isCourseFinalResult() const {
          local->courseOptions.session != nullptr;
 }
 
+void ResultScene::initializeGoalPacemaker() {
+  auto *local = localSource();
+  if (local == nullptr || local->pacemakerOverride || local->autoPlayResult ||
+      local->practiceOptions.enabled || isCourseStageResult() || isCourseFinalResult() ||
+      pacemaker::normalizeTargetId(local->pacemakerTarget) != pacemaker::kTargetGoal) {
+    return;
+  }
+  const auto *replay = local->presentationReplay ? &*local->presentationReplay
+      : local->retryData ? &*local->retryData : nullptr;
+  std::string error;
+  // Resolve once when recalling the result; live attempts supply their frozen override.
+  local->pacemakerGoalTarget = chart_goals::loadPacemakerTarget(
+      context.scoreRepository, local->meta,
+      replay ? replay->chartMeta.LnMode : local->meta.LnMode,
+      context.settings.selectedPacemakerGoalId, error);
+}
+
 std::optional<ResultPacemakerData>
 ResultScene::pacemakerDataForCurrentResult() const {
   const auto *local = localSource();
@@ -843,7 +862,8 @@ ResultScene::pacemakerDataForCurrentResult() const {
   }
   return result_presentation::pacemakerDataForResult(
       local->meta, local->resultState, local->pacemakerTarget,
-      local->previousBest);
+      local->previousBest, nullptr,
+      local->pacemakerGoalTarget ? &*local->pacemakerGoalTarget : nullptr);
 }
 
 ResultSkinData ResultScene::makeResultSkinData() const {

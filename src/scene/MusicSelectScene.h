@@ -1,4 +1,5 @@
 #pragma once
+#include "../goals/GoalPacemaker.h"
 
 #include "MusicSelectToolbarView.h"
 #include "MainMenuPlayOptionsModal.h"
@@ -104,6 +105,8 @@ private:
   std::string pendingFolderGoalProfile_;
   void resumeGoalNavigation();
   void queueGoalSelection(const ChartMetaRecord &, int mode, const std::string &profile);
+  std::string goalPacemakerLabel() const;
+  mutable chart_goals::PacemakerCache goalPacemakerCache_;
   void applyGoalSelection(const ChartMetaRecord &, int mode);
   bool restoreGoalDirectory(const MusicSelectBar &);
   std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;

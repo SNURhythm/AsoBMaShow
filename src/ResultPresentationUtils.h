@@ -80,7 +80,8 @@ inline std::optional<ResultPacemakerData> pacemakerDataForResult(
     const bms_parser::ChartMeta &meta, const RhythmState &state,
     const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest,
-    const ReplayData *bestReplay = nullptr) {
+    const ReplayData *bestReplay = nullptr,
+    const chart_goals::Target *goal = nullptr) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
   if (normalized == pacemaker::kTargetOff) {
     return std::nullopt;
@@ -92,7 +93,7 @@ inline std::optional<ResultPacemakerData> pacemakerDataForResult(
   }
 
   const pacemaker::Target target =
-      pacemaker::targetFromSelection(meta, normalized, best, bestReplay);
+      pacemaker::targetFromSelection(meta, normalized, best, bestReplay, goal);
   if (!target.enabled) {
     return std::nullopt;
   }
@@ -109,7 +110,8 @@ inline pacemaker::Target pacemakerTargetForReplay(
     bms_parser::Chart &chart, const ReplayData &replay,
     const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest,
-    const ReplayData *bestReplay) {
+    const ReplayData *bestReplay,
+    const chart_goals::Target *goal = nullptr) {
   const std::string normalized = pacemaker::normalizeTargetId(targetId);
   if (replay.autoPlay || normalized == pacemaker::kTargetOff) {
     return {};
@@ -119,7 +121,7 @@ inline pacemaker::Target pacemakerTargetForReplay(
   if (previousBest.has_value()) {
     best = scoreBestSnapshotFromPreviousBest(*previousBest);
   }
-  return pacemaker::targetFromSelection(chart, normalized, best, bestReplay);
+  return pacemaker::targetFromSelection(chart, normalized, best, bestReplay, goal);
 }
 
 // ScoreDataProperty's personal-best channel is independent from the selected
@@ -157,10 +159,11 @@ inline std::optional<ResultPacemakerData> pacemakerDataForReplayResult(
     bms_parser::Chart &chart, const RhythmState &state,
     const ReplayData &replay, const std::string &targetId,
     const std::optional<ResultPreviousBestData> &previousBest,
-    const ReplayData *bestReplay) {
+    const ReplayData *bestReplay,
+    const chart_goals::Target *goal = nullptr) {
   const pacemaker::Target target =
       pacemakerTargetForReplay(chart, replay, targetId, previousBest,
-                              bestReplay);
+                              bestReplay, goal);
   if (!target.enabled) {
     return std::nullopt;
   }

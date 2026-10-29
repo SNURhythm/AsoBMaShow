@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <iosfwd>
 #include <map>
@@ -387,6 +388,7 @@ public:
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
   std::string selectedPacemakerTarget = kDefaultPacemakerTarget;
+  std::int64_t selectedPacemakerGoalId = 0; // Zero uses the lowest unfinished score goal.
   // Direct StringPropertyFactory PlayerConfig values. Mode and difficulty
   // retain ModeFilter/DifficultyFilter display text, while sort and chart
   // replication retain their source identifiers verbatim.

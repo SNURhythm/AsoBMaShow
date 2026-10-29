@@ -1,3 +1,4 @@
+#include "goals/GoalPacemaker.h"
 #include "ir/IrRemoteScoreModels.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
@@ -952,6 +953,16 @@ void testIndependentChartGoals() {
   assert(scores.SaveChartGoal(lamp, error) && scores.SaveChartGoal(score, error));
   assert(lamp.id > 0 && score.id != lamp.id);
   assert(scores.LoadChartGoalsForChart(lamp.chart, error)->size() == 2);
+  chart_goals::PacemakerCache goalCache;
+  assert(goalCache.label(scores, lamp.chart, 2, 0, "one") == "AAA");
+  assert(goalCache.label(scores, lamp.chart, 2, lamp.id, "one") == "BEST");
+  assert(goalCache.label(scores, lamp.chart, 2, score.id, "one") == "AAA");
+  assert(goalCache.label(scores, lamp.chart, 1, score.id, "one") == "BEST");
+  ScoreRepository otherProfile(root / "other-scores.db");
+  assert(otherProfile.EnsureSchema());
+  assert(goalCache.label(otherProfile, lamp.chart, 2, score.id, "two") == "BEST");
+  assert(goalCache.label(scores, lamp.chart, 2, score.id, "one") == "AAA");
+
   result_persistence::PendingChartScoreWrite pending;
   pending.attemptId = "123e4567-e89b-42d3-a456-426614174070";
   pending.replayId = 1; pending.createdAt = scoreHistoryTime(score.setAtUnixMillis + 1000);
@@ -962,6 +973,9 @@ void testIndependentChartGoals() {
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
   auto achieved = scores.TakeChartGoalAchievements(pending.attemptId);
   assert(achieved.size() == 1 && achieved.front().id == score.id);
+  assert(goalCache.label(scores, lamp.chart, 2, 0, "one") == "BEST");
+  assert(goalCache.label(scores, lamp.chart, 2, score.id, "one") == "AAA");
+
   assert(!scores.LoadChartGoalIndex(error)->allAchieved(lamp.chart.SHA256));
   assert(scores.LoadChartGoalIndex(error)->activeHashes().size() == 1);
   assert(scores.LoadChartGoal(score.chart, 2, error, score.id)->goal.achievedAtUnixMillis > 0);

@@ -138,9 +138,13 @@ std::int64_t beatorajaNextRank(const PlayfieldVisualState &snapshot,
   return static_cast<std::int64_t>(passedNotes) * 2 - snapshot.score;
 }
 
+bool usesSkinIrTarget(const PlayfieldAuthorityUpdate &authority) {
+  return !authority.goalPacemakerSelected && isGameplaySkinIrTarget(authority.skinTargetId);
+}
+
 int targetScore(const PlayfieldVisualState &snapshot) {
   const auto &authority = snapshot.authority;
-  if (isGameplaySkinIrTarget(authority.skinTargetId)) {
+  if (usesSkinIrTarget(authority)) {
     return authority.gameplayMode != PlayfieldGameplayMode::Practice &&
                    authority.skinIrTarget &&
                    authority.skinIrTarget->targetId == authority.skinTargetId
@@ -153,7 +157,7 @@ int targetScore(const PlayfieldVisualState &snapshot) {
 
 std::optional<PlayfieldRivalScoreState>
 targetRivalScore(const PlayfieldVisualState &snapshot) {
-  if (isGameplaySkinIrTarget(snapshot.authority.skinTargetId) &&
+  if (usesSkinIrTarget(snapshot.authority) &&
       snapshot.authority.gameplayMode != PlayfieldGameplayMode::Practice) {
     const int score = targetScore(snapshot);
     // TargetProperty synthesizes only PGREAT/GREAT from EX score. It does
@@ -240,6 +244,7 @@ beatorajaTargetScorePlayerName(const PlayfieldAuthorityUpdate &authority) {
     return {};
   }
 
+  if (authority.goalPacemakerSelected) return authority.pacemakerTarget.label;
   const std::string_view id = authority.skinTargetId;
   if (id == "RANK_NEXT") {
     return "NEXT RANK";
@@ -2297,7 +2302,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     case 61:
     case 62:
     case 63: {
-      const auto option = isGameplaySkinIrTarget(snapshot->authority.skinTargetId)
+      const auto option = usesSkinIrTarget(snapshot->authority)
                               ? std::optional<int>{0}
                               : snapshot->authority.targetPlayOption;
       if (!option || *option < 0) {
@@ -2750,7 +2755,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     // current EX score minus ScoreDataProperty's live rival score. LITONE12
     // uses 108 for Ghost and 153 for its graph difference.
     return {.value = static_cast<std::int64_t>(snapshot->score) -
-                    (isGameplaySkinIrTarget(snapshot->authority.skinTargetId)
+                    (usesSkinIrTarget(snapshot->authority)
                          ? (context_.chartModel.staticMetadata.totalNotes > 0
                                 ? static_cast<std::int64_t>(targetScore(*snapshot)) *
                                       snapshot->authority.stagePassedNotes /

@@ -3720,6 +3720,16 @@ void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial, bo
       }), true);
 }
 
+std::string MusicSelectScene::goalPacemakerLabel() const {
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return "BEST";
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex).chart;
+  if (!selected) return "BEST";
+  return goalPacemakerCache_.label(context.scoreRepository, selected->meta,
+      long_note_mode::valueFromId(context.settings.selectedLnMode),
+      context.settings.selectedPacemakerGoalId, context.profileManager.activeProfile().id);
+}
+
 void MusicSelectScene::queueGoalSelection(const ChartMetaRecord &record, int mode, const std::string &profile) {
   if (profile != context.profileManager.activeProfile().id) return;
   // Check before resume reloads the selector, which may restore folders asynchronously.
@@ -4408,6 +4418,7 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
       .clubMode = context.settings.gameplayClubModeEnabled,
       .pacemakerTarget = selections.pacemakerTarget,
+      .pacemakerGoalLabel = goalPacemakerLabel(),
       .profileId = context.profileManager.activeProfile().id,
       .laneCovers = context.settings.presentation().laneCoverState()};
   const auto snapshot = bars_.readView();
@@ -4519,6 +4530,7 @@ void MusicSelectScene::openPlayOptions() {
            refreshPlayOptionsModal();
          },
          .onPacemakerSelected = [this](const std::string &target) {
+           context.settings.selectedPacemakerGoalId = 0;
            updatePlayOptions([&target](auto &selections) {
              selections.pacemakerTarget = pacemaker::normalizeTargetId(target);
            });

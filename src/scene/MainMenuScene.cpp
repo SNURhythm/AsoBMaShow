@@ -4672,6 +4672,7 @@ void MainMenuScene::refreshAssistOptionButtons() {
 
 void MainMenuScene::setPacemakerTargetSelection(const std::string &target) {
   profileSelections.pacemakerTarget = pacemaker::normalizeTargetId(target);
+  context.settings.selectedPacemakerGoalId = 0;
   profileSelections.applyTo(context.settings);
   context.settings.sanitize();
   if (!context.saveSettings()) {
@@ -4750,6 +4751,7 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .playbackLocked = playbackLocked,
        .clubMode = context.settings.gameplayClubModeEnabled,
        .pacemakerTarget = profileSelections.pacemakerTarget,
+       .pacemakerGoalLabel = goalPacemakerLabel(),
        .profileId = context.profileManager.activeProfile().id,
        .laneCovers = context.settings.presentation().laneCoverState()});
 }
@@ -4834,7 +4836,8 @@ void MainMenuScene::refreshReadySettingsSummary() {
   }
   if (readyPacemakerText != nullptr) {
     readyPacemakerText->setText(
-        pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
+        profileSelections.pacemakerTarget == pacemaker::kTargetGoal ? goalPacemakerLabel()
+            : pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
   }
 }
 
@@ -5438,6 +5441,14 @@ void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::
           return true;
         },0,true);
       }),true);
+}
+
+std::string MainMenuScene::goalPacemakerLabel() const {
+  const auto selected = selectedRecordSnapshot();
+  if (!selected || selected->courseStart) return "BEST";
+  return goalPacemakerCache_.label(context.scoreRepository, selected->meta,
+      long_note_mode::valueFromId(context.settings.selectedLnMode),
+      context.settings.selectedPacemakerGoalId, context.profileManager.activeProfile().id);
 }
 
 void MainMenuScene::queueGoalSelection(const ChartMetaRecord &record, int mode, const std::string &profile) {

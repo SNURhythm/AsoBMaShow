@@ -1,4 +1,6 @@
 #include "goals/ChartGoal.h"
+#include "goals/GoalChallenge.h"
+#include "scene/play/Pacemaker.h"
 #include "goals/ChartGoalStore.h"
 #include "goals/GoalRecommendationQuery.h"
 #include "goals/GoalRecommendationIndex.h"
@@ -12,6 +14,41 @@
 using namespace chart_goals;
 template<class F> bool rejects(F f) { try { f(); return false; } catch (const std::exception &) { return true; } }
 int main() {
+  {
+    for (auto shift : {GaugeAutoShiftMode::None, GaugeAutoShiftMode::Continue,
+                      GaugeAutoShiftMode::SelectToUnder, GaugeAutoShiftMode::SurvivalToGroove}) {
+      CHECK(challengeGauge(GaugeType::Easy, shift, kClearTypeHardClearRank) == GaugeType::Hard);
+      CHECK(challengeGauge(GaugeType::ExHard, shift, kClearTypeHardClearRank) == GaugeType::ExHard);
+    }
+    CHECK(challengeGauge(GaugeType::Easy, GaugeAutoShiftMode::BestClear, kClearTypeExHardClearRank) == GaugeType::Easy);
+    CHECK(challengeGauge(GaugeType::Hard, GaugeAutoShiftMode::None, kClearTypeFullComboRank) == GaugeType::Hazard);
+    CHECK(challengeGauge(GaugeType::AssistedEasy, GaugeAutoShiftMode::None, 150) == GaugeType::AssistedEasy);
+    CHECK(challengeGauge(GaugeType::Normal, GaugeAutoShiftMode::None, -1) == GaugeType::Normal);
+    std::vector<GoalProgress> goals{
+      {.goal={.longNoteMode=1, .target={.scoreNumerator=24}, .id=1}},
+      {.goal={.longNoteMode=1, .target={.scoreNumerator=8777, .scoreDenominator=10000}, .id=2}},
+      {.goal={.longNoteMode=2, .target={.scoreNumerator=18}, .id=3}},
+      {.goal={.longNoteMode=1, .target={.lamp=400}, .id=4}},
+    };
+    CHECK(scoreTargetForGoals(goals, 1, 1)->scoreNumerator == 24);
+    CHECK(scoreTargetForGoals(goals, 1, 0)->scoreNumerator == 8777);
+    CHECK(!scoreTargetForGoals(goals, 1, 4)); // Explicit lamp-only goal falls back to BEST.
+    CHECK(scoreTargetForGoals(goals, 1, 999)->scoreNumerator == 8777);
+    CHECK(scoreTargetForGoals(goals, 2, 1)->scoreNumerator == 18);
+    goals[1].progress.scoreMet=true;
+    CHECK(scoreTargetForGoals(goals, 1, 0)->scoreNumerator == 24);
+    goals[0].progress.scoreMet=true;
+    CHECK(!scoreTargetForGoals(goals, 1, 0));
+    CHECK(scoreTargetForGoals(goals, 1, 1)->scoreNumerator == 24); // Explicit achieved goals remain usable.
+    bms_parser::ChartMeta meta; meta.TotalNotes=1000;
+    const auto target=pacemaker::targetFromGoal(meta, goals[1].goal.target);
+    CHECK(target.enabled && target.label=="GOAL" && target.finalScore==1756);
+    CHECK(pacemaker::targetScoreAtPlayedNotes(target,500)==878);
+    CHECK(pacemaker::normalizeTargetId("goal")=="GOAL");
+    ScoreBestSnapshot best; best.score=1234; best.maxScore=2000;
+    CHECK(pacemaker::targetFromSelection(meta,"GOAL",best).label=="BEST");
+    CHECK(pacemaker::targetFromSelection(meta,"GOAL",best,nullptr,&goals[0].goal.target).finalScore==1778);
+  }
   {
     sqlite3 *recommendations = nullptr;
     CHECK(sqlite3_open(":memory:", &recommendations) == SQLITE_OK);

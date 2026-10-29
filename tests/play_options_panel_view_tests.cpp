@@ -660,6 +660,19 @@ void testPlayOptionsChoiceCallbacksLocksAndPopupClosure() {
   const int beforeReselect = changes;
   choosePanelOption(panel, "pacemaker-choice", "AAA");
   require(changes == beforeReselect, "reselecting the current panel option avoids another save");
+  for (const auto &label : {"AAA", "87.77%", "BEST"}) {
+    selected.pacemakerGoalLabel = label;
+    panel.refresh(selected);
+    const auto &options = choiceDropdown(panelChoice(panel, "pacemaker-choice")).current.options;
+    const auto goal = std::ranges::find_if(options, [](const auto &option) { return option.id == "GOAL"; });
+    require(goal != options.end() && goal->label.resolve() == std::string("GOAL: ") + label,
+            "GOAL dropdown describes the resolved grade, percentage, or BEST fallback");
+  }
+  choosePanelOption(panel, "pacemaker-choice", "GOAL");
+  require(selected.pacemakerTarget == "GOAL", "GOAL is a selectable pacemaker mode");
+  const int beforeGoalReselect = changes;
+  choosePanelOption(panel, "pacemaker-choice", "GOAL");
+  require(changes == beforeGoalReselect + 1, "manual GOAL reselection can clear a challenged goal");
   auto *club = dynamic_cast<Button *>(panel.findViewByName("club-mode"));
   auto *clubContent = dynamic_cast<ToggleButtonContent *>(club->getContentView());
   click(*club);

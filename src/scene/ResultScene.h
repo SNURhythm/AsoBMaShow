@@ -205,6 +205,7 @@ struct LocalResultSource {
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
   std::optional<ResultPacemakerData> pacemakerOverride;
+  std::optional<chart_goals::Target> pacemakerGoalTarget;
   std::optional<ResultPacemakerData> customSkinTargetOverride;
   std::optional<ResultPlayerHistoryData> playerHistory;
   std::optional<std::string> modernReplayAttemptId;
@@ -376,6 +377,7 @@ private:
   [[nodiscard]] bool isCourseFinalResult() const;
   [[nodiscard]] bool persistenceDecisionRequired() const;
   [[nodiscard]] ResultSkinData makeResultSkinData() const;
+  void initializeGoalPacemaker();
   [[nodiscard]] std::optional<ResultPacemakerData>
   pacemakerDataForCurrentResult() const;
   [[nodiscard]] std::optional<practice::ResultModel>

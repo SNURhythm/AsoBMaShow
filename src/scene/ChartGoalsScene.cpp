@@ -1,4 +1,5 @@
 #include "ChartGoalsScene.h"
+#include "GoalChallengeSettings.h"
 #include "ChartViewerScene.h"
 #include "SceneManager.h"
 #include "../LongNoteModeUtils.h"
@@ -512,7 +513,11 @@ void ChartGoalsScene::navigate(bool practice) {
     const auto selectChart = onSelectChart_;
     const auto target = returnTarget_;
     auto *manager = context.sceneManager;
-    if (selectChart) selectChart(record, mode);
+    if (selectChart) {
+      chart_goals::applyChallengeSettings(context.settings, draft_);
+      (void)context.saveSettings();
+      selectChart(record, mode);
+    }
     (void)returnToScene(*manager, target);
     return false;
   }, 0, true);
@@ -683,7 +688,7 @@ void ChartGoalsScene::build() {
                                           : i18n::tr("goals.ui.unknown_gap"));
 
       if (!resolved_) label(detail, i18n::tr("goals.ui.missing"), 18);
-      action(detail, i18n::tr("goals.ui.select_chart"), [this] { navigate(false); }, app_theme::ActionCategory::Primary)
+      action(detail, i18n::tr("goals.ui.challenge"), [this] { navigate(false); }, app_theme::ActionCategory::Primary)
           ->setEnabled(resolved_.has_value() && bool(onSelectChart_));
       action(detail, i18n::tr("goals.ui.practice"), [this] { navigate(true); })->setEnabled(resolved_.has_value());
       auto *management = new View();

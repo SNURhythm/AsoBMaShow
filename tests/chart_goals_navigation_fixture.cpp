@@ -1,5 +1,8 @@
 #include "goals/ChartGoal.h"
+#include "AppSettings.h"
+#include "scene/GoalChallengeSettings.h"
 #include "LongNoteModeUtils.h"
+#include "scene/play/GameplayGaugeTypes.h"
 #include <cassert>
 #include <functional>
 #include <map>
@@ -29,7 +32,7 @@ struct Profiles { Profile profile; const Profile &activeProfile() { return profi
 struct ChartGoalsScene {
   Manager manager;
   struct { Uint64 currentFrame = 0; Profiles profileManager; bool storageMaintenanceActive = false; Manager *sceneManager;
-    struct { std::string selectedLnMode = "LN"; } settings; bool saveSettings() { return true; } } context{.sceneManager=&manager};
+    AppSettings settings; bool saveSettings() { return true; } } context{.sceneManager=&manager};
   std::map<Uint64, std::pair<Uint64, std::vector<std::function<bool()>>>> deferred;
   std::mutex postedDeferredMutex_;
   std::vector<std::function<bool()>> postedDeferred_;
@@ -49,11 +52,17 @@ NAVIGATE
 int main() {
   ChartGoalsScene scene;
   scene.draft_.longNoteMode = 2;
+  scene.draft_.id = 42;
+  scene.context.settings.selectedGaugeType = "normal";
+  scene.context.settings.selectedGaugeAutoShiftMode = "none";
+  scene.draft_.target.lamp = kClearTypeHardClearRank;
   scene.navigate(true);
   scene.handleDeferred(); assert(scene.manager.opened == 0);
   ++scene.context.currentFrame;
   scene.handleDeferred(); assert(scene.manager.opened == 1 && scene.manager.mode == 2);
   assert(scene.context.settings.selectedLnMode == "CN");
+  assert(scene.context.settings.selectedPacemakerTarget == "BEST"); // Practice does not challenge.
+
   scene.handleDeferred(); // Returning from retained practice must not reopen it.
   assert(scene.manager.opened == 1 && scene.deferred.empty());
   scene.navigate(true);
@@ -66,4 +75,7 @@ int main() {
   scene.onSelectChart_ = [&](const Record &, int mode) { assert(mode == 2); ++selected; };
   scene.navigate(false); ++scene.context.currentFrame; scene.handleDeferred();
   assert(selected == 1 && scene.manager.returned == 1);
+  assert(scene.context.settings.selectedPacemakerTarget == "GOAL");
+  assert(scene.context.settings.selectedPacemakerGoalId == 42);
+  assert(scene.context.settings.selectedGaugeType == "hard");
 }

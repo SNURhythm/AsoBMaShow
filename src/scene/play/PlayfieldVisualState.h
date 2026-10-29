@@ -280,6 +280,7 @@ struct PlayfieldAuthorityUpdate {
   std::optional<GaugeStateSnapshot> graphGaugeState;
   pacemaker::Target pacemakerTarget;
   pacemaker::Snapshot pacemakerStatus;
+  bool goalPacemakerSelected = false; // GOAL overrides the skin target without changing its saved selection.
   std::optional<PlayfieldIrTargetState> skinIrTarget;
   // IndexType.option_1p/option_2p/option_dp values. These retain the raw
   // canonical option identity; display text is deliberately separate.

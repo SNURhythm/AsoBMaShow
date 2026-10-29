@@ -249,3 +249,26 @@ from the single-goal format. New goals receive separate stable IDs. Legacy
 payloads are read without rewriting them; only saved goals use the new payload
 version. This requires no table rename or rebuild, and keeps existing dates,
 first achievements, and Kombo credit identities intact.
+
+## Challenging a chart goal
+
+**Challenge!** returns to the selector and applies the goal's LN mode. If the
+chart is already selected, the current folder, filters, and selection remain in
+place. For a lamp target, the action raises the selected gauge only when its
+mapped lamp and auto-shift range cannot reach the target. Higher gauges and
+Best Clear coverage are preserved; the auto-shift mode and lower bound stay
+unchanged. Full Combo maps to Hazard when an upgrade is needed.
+
+Challenge also selects the **GOAL** pacemaker for that exact goal. Its score
+fraction determines the target EX score, rounded up; a lamp-only goal uses
+**BEST**. Manually selecting (or reselecting) GOAL clears the explicit goal and
+uses the lowest unfinished score target for the current chart and LN mode,
+falling back to BEST when no score target remains. The brief target is shown in
+the play-option summary (for example **AAA**, **87.77%**, or **BEST**) and the
+dropdown describes it as **GOAL: AAA**. Goal edits and score changes refresh this
+label. The selected goal ID is profile-specific and survives restarting the app.
+The target used by a play is retained on its result, even if completing the
+goal changes which target would be selected next.
+Recalled results and replay exports resolve the current goal for the recorded
+LN mode. During gameplay, GOAL takes precedence over a custom skin's saved
+target choice without changing that preference.

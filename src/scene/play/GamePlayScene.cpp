@@ -32,6 +32,7 @@
 #include "../../replay/ReplayOption.h"
 #include "../../replay/ReplaySetupProvenance.h"
 #include "../../ResultPresentationUtils.h"
+#include "../../goals/GoalPacemaker.h"
 #include "../../Uuid.h"
 #include "../../practice/PracticeResultFlow.h"
 #include "../../rendering/SimpleBatchRenderer.h"
@@ -5321,8 +5322,15 @@ void GamePlayScene::configurePacemakerTarget() {
   // explicitly passes null for the selected target ghost.  Its target score
   // therefore stays proportional to passed notes, including when BEST is the
   // selected pacemaker; do not substitute our persisted-best replay here.
+  std::optional<chart_goals::Target> goalTarget;
+  if (selected == pacemaker::kTargetGoal) {
+    std::string error;
+    goalTarget = chart_goals::loadPacemakerTarget(context.scoreRepository, chart->Meta,
+        options.longNoteMode, context.settings.selectedPacemakerGoalId, error);
+    if (!error.empty()) SDL_Log("Cannot load GOAL pacemaker: %s", error.c_str());
+  }
   activePacemakerTarget = pacemaker::targetFromSelection(
-      *chart, selected, activePacemakerBest, nullptr);
+      *chart, selected, activePacemakerBest, nullptr, goalTarget ? &*goalTarget : nullptr);
 }
 
 void GamePlayScene::configureSkinIrTarget() {
@@ -6407,6 +6415,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .pacemakerTarget = activePacemakerTarget,
       .pacemakerStatus =
           pacemaker::snapshotForState(activePacemakerTarget, *state),
+      .goalPacemakerSelected = pacemaker::normalizeTargetId(options.pacemakerTarget) == pacemaker::kTargetGoal,
       .skinIrTarget = activeSkinIrTarget,
       .player1RandomOption = gameplayRandomOptionIndex(playOptions.option),
       .player2RandomOption = gameplayRandomOptionIndex(playOptions.option2),
@@ -6814,9 +6823,9 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
           courseResultOptions.mode = ResultCourseMode::Stage;
           courseResultOptions.session = options.courseSession;
         }
-        std::optional<ResultPacemakerData> gbattleResultPacemaker;
+        std::optional<ResultPacemakerData> resultPacemakerOverride;
         if (options.gbattleRecordData != nullptr) {
-          gbattleResultPacemaker = gbattle::resultPacemakerDataFromRecord(
+          resultPacemakerOverride = gbattle::resultPacemakerDataFromRecord(
               *chart, *state, *options.gbattleRecordData);
         }
         const bool replayPacemakerResult =
@@ -6829,6 +6838,16 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
               replayPacemakerResult))
                 ? options.pacemakerTarget
                 : pacemaker::kTargetOff;
+        if (!resultPacemakerOverride &&
+            pacemaker::normalizeTargetId(resultPacemakerTarget) == pacemaker::kTargetGoal &&
+            activePacemakerTarget.enabled) {
+          // Goal completion may advance the automatic target before ResultScene opens.
+          resultPacemakerOverride = ResultPacemakerData{
+              .label = activePacemakerTarget.label,
+              .targetScore = activePacemakerTarget.finalScore,
+              .delta = state->getScore() - activePacemakerTarget.finalScore,
+              .usesReplayProgression = activePacemakerTarget.usesReplayProgression};
+        }
         const bms_parser::ChartMeta resultMeta = chart->Meta;
         std::unique_ptr<bms_parser::Chart> ownedReusableRetryChart;
         bms_parser::Chart *reusableRetryChart = nullptr;
@@ -6871,7 +6890,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                                      options.replayData->autoPlay),
                 courseResultOptions, resultPacemakerTarget,
                 std::move(ownedReusableRetryChart), reusableRetryChart,
-                gbattleResultPacemaker, analyticsSource,
+                resultPacemakerOverride, analyticsSource,
                 resultPersistenceOptions.chartAttempt != nullptr &&
                         resultPersistenceOptions.chartOutcome.has_value() &&
                         resultPersistenceOptions.chartOutcome->durable()
@@ -6883,7 +6902,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                                    .tableLevel = options.tableLevel},
                 resultGameplayGraph, std::nullopt,
                 options.guidedAccessReminderSkipped,
-                activeSkinIrTarget
+                activeSkinIrTarget && resultPacemakerTarget != pacemaker::kTargetGoal
                     ? std::optional<ResultPacemakerData>{ResultPacemakerData{
                           .label = activeSkinIrTarget->playerName,
                           .targetScore = activeSkinIrTarget->score,

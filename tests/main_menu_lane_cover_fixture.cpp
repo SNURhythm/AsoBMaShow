@@ -58,6 +58,7 @@ struct MainMenuScene {
   void setPlaybackModeSelection(const std::string &) {}
   void toggleGameplayClubMode() {}
   void setPacemakerTargetSelection(const std::string &) {}
+  std::string goalPacemakerLabel() const { return "AAA"; }
   void refreshGaugeSelectionButtons() { refreshPlayOptionsPanel(); }
   void refreshPlayOptionButtons() { refreshPlayOptionsPanel(); }
   void refreshLongNoteModeButtons() { refreshPlayOptionsPanel(); }

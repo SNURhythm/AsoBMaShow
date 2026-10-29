@@ -297,6 +297,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
   AppSettings expected = makeDistinctSettings();
+  expected.selectedPacemakerTarget = "GOAL";
+  expected.selectedPacemakerGoalId = 42;
   expected.audioOffsetMs = -1000;
   expected.visualOffsetMs = 1000;
   expected.presentation().noteStartPositionPercent = 33.4F;

@@ -1,4 +1,5 @@
 #pragma once
+#include "../goals/GoalPacemaker.h"
 #include "../i18n/Localization.h"
 #include "../BmsSearchService.h"
 #include "../ChartLibraryScanner.h"
@@ -132,6 +133,8 @@ private:
   std::vector<std::string> chartGoalHashes;
   void resumeGoalNavigation();
   void queueGoalSelection(const ChartMetaRecord &, int mode, const std::string &profile);
+  std::string goalPacemakerLabel() const;
+  mutable chart_goals::PacemakerCache goalPacemakerCache_;
   void applyGoalSelection(const ChartMetaRecord &, int mode);
   std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
   std::string pendingGoalProfile_;
