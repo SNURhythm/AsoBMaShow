@@ -49,32 +49,8 @@ float fadeOpacity(long long sampleTimeMicros, long long currentTimeMicros) {
 }
 
 Color judgementColor(Judgement judgement, uint8_t alpha) {
-  switch (judgement) {
-  case PGreat:
-    return Color(200, 255, 255, alpha);
-  case Great:
-    return Color(200, 255, 200, alpha);
-  case Good:
-    return Color(200, 200, 255, alpha);
-  case Bad:
-    return Color(255, 200, 200, alpha);
-  case Kpoor:
-    return Color(255, 50, 50, alpha);
-  case Poor:
-    return Color(255, 100, 100, alpha);
-  case None:
-  case JudgementCount:
-    break;
-  }
-  return Color(255, 255, 255, alpha);
-}
-
-Color timingMarkerColor(Judgement judgement, uint8_t alpha) {
-  Color color = judgementColor(judgement, alpha);
-  color.r = static_cast<uint8_t>((color.r + 255) / 2);
-  color.g = static_cast<uint8_t>((color.g + 255) / 2);
-  color.b = static_cast<uint8_t>((color.b + 255) / 2);
-  return color;
+  const auto rgb = judgement_indicator::defaultEventColor(judgement);
+  return Color((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, alpha);
 }
 
 void addRect(rendering::SimpleBatchRenderer &batch, float width, float height,
@@ -87,6 +63,14 @@ JudgementIndicatorRenderer::JudgementIndicatorRenderer(
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows)
     : timingWindows(timingWindows) {}
 
+void JudgementIndicatorRenderer::setColorization(
+    const judgement_indicator::Colorization &settings) {
+  const std::lock_guard lock(recordMutex);
+  if (colorization == settings) return;
+  colorization = settings;
+  judgement_indicator::sanitizeColorization(colorization);
+}
+
 void JudgementIndicatorRenderer::updateTimingWindows(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
   timingWindows = windows;
@@ -94,7 +78,10 @@ void JudgementIndicatorRenderer::updateTimingWindows(
 
 void JudgementIndicatorRenderer::configure(bool enabled, float y,
                                            float widthScale, bool hudMode,
-                                           int rangeMilliseconds) {
+                                           int rangeMilliseconds,
+                                           int lineThicknessPercent,
+                                           int eventHeightPercent,
+                                           int eventThicknessPercent) {
   const int nextYPermille =
       std::clamp(static_cast<int>(std::lround(std::clamp(y, 0.0f, 1.0f) *
                                               1000.0f)),
@@ -104,6 +91,9 @@ void JudgementIndicatorRenderer::configure(bool enabled, float y,
   const int nextWidthPermille =
       std::clamp(static_cast<int>(std::lround(clampedWidthScale * 1000.0f)),
                  500, 2000);
+  lineThickness.store(std::clamp(lineThicknessPercent, 25, 400), std::memory_order_relaxed);
+  eventHeight.store(std::clamp(eventHeightPercent, 25, 400), std::memory_order_relaxed);
+  eventThickness.store(std::clamp(eventThicknessPercent, 25, 400), std::memory_order_relaxed);
   yPermille.store(nextYPermille, std::memory_order_relaxed);
   widthPermille.store(nextWidthPermille, std::memory_order_relaxed);
   this->hudMode.store(hudMode, std::memory_order_relaxed);
@@ -161,6 +151,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
   }
 
   std::array<Sample, kMaxVisibleSamples> visibleSamples{};
+  std::array<judgement_indicator::EventStyle, kMaxVisibleSamples> visibleStyles{};
   size_t visibleSampleCount = 0;
   judgement_indicator::ExponentialAverageAccumulator average;
   {
@@ -173,6 +164,8 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
       Sample sample;
       if (readSample(sequence, sample) &&
           sample.createdTimeMicros <= currentTimeMicros) {
+        visibleStyles[visibleSampleCount] = judgement_indicator::resolveEventStyle(
+            colorization, sample.judgement, sample.diffMicros);
         visibleSamples[visibleSampleCount++] = sample;
       }
     }
@@ -237,6 +230,8 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
 
   for (size_t i = 0; i < visibleSampleCount; ++i) {
     const auto &sample = visibleSamples[i];
+    const auto &style = visibleStyles[i];
+    if (!style.visible) continue;
     const uint8_t alpha = alphaByte(
         fadeOpacity(sample.createdTimeMicros, currentTimeMicros));
     if (alpha == 0) {
@@ -244,9 +239,11 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
     }
     const float x =
         offsetToX(sample.diffMicros, currentRangeMicros, indicatorLayout);
+    const auto rgb = style.color.value_or(
+        judgement_indicator::defaultEventColor(sample.judgement));
     addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
             x - indicatorLayout.markerWidth * 0.5f, markerY,
-            timingMarkerColor(sample.judgement, alpha));
+            Color((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, alpha));
   }
 
   if (alphaByte(averageAlpha) > 0) {
@@ -310,6 +307,9 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
           std::clamp(widthPermille.load(std::memory_order_relaxed), 500, 2000)) /
       1000.0f;
 
+  const float lineScale = lineThickness.load(std::memory_order_relaxed) / 100.0f;
+  const float heightScale = eventHeight.load(std::memory_order_relaxed) / 100.0f;
+  const float thicknessScale = eventThickness.load(std::memory_order_relaxed) / 100.0f;
   Layout indicatorLayout{};
   if (hudMode) {
     indicatorLayout.width =
@@ -319,13 +319,15 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
     indicatorLayout.x =
         (static_cast<float>(rendering::window_width) - indicatorLayout.width) *
         0.5f;
-    indicatorLayout.barHeight = 7.0f;
-    indicatorLayout.markerHeight = 22.0f;
-    indicatorLayout.markerWidth = 3.0f;
+    indicatorLayout.barHeight = 7.0f * lineScale;
+    indicatorLayout.markerHeight = 22.0f * heightScale;
+    indicatorLayout.markerWidth = 3.0f * thicknessScale;
     indicatorLayout.centerY =
         static_cast<float>(rendering::window_height) * (1.0f - normalizedY);
-    const float verticalMargin = indicatorLayout.markerHeight * 0.5f +
-                                 indicatorLayout.markerWidth * 4.0f;
+    const float verticalMargin = std::min(
+        static_cast<float>(rendering::window_height) * 0.5f,
+        std::max(indicatorLayout.barHeight * 0.5f,
+                 indicatorLayout.markerHeight * 0.5f + indicatorLayout.markerWidth * 4.0f));
     indicatorLayout.centerY =
         std::clamp(indicatorLayout.centerY,
                    verticalMargin,
@@ -344,15 +346,16 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
   indicatorLayout.centerY = geometry.judgeY + verticalDirection * laneHeight * normalizedY;
   const bool skinPixels = geometry.verticalDirection < 0.0f;
   indicatorLayout.barHeight =
-      std::max(skinPixels ? 3.0f : 0.04f, geometry.noteRenderHeight * 0.16f);
+      std::max(skinPixels ? 3.0f : 0.04f, geometry.noteRenderHeight * 0.16f) * lineScale;
   indicatorLayout.markerHeight =
-      std::max(skinPixels ? 12.0f : 0.22f, geometry.noteRenderHeight * 0.7f);
+      std::max(skinPixels ? 12.0f : 0.22f, geometry.noteRenderHeight * 0.7f) * heightScale;
   indicatorLayout.markerWidth =
-      std::max(skinPixels ? 2.0f : 0.02f, geometry.noteRenderWidth * 0.025f);
+      std::max(skinPixels ? 2.0f : 0.02f, geometry.noteRenderWidth * 0.025f) * thicknessScale;
   if (skinPixels) {
     const float windowHeight = static_cast<float>(rendering::window_height);
     const float verticalMargin = std::min(windowHeight * 0.5f,
-        indicatorLayout.markerHeight * 0.5f + indicatorLayout.markerWidth * 4.0f);
+        std::max(indicatorLayout.barHeight * 0.5f,
+                 indicatorLayout.markerHeight * 0.5f + indicatorLayout.markerWidth * 4.0f));
     indicatorLayout.centerY = std::clamp(
         indicatorLayout.centerY, verticalMargin, windowHeight - verticalMargin);
   }

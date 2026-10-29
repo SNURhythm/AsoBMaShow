@@ -652,6 +652,28 @@ void readBuiltInLanes(const json &document, built_in_lane::Settings &settings,
   }
 }
 
+json indicatorStyleToJson(const judgement_indicator::EventStyle &style) {
+  json value = {{"visible", style.visible}};
+  if (style.color) value["color"] = built_in_notes::colorHex(*style.color);
+  return value;
+}
+
+json indicatorColorizationToJson(const judgement_indicator::Colorization &settings) {
+  json judgements = json::object();
+  for (const auto &option : player_settings::kJudgementTextVisibilityOptions)
+    judgements[option.label] = indicatorStyleToJson(settings.judgements[option.judgement]);
+  json ranges = json::array();
+  for (const auto &range : settings.ranges) {
+    auto entry = indicatorStyleToJson(range.style);
+    entry["fromMilliseconds"] = range.fromMilliseconds;
+    entry["toMilliseconds"] = range.toMilliseconds;
+    ranges.push_back(std::move(entry));
+  }
+  return {{"mode", static_cast<int>(settings.mode)},
+          {"judgements", std::move(judgements)}, {"ranges", std::move(ranges)},
+          {"outerRange", indicatorStyleToJson(settings.outerRange)}};
+}
+
 json presentationToJson(const AppSettings::PresentationSettings &settings) {
   json keybombs = json::object();
   for (const auto &[mode, styles] : settings.keybombs) {
@@ -696,6 +718,11 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
       {"judgementIndicatorY", settings.judgementIndicatorY},
       {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
+      {"judgementIndicatorLineThicknessPercent", settings.judgementIndicatorLineThicknessPercent},
+      {"judgementIndicatorEventHeightPercent", settings.judgementIndicatorEventHeightPercent},
+      {"judgementIndicatorEventThicknessPercent", settings.judgementIndicatorEventThicknessPercent},
+      {"judgementIndicatorColorization",
+       indicatorColorizationToJson(settings.judgementIndicatorColorization)},
       {"judgementIndicatorRangeMilliseconds",
        settings.judgementIndicatorRangeMilliseconds},
       {"keybombs", std::move(keybombs)},
@@ -966,6 +993,72 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
             diagnostics);
   readValue(document, "judgementIndicatorWidthScale",
             settings.judgementIndicatorWidthScale, diagnostics);
+  readValue(document, "judgementIndicatorLineThicknessPercent",
+            settings.judgementIndicatorLineThicknessPercent, diagnostics);
+  readValue(document, "judgementIndicatorEventHeightPercent",
+            settings.judgementIndicatorEventHeightPercent, diagnostics);
+  readValue(document, "judgementIndicatorEventThicknessPercent",
+            settings.judgementIndicatorEventThicknessPercent, diagnostics);
+  if (const auto found = document.find("judgementIndicatorColorization");
+      found != document.end()) {
+    if (!found->is_object()) {
+      invalidValue("judgementIndicatorColorization", "expected object", diagnostics);
+    } else {
+      auto &colorization = settings.judgementIndicatorColorization;
+      readEnum(*found, "mode", colorization.mode, diagnostics);
+      const auto readStyle = [&diagnostics](const json &value,
+                                            judgement_indicator::EventStyle &style) {
+        readValue(value, "visible", style.visible, diagnostics);
+        if (const auto color = value.find("color"); color != value.end()) {
+          const auto rgb = color->is_string()
+              ? built_in_notes::parseColor(color->get_ref<const std::string &>()) : std::nullopt;
+          if (rgb) style.color = *rgb;
+          else invalidValue("judgementIndicatorColorization.color",
+                            "expected six-digit RGB color", diagnostics);
+        }
+      };
+      if (const auto outer = found->find("outerRange"); outer != found->end()) {
+        if (outer->is_object()) readStyle(*outer, colorization.outerRange);
+        else invalidValue("judgementIndicatorColorization.outerRange", "expected object", diagnostics);
+      }
+      if (const auto judgements = found->find("judgements"); judgements != found->end()) {
+        if (judgements->is_object()) {
+          for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+            if (const auto entry = judgements->find(option.label); entry != judgements->end()) {
+              if (entry->is_object()) readStyle(*entry, colorization.judgements[option.judgement]);
+              else invalidValue("judgementIndicatorColorization.judgements",
+                                "expected judgement object", diagnostics);
+            }
+          }
+        } else invalidValue("judgementIndicatorColorization.judgements", "expected object", diagnostics);
+      }
+      if (const auto ranges = found->find("ranges"); ranges != found->end()) {
+        if (ranges->is_array()) {
+          colorization.ranges.clear();
+          const auto count = std::min(ranges->size(), judgement_indicator::kMaxColorRanges);
+          if (ranges->size() > count)
+            invalidValue("judgementIndicatorColorization.ranges", "too many ranges", diagnostics);
+          for (std::size_t index = 0; index < count; ++index) {
+            const auto &entry = (*ranges)[index];
+            if (!entry.is_object()) {
+              invalidValue("judgementIndicatorColorization.ranges", "expected range object", diagnostics);
+              continue;
+            }
+            judgement_indicator::ColorRange range;
+            readValue(entry, "fromMilliseconds", range.fromMilliseconds, diagnostics);
+            readValue(entry, "toMilliseconds", range.toMilliseconds, diagnostics);
+            readStyle(entry, range.style);
+            colorization.ranges.push_back(range);
+          }
+          const auto before = colorization.ranges;
+          judgement_indicator::sanitizeColorization(colorization);
+          if (colorization.ranges != before)
+            invalidValue("judgementIndicatorColorization.ranges",
+                         "ranges sorted, bounded, or invalid overlaps removed", diagnostics);
+        } else invalidValue("judgementIndicatorColorization.ranges", "expected array", diagnostics);
+      }
+    }
+  }
   readValue(document, "judgementIndicatorRangeMilliseconds",
             settings.judgementIndicatorRangeMilliseconds, diagnostics);
   if (const auto found = document.find("keybombs"); found != document.end()) {

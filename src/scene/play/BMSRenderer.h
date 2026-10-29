@@ -618,7 +618,9 @@ public:
   void setLaneBeamClockUsesRenderTime(bool enabled);
   void setShowInvisibleNotes(bool enabled);
   void setJudgementIndicatorConfig(bool enabled, float y, float widthScale,
-                                   bool hudMode, int rangeMilliseconds);
+                                   bool hudMode, int rangeMilliseconds,
+                 int lineThicknessPercent = 100, int eventHeightPercent = 100,
+                 int eventThicknessPercent = 100);
   void setJudgementTextY(float y);
   void setJudgementTimingY(float y);
   void setPacemakerDiffStyle(float y, int sizePercent, bool bold);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "JudgementIndicatorRange.h"
+#include "settings/JudgementIndicatorColorization.h"
 #include "LaneCover.h"
 #include "audio/PlaybackRate.h"
 #include "audio/ChartPreviewPolicy.h"
@@ -273,6 +274,10 @@ public:
     bool judgementIndicatorEnabled = true;
     float judgementIndicatorY = kDefaultJudgementIndicatorY;
     float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
+    int judgementIndicatorLineThicknessPercent = 100;
+    int judgementIndicatorEventHeightPercent = 100;
+    int judgementIndicatorEventThicknessPercent = 100;
+    judgement_indicator::Colorization judgementIndicatorColorization;
     int judgementIndicatorRangeMilliseconds =
         kDefaultJudgementIndicatorRangeMilliseconds;
     std::map<int, keybomb::Settings> keybombs;

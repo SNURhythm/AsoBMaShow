@@ -4330,7 +4330,11 @@ void BMSRenderer::configure(
       configuration.judgementIndicatorY,
       configuration.judgementIndicatorWidthScale,
       configuration.judgementIndicatorHudMode,
-      configuration.judgementIndicatorRangeMilliseconds);
+      configuration.judgementIndicatorRangeMilliseconds,
+      configuration.judgementIndicatorLineThicknessPercent,
+      configuration.judgementIndicatorEventHeightPercent,
+      configuration.judgementIndicatorEventThicknessPercent);
+  judgementIndicator.setColorization(configuration.judgementIndicatorColorization);
   keybombs = configuration.keybombs;
   if (judgementTextVisibility != configuration.judgementTextVisibility) {
     judgementTextVisibility = configuration.judgementTextVisibility;
@@ -4824,9 +4828,13 @@ void BMSRenderer::setShowInvisibleNotes(bool enabled) {
 
 void BMSRenderer::setJudgementIndicatorConfig(bool enabled, float y,
                                               float widthScale, bool hudMode,
-                                              int rangeMilliseconds) {
+                                              int rangeMilliseconds,
+                                              int lineThicknessPercent,
+                                              int eventHeightPercent,
+                                              int eventThicknessPercent) {
   judgementIndicator.configure(enabled, y, widthScale, hudMode,
-                               rangeMilliseconds);
+                               rangeMilliseconds, lineThicknessPercent,
+                               eventHeightPercent, eventThicknessPercent);
 }
 
 void BMSRenderer::setJudgementTextY(float y) {

@@ -1402,6 +1402,119 @@ void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
          "saved JSON contains the Find BMS preference");
 }
 
+void testJudgementIndicatorColorization() {
+  using namespace judgement_indicator;
+  Colorization settings;
+  for (const auto mode : {ColorizationMode::Default, ColorizationMode::PerJudgement,
+                          ColorizationMode::PerRange}) {
+    settings.mode = mode;
+    for (int judge = PGreat; judge <= Poor; ++judge) {
+      for (const long long timing : {-500'000LL, -20'000LL, 0LL, 60'000LL, 150'000LL}) {
+        const auto style = resolveEventStyle(settings, static_cast<Judgement>(judge), timing);
+        expect(style.visible && style.color.value_or(defaultEventColor(static_cast<Judgement>(judge))) ==
+                   defaultEventColor(static_cast<Judgement>(judge)),
+               "unmodified custom modes exactly preserve default event appearance");
+      }
+    }
+  }
+  settings.mode = ColorizationMode::PerJudgement;
+  settings.judgements[Great] = {false, 0x123456U};
+  expect(!resolveEventStyle(settings, Great, 0).visible &&
+             resolveEventStyle(settings, Good, 0).visible,
+         "judgement visibility overrides are independent");
+  settings.mode = ColorizationMode::Default;
+  expect(resolveEventStyle(settings, Great, 0).visible,
+         "default mode ignores retained custom rules");
+  settings.mode = ColorizationMode::PerRange;
+  settings.ranges = {{-31, 12, {false, 0xABCDEFU}},
+                     {12, 70, {true, 0x123456U}}};
+  expect(!resolveEventStyle(settings, Great, -31'000).visible &&
+             !resolveEventStyle(settings, Great, 11'999).visible &&
+             resolveEventStyle(settings, Great, 12'000).color == 0x123456U &&
+             !resolveEventStyle(settings, Great, 70'000).color.has_value(),
+         "asymmetric ranges use inclusive lower/exclusive upper bounds");
+  expect(!resolveEventStyle(settings, Great, -31'001).visible &&
+             !resolveEventStyle(settings, Great, 70'000).visible,
+         "uncovered outer timings are automatically hidden");
+  settings.ranges[1].fromMilliseconds = 20;
+  expect(resolveEventStyle(settings, Great, 15'000) == EventStyle{},
+         "interior gaps inherit the default rule");
+  auto edited = settings;
+  edited.ranges.clear();
+  expect(!resolveEventStyle(edited, Great, 0).visible,
+         "removing every range hides every timing event");
+  expect(addColorRange(edited) && edited.ranges.size() == 1 &&
+             edited.ranges.front().style == EventStyle{},
+         "adding a range to an empty list inherits default appearance");
+  expect(addColorRange(edited) && edited.ranges.size() == 2 &&
+             edited.ranges[0].toMilliseconds == edited.ranges[1].fromMilliseconds,
+         "adding to a full interval splits it without overlap");
+  edited.ranges = {{-3000, -2000, {}}, {40, 60, {}}, {-30, 20, {}}, {10, 50, {}}};
+  sanitizeColorization(edited);
+  expect(edited.ranges.size() == 2 && edited.ranges[0].fromMilliseconds == -30 &&
+             edited.ranges[1].fromMilliseconds == 40,
+         "invalid and overlapping ranges are removed and survivors sorted");
+  settings.outerRange = {true, 0xFEDCBAU};
+  expect(resolveEventStyle(settings, Good, -31'001) == settings.outerRange &&
+             resolveEventStyle(settings, Bad, 70'000) == settings.outerRange,
+         "fixed outer range supports editable visibility and color on both sides");
+  AppSettings app;
+  app.presentation().judgementIndicatorColorization = settings;
+  TempDirectory temp;
+  const auto path = temp.path() / "indicator-colors.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, app, error), "save indicator colors");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.presentation().judgementIndicatorColorization == settings,
+         "mode, judgement overrides and range rules survive restart");
+  expect(loaded.settings.presentation(AppSettings::PresentationOrientation::Portrait)
+             .judgementIndicatorColorization == Colorization{},
+         "colorization remains independent by orientation");
+}
+
+void testJudgementIndicatorDimensions() {
+  AppSettings settings;
+  auto &presentation = settings.presentation();
+  expect(presentation.judgementIndicatorLineThicknessPercent == 100,
+         "indicator dimension defaults preserve existing geometry");
+  presentation.judgementIndicatorLineThicknessPercent = 900;
+  expect(presentation.judgementIndicatorEventHeightPercent == 100,
+         "indicator dimension defaults preserve existing geometry");
+  presentation.judgementIndicatorEventHeightPercent = 900;
+  expect(presentation.judgementIndicatorEventThicknessPercent == 100,
+         "indicator dimension defaults preserve existing geometry");
+  presentation.judgementIndicatorEventThicknessPercent = 900;
+  settings.sanitize();
+  expect(presentation.judgementIndicatorLineThicknessPercent == 400,
+         "indicator dimension is bounded");
+  expect(presentation.judgementIndicatorEventHeightPercent == 400,
+         "indicator dimension is bounded");
+  expect(presentation.judgementIndicatorEventThicknessPercent == 400,
+         "indicator dimension is bounded");
+  TempDirectory temp;
+  const auto path = temp.path() / "indicator-dimensions.json";
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorLineThicknessPercent = -1;
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorEventHeightPercent = -1;
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorEventThicknessPercent = -1;
+  settings.sanitize();
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save indicator dimensions");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorLineThicknessPercent == 25,
+         "portrait dimension clamps independently and survives restart");
+  expect(loaded.settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorEventHeightPercent == 25,
+         "portrait dimension clamps independently and survives restart");
+  expect(loaded.settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorEventThicknessPercent == 25,
+         "portrait dimension clamps independently and survives restart");
+
+  expect(loaded.settings.presentation().judgementIndicatorLineThicknessPercent == 400,
+         "indicator dimension survives restart");
+  expect(loaded.settings.presentation().judgementIndicatorEventHeightPercent == 400,
+         "indicator dimension survives restart");
+  expect(loaded.settings.presentation().judgementIndicatorEventThicknessPercent == 400,
+         "indicator dimension survives restart");
+}
+
 void testJudgementIndicatorRangeDefaultsAndSanitization() {
   AppSettings defaults;
   defaults.sanitize();
@@ -2918,6 +3031,8 @@ int main() {
   testScreenOrientationRoundTripAndDefaults();
   testReplayPreferencesSurviveSettingsRoundTrip();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
+  testJudgementIndicatorColorization();
+  testJudgementIndicatorDimensions();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testLaneAngleAcceptsZeroAndPreservesItAcrossRestart();
   testBeatorajaStartSelectDurationRange();
