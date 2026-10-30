@@ -9,6 +9,13 @@ The observations and manual instructions below describe the earlier experiments;
 in particular, older statements about a cold launch restoring Nearest are historical.
 The portrait Direct/Composited cause remains unconfirmed.
 
+The user additionally reports that an iPhone 16 Pro on iOS 27.2 at 120 FPS
+was Direct in both orientations on a build predating this branch. The original
+source already used CAMetalDisplayLink. This makes the failing iPad's device
+and presentation configuration a key distinction; 120 FPS or the reported OS
+version alone cannot explain the difference. It does not establish an iPadOS
+bug or replace the pending plain UIKit/Metal-link comparison on the iPad.
+
 ## Current control: UIKit with CAMetalDisplayLink
 
 The user reported that build `202610301152` (`20dd20d1`) still shows Composited

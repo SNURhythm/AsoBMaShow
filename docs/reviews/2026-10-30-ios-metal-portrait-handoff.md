@@ -18,6 +18,14 @@ presentation in every fullscreen configuration.
 
 ## Evidence already collected
 
+- The user reports an iPhone 16 Pro on iOS 27.2 running at 120 FPS was Direct
+  in both orientations even before this diagnostic branch. The pre-branch
+  source (`18681762^`) already used CAMetalDisplayLink with latency 1 and the
+  same fixed preferred-rate request. The exact installed iPhone build was not
+  supplied. This weighs against a universal portrait/120 Hz/Metal-link
+  restriction; it does not isolate GPU family, panel, device settings or
+  iPadOS window/presentation behavior. In particular, the failing iPad and
+  working phone share the reported OS version and frame rate.
 - A pure UIKit/CADisplayLink triangle probe was Direct in both orientations.
   This establishes that portrait Direct is possible on this device, but this
   probe did not use CAMetalDisplayLink.
