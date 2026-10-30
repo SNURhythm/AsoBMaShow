@@ -2,7 +2,6 @@
 #include "SettingsSceneShared.h"
 
 #include "../path.h"
-#include "../platform/SDLMainThread.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
 #include "../view/ScrollView.h"
@@ -654,40 +653,6 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   });
   controls->addView(copyMetalDiagnostics);
 
-  // Temporary A/B test only; the hint is session-local and never saved.
-  const auto homeIndicatorTestEnabled = [] {
-    return platform::onMain([] {
-      const char *hint = SDL_GetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR);
-      return hint != nullptr && std::string_view(hint) == "1";
-    });
-  };
-  auto *homeIndicatorLabel = makeText(
-      homeIndicatorTestEnabled() ? "Hide home indicator: On"
-                                 : "Hide home indicator: Off",
-      metrics.bodyTextSize, app_theme::textPrimary(), TextView::CENTER,
-      TextView::MIDDLE);
-  auto *homeIndicatorButton = makeControlButton(
-      kFitContentWidth, metrics.actionButtonHeight, homeIndicatorLabel, true);
-  homeIndicatorButton->setOnClickListener(
-      [this, homeIndicatorTestEnabled, homeIndicatorLabel, homeIndicatorButton]() {
-        const bool enable = !homeIndicatorTestEnabled();
-        const bool applied = platform::onMain([enable] {
-          // SDL's callback touches UIKit, so hint mutation must run on main.
-          return enable ? SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "1")
-                        : SDL_ResetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR);
-        });
-        const bool enabled = homeIndicatorTestEnabled();
-        homeIndicatorLabel->setLocalizedText(enabled ? "Hide home indicator: On"
-                                                    : "Hide home indicator: Off");
-        if (auto *compact = dynamic_cast<toggle_button::CompactButton *>(homeIndicatorButton))
-          compact->refreshWidth();
-        setDisplayStatus(
-            !applied ? "Could not change the home indicator request."
-                     : enabled ? "Auto-hide requested. Stop touching; wait for the bar to hide, then check the HUD."
-                               : "Default home indicator behavior restored. Check the HUD after it settles.",
-            app_theme::sdl(applied ? app_theme::lime() : app_theme::coral()));
-      });
-  controls->addView(homeIndicatorButton);
 #endif
 
   cardsColumn->addView(makeCard(

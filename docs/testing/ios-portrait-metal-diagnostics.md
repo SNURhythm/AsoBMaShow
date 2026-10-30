@@ -13,31 +13,39 @@ was opaque, and had identity transforms, no mask, and no animations. The same
 level-10 secondary window existed in both modes. This provides no obvious
 app-layer explanation, but does not exclude system overlays or compositor policy.
 
-## Home indicator A/B test (snapshot v2)
+## Home indicator experiment result
 
-The next build adds **Hide home indicator: Off/On** beside the copy button.
-This is a temporary, session-only experiment, not a persisted setting or a fix.
-Startup behavior is unchanged. On sets `SDL_IOS_HIDE_HOME_INDICATOR=1`; Off resets
-that hint to SDL's default. Restarting the app also returns to the default.
+The tester reports that home-indicator hiding already existed and the added
+Off/On experiment made no difference. The toggle has been removed; do not repeat
+this experiment or treat it as a fix. Snapshot v2 retains the read-only hint and
+gesture-deferral fields. The HUD label alone does not identify the underlying
+compositor decision or measure its performance cost.
 
-1. In portrait, leave the test Off and confirm the baseline HUD mode.
-2. Turn it On. Stop touching the screen, wait for the home indicator to disappear,
-   then record the settled HUD mode and Present Delay. Merely setting the request
-   does not prove that iPadOS actually hid the indicator.
-3. Copy the diagnostics and report whether the indicator visibly disappeared.
-   The copy tap can reveal it again; report the HUD state from before that tap.
-4. Turn the test Off and repeat the observation. Check landscape with On as well.
+## Documentation check
 
-Report Off → On → Off results, plus the v2 report's `homeIndicatorHint` and
-`prefersHomeIndicatorHidden` values. Another full report is only needed if the
-mode or geometry changes.
+The captured state already satisfies the proposed opacity, pixel-format, sizing,
+and layer-transform checks: `opaque=1`, `opacity=1`, pixel format 80
+(`MTLPixelFormatBGRA8Unorm`), scale 2, native dimensions, and identity transforms.
+BGRA8 includes an alpha channel; switching to it cannot be a missing fix because
+it is already in use. The reports do not show a manually rotated Metal sublayer.
 
-SDL couples this hint to system gesture deferral: default fullscreen behavior
-dims the bar and defers edge gestures; auto-hide requests no edge deferral.
-Consequently a home swipe may act immediately while On. The report includes
-`deferredGestureEdges` to make that difference explicit. A positive result
-implicates this combined system-UI request, not necessarily the bar alone.
-An unchanged result does not establish a hardware limitation.
+Apple's [window setup article](https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos)
+is specifically about macOS/Apple silicon and explicitly allows hardware/software
+edge cases. It describes direct-display scaling, so exact native resolution is
+not a universal prerequisite for that path. It does not guarantee Direct mode
+on an iPad or offer an API to force it.
+
+The [Metal 4 UI modes](https://developer.apple.com/videos/play/wwdc2025/211/)
+are options for supplying UI to MetalFX frame interpolation, not controls for the
+window compositor's Direct/Composited decision. This app does not use MetalFX
+frame interpolation.
+
+Apple's [HUD explanation](https://developer.apple.com/videos/play/tech-talks/110339/)
+says compositing may add buffering/latency. It does not establish that this
+particular portrait case has degraded FPS or frame pacing, or that it must be an
+app optimization defect. A minimal native Metal reproduction on the same iPad
+would distinguish app integration from a device/OS behavior more effectively
+than reapplying layer settings already confirmed by these snapshots.
 
 ## Baseline Firebase device test
 
