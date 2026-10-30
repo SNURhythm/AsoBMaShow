@@ -6063,17 +6063,9 @@ bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {
     }
 
     CAMetalLayer *layer = (CAMetalLayer *)layerObject;
-    const CGSize boundsSize = layer.bounds.size;
-    if (boundsSize.width > 0.0 && boundsSize.height > 0.0) {
-      const CGFloat scaleX = static_cast<CGFloat>(width) / boundsSize.width;
-      const CGFloat scaleY = static_cast<CGFloat>(height) / boundsSize.height;
-      const CGFloat maxScale = std::max(scaleX, scaleY);
-      if (maxScale > 0.0 &&
-          std::abs(scaleX - scaleY) <= maxScale * static_cast<CGFloat>(0.02)) {
-        const CGFloat scale = (scaleX + scaleY) * static_cast<CGFloat>(0.5);
-        if (layer.contentsScale != scale) layer.contentsScale = scale;
-      }
-    }
+    // SDL/UIKit own the view's native point scale. An exact pixel extent can
+    // differ slightly from bounds * scale in Display Zoom; do not average its
+    // two axes back into contentsScale and provoke another layout resize.
     const CGSize size = CGSizeMake(width, height);
     if (!CGSizeEqualToSize(layer.drawableSize, size)) layer.drawableSize = size;
     return true;

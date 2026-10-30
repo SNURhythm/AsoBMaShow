@@ -498,3 +498,11 @@ lead, submission margin and actual display versus target. Pending/unavailable
 display timestamps are not counted as successful display. See the
 [timing investigation](../reviews/2026-10-30-metal-resume-timing.md) for interpretation
 and measurement limits. This diagnostic build does not claim to fix compositing.
+
+The first physical v8 comparison was confirmed Composited → Composited → Direct.
+Median target lead was almost identical across the two returns. It also exposed
+a 1667×2420 attachment between 1668×2420 sessions. The follow-up fix preserves
+exact renderer-selected pixels across unchanged SDL layouts and leaves UIKit's
+native contents scale intact. Genuine bounds/scale changes still resize. V8
+timing capture remains enabled; no pacing delay is added. See the
+[physical comparison and sizing reproduction](../reviews/2026-10-30-metal-resume-timing.md#physical-v8-result-composited--composited--direct).
