@@ -5891,6 +5891,20 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
 }
 
 namespace {
+CAMetalLayer *FindDiagnosticMetalLayer(CALayer *layer, unsigned depth,
+                                      unsigned &remaining) {
+  if (layer == nil || remaining == 0 || depth > 16) return nil;
+  --remaining;
+  if (layer.hidden || layer.opacity == 0) return nil;
+  if ([layer isKindOfClass:CAMetalLayer.class]) return (CAMetalLayer *)layer;
+  for (CALayer *child in layer.sublayers) {
+    if (remaining == 0) break;
+    if (CAMetalLayer *metal = FindDiagnosticMetalLayer(child, depth + 1, remaining))
+      return metal;
+  }
+  return nil;
+}
+
 // No layer contents, labels, identifiers, or addresses: only presentation
 // metadata. Bounded even if a native sheet has a large private layer tree.
 void AppendMetalDiagnosticLayer(NSMutableString *report, CALayer *layer,
@@ -5913,10 +5927,12 @@ void AppendMetalDiagnosticLayer(NSMutableString *report, CALayer *layer,
       t.m31, t.m32, t.m33, t.m34, t.m41, t.m42, t.m43, t.m44];
   [report appendFormat:
       @" contentsRect=%@ gravity=%@ sublayerTransformIdentity=%d "
-       "geometryFlipped=%d rasterize=%d rasterizationScale=%.4f\n",
+       "geometryFlipped=%d rasterize=%d rasterizationScale=%.4f\n"
+       " magnificationFilter=%@ minificationFilter=%@ minificationFilterBias=%.3f\n",
       NSStringFromCGRect(layer.contentsRect), layer.contentsGravity,
       CATransform3DIsIdentity(layer.sublayerTransform), layer.geometryFlipped,
-      layer.shouldRasterize, layer.rasterizationScale];
+      layer.shouldRasterize, layer.rasterizationScale,
+      layer.magnificationFilter, layer.minificationFilter, layer.minificationFilterBias];
   if ([layer isKindOfClass:CAMetalLayer.class]) {
     CAMetalLayer *metal = (CAMetalLayer *)layer;
     [report appendFormat:
@@ -5939,6 +5955,31 @@ void AppendMetalDiagnosticLayer(NSMutableString *report, CALayer *layer,
 }
 } // namespace
 
+std::string GetIOSMetalMagnificationFilter() {
+  return platform::onMain([]() -> std::string {
+    unsigned remaining = 128;
+    CAMetalLayer *layer = FindDiagnosticMetalLayer(FindActiveWindow().layer, 0, remaining);
+    const char *filter = layer.magnificationFilter.UTF8String;
+    return filter != nullptr ? filter : "";
+  });
+}
+
+bool SetIOSMetalMagnificationFilter(bool linear) {
+  return platform::onMain([linear] {
+    unsigned remaining = 128;
+    CAMetalLayer *layer = FindDiagnosticMetalLayer(FindActiveWindow().layer, 0, remaining);
+    if (layer == nil) return false;
+    NSString *filter = linear ? kCAFilterLinear : kCAFilterNearest;
+    if (![layer.magnificationFilter isEqualToString:filter]) {
+      [CATransaction begin];
+      [CATransaction setDisableActions:YES];
+      layer.magnificationFilter = filter;
+      [CATransaction commit];
+    }
+    return static_cast<bool>([layer.magnificationFilter isEqualToString:filter]);
+  });
+}
+
 bool CopyIOSMetalPresentationDiagnostics() {
   if (!platform::isMainThread())
     return platform::onMain([] { return CopyIOSMetalPresentationDiagnostics(); });
@@ -5948,7 +5989,7 @@ bool CopyIOSMetalPresentationDiagnostics() {
     UIScreen *screen = active.screen;
     const auto build = skin::compiledSkinBuildIdentity();
     NSMutableString *report = [NSMutableString stringWithFormat:
-        @"AsoBMaShow Metal presentation snapshot v2\ncommit=%s configuration=%s\n"
+        @"AsoBMaShow Metal presentation snapshot v3\ncommit=%s configuration=%s\n"
          "iOS=%@ orientation=%ld\n"
          "screen=%@ nativeBounds=%@ scale=%.4f nativeScale=%.4f mode=%@\n"
          "HUD Direct/Composited: record manually; not queried by this report.\n"

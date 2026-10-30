@@ -19,6 +19,9 @@ void HideIOSReplayExportProgress();
 
 // Diagnostic branch only: on-demand, metadata-only snapshot to the clipboard.
 bool CopyIOSMetalPresentationDiagnostics();
+// Temporary, unsaved A/B control for the active window's Metal layer.
+std::string GetIOSMetalMagnificationFilter();
+bool SetIOSMetalMagnificationFilter(bool linear);
 
 // UIKit main thread only. Recovery has no user cancellation path.
 void ShowIOSStorageRecoveryProgress();

@@ -38,7 +38,51 @@ This establishes that the SDL-created surface can present Direct in portrait.
 It does not establish that bgfx is the cause: the native probe also differs in
 drawable acquisition, scheduling, execution thread, and rendering workload.
 
-## Next test: CAMetalDisplayLink on the SDL surface
+## CAMetalDisplayLink device results
+
+Build `d90141f1062d6b690ee5e6a2ee6c136b312c11d7` reproduced Composited in
+portrait with the SDL CAMetalDisplayLink probe, before bgfx initialization.
+The report identifies `update.drawable` and preferred frame latency one.
+
+With Display Zoom enabled, the tester then reported Composited for normal
+rendering and Direct for the same probe in landscape (orientation 3). Both
+snapshots report 1408×970 window/layer bounds, scale/nativeScale 2, 2816×1940
+drawables, opaque BGRA8/sRGB, three drawables, identity transforms and the same
+secondary window. All captured layer properties match. This is not evidence
+that CAMetalDisplayLink universally prevents Direct mode.
+
+## Next test: layer magnification filter
+
+The bgfx Metal backend sets `magnificationFilter` to `nearest` during swap-chain
+initialization. The native probes leave it untouched; Apple's documented default
+is `linear`. Snapshot v2 omitted this property. Snapshot v3 records magnification,
+minification and minification bias for every layer. The filter difference is a
+candidate to isolate, not a confirmed compositor cause.
+
+1. With Display Zoom enabled, open normal rendering in landscape, then
+   Settings → Display. Under **Metal magnification filter (test)**, check that
+   **Nearest** is selected. Record the HUD mode and Present Delay, and copy the
+   diagnostics before changing the filter.
+2. Choose **Linear**, let the HUD settle, and repeat the capture. Check the
+   CAMetalLayer's `magnificationFilter=linear` in the new report.
+3. Choose **Nearest** again and repeat to check whether any change reverses.
+4. If the HUD mode changes, repeat the same test in portrait and with Display
+   Zoom disabled. Keep orientation and other settings fixed within each test.
+
+The control reads the actual active Metal layer and changes only its
+magnification filter, on the UIKit main thread with implicit animations disabled.
+It does not change minification, resolution, frame cap, scheduler, drawable count,
+or preferred frame latency. There is no saved setting or per-frame override;
+Nearest restores the existing app behavior, and a normal cold launch resets it
+through bgfx initialization. Layer scaling appearance may differ, so this remains
+a reversible experiment rather than a default rendering change.
+
+Local verification: the final unsigned iOS build and `git diff --check` passed.
+The control and native bridge were reviewed for current-value selection,
+main-thread mutation and bounded lookup. HUD mode, appearance and performance
+effects require the physical-device comparison above.
+
+## CAMetalDisplayLink probe instructions
 
 Choose **SDL Metal display link on next launch**, close the app from the app
 switcher, and reopen. Let rotation settle and record the triangle screen's HUD

@@ -654,6 +654,28 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   });
   controls->addView(copyMetalDiagnostics);
 
+  const auto currentMetalFilter = GetIOSMetalMagnificationFilter();
+  std::vector<GameplaySkinChoiceButton> metalFilters;
+  for (const bool linear : {false, true}) {
+    metalFilters.push_back({.label = linear ? "Linear" : "Nearest",
+        .selected = currentMetalFilter == (linear ? "linear" : "nearest"),
+        .tryAction = [this, linear] {
+      const bool applied = SetIOSMetalMagnificationFilter(linear);
+      setDisplayStatus(
+          applied ? (linear ? "Metal magnification: Linear. Read the HUD, then copy diagnostics."
+                            : "Metal magnification: Nearest. Read the HUD, then copy diagnostics.")
+                  : "No active Metal surface; filter was not changed.",
+          app_theme::sdl(applied ? app_theme::lime() : app_theme::coral()));
+      return applied;
+    }});
+  }
+  controls->addView(makeGameplaySkinChoiceRow(
+      metrics, overlayPortal, "Metal magnification filter (test)",
+      !currentMetalFilter.empty(), std::move(metalFilters)));
+  controls->addView(makeWrappedText(
+      "Temporary test. Nearest restores the app default; restarting also resets it.",
+      metrics.smallTextSize, app_theme::textMuted()));
+
   auto *nativeProbe = makeControlButton(
       kFitContentWidth, metrics.actionButtonHeight,
       makeText("Native Metal on next launch", metrics.bodyTextSize,
