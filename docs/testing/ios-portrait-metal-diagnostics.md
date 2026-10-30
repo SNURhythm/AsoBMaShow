@@ -23,7 +23,63 @@ does not explain the original app's behavior. The triangle's changing proportion
 were a probe shader issue (uncorrected normalized coordinates), now corrected
 using the drawable aspect ratio; the surface itself was not incorrectly sized.
 
-## Next test: native rendering on the SDL surface
+## SDL-surface baseline result
+
+Device result (`1a38b3f94b78c200a6e0a6f8de09a9735928f617`): the SDL-surface
+native test was Direct in both orientations. The portrait report identifies
+`SDL-created surface; bgfx not initialized`, with 486 submitted frames and an
+8.333 ms display-link timestamp interval (not presentation latency). Its drawable
+remained native 1668×2420, opaque BGRA8/sRGB, with three drawables and identity
+transforms. The level-10 secondary window and `prefersHomeIndicatorHidden=0`
+were present while Direct. Neither that window's presence nor that preference
+alone explains the normal app's portrait composition.
+
+This establishes that the SDL-created surface can present Direct in portrait.
+It does not establish that bgfx is the cause: the native probe also differs in
+drawable acquisition, scheduling, execution thread, and rendering workload.
+
+## Next test: CAMetalDisplayLink on the SDL surface
+
+Choose **SDL Metal display link on next launch**, close the app from the app
+switcher, and reopen. Let rotation settle and record the triangle screen's HUD
+mode and Present Delay in both orientations. Double-tap in portrait to copy the
+report and continue startup. Check for `scheduler=CAMetalDisplayLink`,
+`drawableSource=update.drawable`, and `preferredFrameLatency=1` in the report.
+
+This keeps the SDL surface, main-thread execution, native Metal triangle,
+pipeline, command submission/presentation, and no-bgfx startup boundary from the
+successful SDL probe. It replaces CADisplayLink/nextDrawable with
+CAMetalDisplayLink and its supplied drawable, requesting one frame of rendering
+latency as the normal app does. It does not reproduce the app worker or its
+frame-handoff logic. The new mode reports actual callback arrival intervals
+using CACurrentMediaTime; the older CADisplayLink modes report link timestamp
+intervals. Neither measurement is presentation latency.
+
+The request remains one-shot. The link is invalidated and its delegate released
+before the last command drains and normal bgfx startup acquires the layer.
+iOS versions below 17 report an unsupported-test error and resume startup rather
+than silently running a different scheduler.
+
+Composited in portrait would show that the symptom can occur without bgfx or
+gameplay when this display-link/drawable path is used. Direct would leave bgfx,
+the app's worker/handoff, workload, and other later startup differences to isolate.
+Neither outcome alone establishes the compositor's internal reason.
+
+Apple's [delegate documentation](https://developer.apple.com/documentation/quartzcore/cametaldisplaylinkdelegate/metaldisplaylink(_:needsupdate:))
+describes rendering into the supplied drawable; the probe retains ordinary
+command-buffer `presentDrawable` with no explicit presentation-time variant.
+
+Local verification for the new mode: the unsigned iOS build passed. An isolated
+Simulator harness compiled the actual probe source and exercised all three
+modes, each submitting at least ten frames, including after drawable resizing.
+It checked scheduler identity, the one-frame latency request, consumed/deferred/
+unarmed startup, snapshot labeling, exit gesture removal, release of both links
+and the delegate, and ordinary nextDrawable acquisition after teardown. SDL event
+pumping, raw-touch draining, main-thread dispatch and snapshot capture were
+stubbed; the external test surface was a UIKit Metal view. This does not verify
+real SDL rotation, full app re-entry, or the physical iPad's compositor decision.
+
+## SDL-surface baseline instructions
 
 Choose **SDL surface on next launch**, close the app from the app switcher,
 and reopen. Record the triangle screen's HUD in both orientations, then

@@ -672,13 +672,26 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
       makeText("SDL surface on next launch", metrics.bodyTextSize,
                app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   sdlProbe->setOnClickListener([this]() {
-    const bool armed = ArmIOSNativeMetalProbe(true);
+    const bool armed = ArmIOSNativeMetalProbe(IOSNativeMetalProbeMode::SDLSurface);
     setDisplayStatus(
         armed ? "SDL surface test armed. Close and reopen the app. Rotate and read the HUD; double-tap to copy diagnostics and return."
               : "Could not save the SDL surface test request.",
         app_theme::sdl(armed ? app_theme::lime() : app_theme::coral()));
   });
   controls->addView(sdlProbe);
+
+  auto *metalLinkProbe = makeControlButton(
+      kFitContentWidth, metrics.actionButtonHeight,
+      makeText("SDL Metal display link on next launch", metrics.bodyTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  metalLinkProbe->setOnClickListener([this]() {
+    const bool armed = ArmIOSNativeMetalProbe(IOSNativeMetalProbeMode::SDLMetalDisplayLink);
+    setDisplayStatus(
+        armed ? "Metal display link test armed. Close and reopen the app. Rotate and read the HUD; double-tap to copy diagnostics and return."
+              : "Could not save the Metal display link test request.",
+        app_theme::sdl(armed ? app_theme::lime() : app_theme::coral()));
+  });
+  controls->addView(metalLinkProbe);
 
 #endif
 
