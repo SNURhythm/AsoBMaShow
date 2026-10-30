@@ -141,7 +141,7 @@ plist = {
         "UISceneConfigurations": {"UIWindowSceneSessionRoleApplication": [
             {"UISceneConfigurationName": "Smoke", "UISceneDelegateClassName": "SDLUIKitSceneDelegate"}]}}
 }
-plist.update(CFBundleExecutable='Smoke',CFBundleIdentifier='com.snurhythm.sdl-orientation-smoke',CFBundleName='OrientationSmoke',UIRequiresFullScreen=True,UIRequiresFullScreenIgnoredStartingWithVersion='27')
+plist.update(CFBundleExecutable='Smoke',CFBundleIdentifier='com.snurhythm.sdl-orientation-smoke',CFBundleName='OrientationSmoke',UIRequiresFullScreen=True)
 (app/'Info.plist').write_bytes(plistlib.dumps(plist))
 framework = args.sdl_framework.resolve()
 shutil.copytree(framework,app/'Frameworks/SDL3.framework',dirs_exist_ok=True)

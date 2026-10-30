@@ -40,8 +40,6 @@
 			</array>
 		</dict>
 	</dict>
-	<key>UIRequiresFullScreenIgnoredStartingWithVersion</key>
-	<string>27</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

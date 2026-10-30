@@ -111,6 +111,12 @@ throughput. Buffer count is not a user setting.
   into both ears for gameplay, chart previews, and interface sounds.
   The choice is saved with the profile.
 - Display retains orientation and platform display controls.
+  iOS keeps `UIRequiresFullScreen` enabled to preserve explicit orientation
+  control in iPad Windowed Apps mode. On iOS/iPadOS 27, this compatibility mode
+  requests discrete resizing that honors supported orientations; it does not
+  prevent window resizing. The deprecated flag remains a compatibility
+  workaround, and Direct Metal presentation must be verified separately.
+  See [Apple's migration guidance](https://developer.apple.com/documentation/technotes/tn3192-migrating-your-app-from-the-deprecated-uirequiresfullscreen-key).
   On iOS, it also offers a saved **CAMetalDisplayLink** On/Off control.
   It defaults to On for new profiles and profiles without a saved preference.
   An explicit saved Off remains an override.
