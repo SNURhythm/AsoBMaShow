@@ -10,6 +10,10 @@ in particular, older statements about a cold launch restoring Nearest are histor
 The portrait Direct/Composited cause remains unconfirmed, and no further manual
 test is requested.
 
+Device follow-up on Firebase build `202610301045` (commit `2c868e6f`) confirms
+that portrait still shows Composited. The resize and filter corrections did not
+resolve that symptom; their passing native tests do not establish Direct mode.
+
 This diagnostic branch investigates a report from an 11-inch M5 iPad Pro on
 iPadOS 27.2: the Metal HUD stays Composited in portrait and returns to Direct in
 landscape. Reported drawable sizes are native (1668×2420 and 2420×1668), with

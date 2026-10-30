@@ -38,6 +38,12 @@ continues to report `AUDIT scheduled=1`. The original abort outcomes refer to
 the audited commit above. These fixes do not establish a cure for the separate
 steady portrait compositor state described later in this report.
 
+**Device follow-up:** after Firebase build `202610301045`, containing fix commit
+`2c868e6f634c63660ec1bd3e200bcb27217a9dad`, the user reports that portrait
+remains Composited. The fix therefore did not resolve the reported portrait
+symptom. The native regression results establish the attachment repair only;
+they must not be treated as validation of Direct presentation on this device.
+
 ## Findings
 
 ### 1. Resize can combine a new drawable with stale MSAA attachments
@@ -192,6 +198,17 @@ latency request, smaller rendering resolution, or pacing delay fixes it.
 No further manual device test is requested. Fixes for the independently proven
 issues can be evaluated with automated/native coverage without presenting them
 as a cure for the unresolved HUD behavior.
+
+The existing SDL-surface probe comparison makes the scheduling/acquisition path
+the strongest remaining lead: CADisplayLink with `nextDrawable` was Direct,
+whereas CAMetalDisplayLink with `update.drawable` reproduced portrait composition
+without bgfx. The probe uses the same drawing/submission routine in both modes.
+This comparison changes both scheduling and drawable acquisition; its callback
+clock also differs. It does not isolate an internal OS cause or prove that
+replacing the application's pacing API preserves gameplay latency. A production
+CADisplayLink alternative is consequently an unvalidated workaround, not a
+verified performance-neutral fix. Rechecking the probe against Apple's sample
+found no new submission-sequence defect that explains the orientation split.
 
 ## Reproduce the verified failure locally
 
