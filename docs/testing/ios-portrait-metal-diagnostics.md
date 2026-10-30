@@ -19,8 +19,9 @@ beside the app's CAMetalDisplayLink. Normal rendering now suppresses that SDL
 clock while the Metal link is attached, restoring SDL's refresh request for
 timer fallback. CAMetalDisplayLink remains the rendering scheduler. The older
 SDL-surface probe results below included the implicit SDL clock and must not
-be treated as a test of the Metal link alone. Portrait scanout improvement from
-this change is unverified; see finding 3 in the source audit for tested behavior.
+be treated as a test of the Metal link alone. Following distribution of build
+`202610301116` (`552f60b2`), the user again reports portrait Composited. This
+change did not resolve the reported symptom; see finding 3 in the source audit.
 
 This diagnostic branch investigates a report from an 11-inch M5 iPad Pro on
 iPadOS 27.2: the Metal HUD stays Composited in portrait and returns to Direct in

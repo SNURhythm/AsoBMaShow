@@ -173,11 +173,21 @@ The 60 Hz capability case also passes without creating a fallback clock. The
 desktop `main` build, unsigned iOS build, native drawable-provider test and
 frame-pacing test all pass after the ownership change.
 
-The coexistence finding is consistent with, but does not establish, an
-interaction between Core Animation and Metal refresh requests. There is no
-device Direct/Composited result for this change yet. It must not be presented as
-a proven portrait fix. The old SDL-surface probes retain their original behavior
-as historical controls; the ownership change applies to normal app rendering.
+The coexistence finding suggested an interaction between Core Animation and
+Metal refresh requests, but the local tests establish clock ownership only.
+It must not be presented as a proven portrait fix. The old SDL-surface probes
+retain their original behavior as historical controls; the ownership change
+applies to normal app rendering.
+
+**Device follow-up:** after distribution of build `202610301116` (commit
+`552f60b2`), the user again reports portrait Composited. Removing the duplicate
+clock therefore did not resolve the reported symptom. This is a user report,
+not a new captured trace proving attachment state or installed-build identity.
+Further source review found that SDL's Metal-view replacement reuses
+`data.viewcontroller`, and normal resize/rotation does not call `startAnimation`
+or create another controller. There is no source evidence that rotation silently
+undoes the suppression. Do not present this cleanup as progress demonstrated
+toward Direct mode, or use the failed result to declare an iPadOS bug proven.
 
 ## Presentation paths checked and not established as defects
 
@@ -255,9 +265,12 @@ verified performance-neutral fix. Rechecking the probe against Apple's sample
 found no new submission-sequence defect that explains the orientation split.
 
 The subsequently discovered implicit SDL clock (finding 3) further limits this
-comparison: it leaves a concrete application integration variable to isolate
-while **retaining CAMetalDisplayLink**. The user explicitly requires that API;
-replacing it with CADisplayLink is not the chosen direction.
+comparison. Suppressing it while retaining CAMetalDisplayLink did not resolve
+the reported symptom. The user explicitly requires CAMetalDisplayLink;
+replacing it with CADisplayLink is not the chosen direction. No additional
+source-backed portrait fix has been established. A
+[technical handoff draft](2026-10-30-ios-metal-portrait-handoff.md) records the remaining evidence boundary
+without asserting an OS defect or requesting further manual device tests.
 
 An additional Simulator experiment uses the production `MetalDisplayLink.mm`
 delegate and lease/provider code with real OS callbacks on a worker. In both
