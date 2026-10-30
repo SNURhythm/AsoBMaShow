@@ -12,7 +12,9 @@ struct MetalDisplayLinkState;
 // wait on this object's run loop. Native API availability is checked at runtime.
 class MetalDisplayLink {
 public:
-  MetalDisplayLink();
+  // Owner-thread notification when the link takes/releases refresh ownership,
+  // so a platform's fallback clock need not run alongside it. Not per frame.
+  explicit MetalDisplayLink(std::function<void(bool)> attachmentChanged = {});
   ~MetalDisplayLink();
   MetalDisplayLink(const MetalDisplayLink &) = delete;
   MetalDisplayLink &operator=(const MetalDisplayLink &) = delete;

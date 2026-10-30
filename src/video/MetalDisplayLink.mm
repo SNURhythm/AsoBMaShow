@@ -18,6 +18,8 @@ struct MetalDisplayLinkState {
   id<CAMetalDrawable> drawable = nil;
   MetalDisplayLinkFrame frame;
   std::function<bool()> isCurrent;
+  std::function<void(bool)> attachmentChanged;
+  bool notifiedAttached = false;
   std::uint64_t generation = 0;
   float rate = 0;
   double retryAfter = 0;
@@ -75,6 +77,10 @@ void invalidate(MetalDisplayLinkState &state) {
   state.layer = nil;
   state.rate = 0;
   state.recreationRequested = false;
+  if (state.notifiedAttached) {
+    state.notifiedAttached = false;
+    if (state.attachmentChanged) state.attachmentChanged(false);
+  }
 }
 bool geometryMatches(const MetalDisplayLinkState &state, void *layer) {
   if (layer != (__bridge void *)state.layer || state.drawable == nil ||
@@ -109,9 +115,10 @@ bool shouldPresent(void *layer, void *drawable) {
 const MetalDrawableProvider provider{acquireDrawable, shouldPresent};
 }
 
-MetalDisplayLink::MetalDisplayLink()
+MetalDisplayLink::MetalDisplayLink(std::function<void(bool)> attachmentChanged)
     : state_(std::make_unique<MetalDisplayLinkState>()) {
   assert(current == nullptr);
+  state_->attachmentChanged = std::move(attachmentChanged);
   current = state_.get();
   asobmashowMetalSetDrawableProvider(&provider);
 }
@@ -161,6 +168,10 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
       if (state.rate != rate) {
         link.preferredFrameRateRange = CAFrameRateRangeMake(rate, rate, rate);
         state.rate = rate;
+      }
+      if (!state.notifiedAttached) {
+        state.notifiedAttached = true;
+        if (state.attachmentChanged) state.attachmentChanged(true);
       }
       state.generation = generation;
       state.isCurrent = std::move(isCurrent);

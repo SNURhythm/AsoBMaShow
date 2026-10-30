@@ -5,6 +5,7 @@
 #include <bgfx/bgfx.h>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 @interface AsoDrawableProbeLayer : CAMetalLayer
 @property(nonatomic) NSUInteger acquisitions;
@@ -83,7 +84,9 @@ int main() {
     require(layer.acquisitions == acquired + 1,
             "removing provider restores native drawable acquisition");
     if (@available(macOS 14.0, iOS 17.0, *)) {
-      video::MetalDisplayLink link;
+      std::vector<bool> attachmentChanges;
+      video::MetalDisplayLink link([&](bool attached) { attachmentChanges.push_back(attached); });
+      require(attachmentChanges.empty(), "constructing an inactive link leaves the fallback clock alone");
       // White-box native fixture: use a real attached CAMetalDisplayLink and
       // real drawable, but seed the lease deterministically. No claim of native
       // callback delivery: a headless layer need not receive display updates.
@@ -148,6 +151,8 @@ int main() {
                   state.creationSerial == 1 && state.manualRecreations == 1 &&
                   !state.recreationRequested,
               "next frame replaces the link exactly once before obtaining its lease");
+      require(attachmentChanges == std::vector<bool>{true},
+              "attaching a display link transfers refresh ownership before returning its frame");
       require(layer.acquisitions == attachedAcquisitions &&
                   CGSizeEqualToSize(layer.drawableSize, sizeBefore) &&
                   layer.maximumDrawableCount == countBefore &&
@@ -159,6 +164,8 @@ int main() {
                   "manualRequests=1 manualRecreations=1 recreationPending=0") != std::string::npos,
               "snapshot confirms completed replacement");
       link.endFrame(); // Do not present the fixture's already-presented drawable again.
+      require(attachmentChanges == std::vector<bool>{true},
+              "ending a frame retains display-link refresh ownership");
       state.generation = 8;
       state.isCurrent = [&] { return active; };
       state.frame.begin(8);
@@ -171,6 +178,11 @@ int main() {
       require(video::MetalDisplayLink::requestRecreationForDiagnostics(),
               "another request can be queued before lifecycle cancellation");
       link.pause();
+      require(attachmentChanges == std::vector<bool>({true, false}),
+              "detaching the link restores fallback refresh ownership immediately");
+      link.pause();
+      require(attachmentChanges == std::vector<bool>({true, false}),
+              "repeated pause does not repeatedly rebuild the fallback clock");
       require(!state.recreationRequested && state.manualRecreations == 1 &&
                   !video::MetalDisplayLink::requestRecreationForDiagnostics(),
               "lifecycle pause cancels pending recreation without reporting completion");

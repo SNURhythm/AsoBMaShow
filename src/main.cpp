@@ -69,6 +69,7 @@
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
 #include "platform/IOSNativeMetalProbe.h"
+#include "platform/IOSSDLRefreshClock.h"
 #include "video/IOSPresentationPacing.h"
 #include "video/MetalDisplayLink.h"
 #include "input/IOSTouchInput.h"
@@ -998,7 +999,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.replayVideoExportActive.load(std::memory_order_acquire);
 #if TARGET_OS_IPHONE
   FramePacer iosPresentationPacer;
-  video::MetalDisplayLink iosDisplayLink;
+  video::MetalDisplayLink iosDisplayLink([](bool attached) {
+    SetIOSSDLRefreshClockEnabled(s_window, !attached);
+  });
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
   bool iosViewportRestorePending = false;

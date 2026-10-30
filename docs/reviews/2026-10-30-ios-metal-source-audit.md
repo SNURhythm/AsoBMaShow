@@ -135,6 +135,50 @@ with either filter after a background interval. The filter finding must not be
 reported as a verified solution for that separate behavior or as a measured
 latency/FPS improvement.
 
+### 3. SDL's implicit refresh clock remains active beside the Metal link
+
+**Verified redundant callback source; portrait causality remains unverified.**
+
+`SDL_uikitviewcontroller.m:109–121` automatically creates a CADisplayLink when
+the primary display advertises more than 60 Hz, even without an animation
+callback. At 120 Hz it requests the range 80/120/120. `doLoop:` does no application
+work when `animationCallback` is null, but the display link still fires. The app
+did not stop this clock when its CAMetalDisplayLink took over presentation.
+This behavior also exists in the earlier **SDL-surface** native probes, so the
+CAMetalDisplayLink probe did not isolate Metal scheduling from SDL's refresh
+request. The pure UIKit probe that was Direct used CADisplayLink instead.
+
+The follow-up change keeps CAMetalDisplayLink and uses an owner-thread attachment
+notification to disable SDL's implicit clock through the public
+`SDL_SetiOSAnimationCallback(window, 1, nullptr, nullptr)` API. On detach, the
+same API installs a no-op callback only for a >60 Hz primary display, preserving
+the high-refresh request during timer fallback. SDL's restore API requests
+120/120/120 at a 120 Hz screen, rather than its startup 80/120/120 range. The
+application frame cap still governs fallback rendering; the helper never runs
+application work. The Metal rate request, latency one, drawable count three,
+resolution and presentation sequence are unchanged. Frame completion does not
+toggle the helper, and repeated invalidation does not recreate it repeatedly.
+
+A standalone Simulator harness links the actual built SDL framework and the
+new application helper. It observes real SDL and Metal callbacks, disables SDL
+from a worker through the main-thread bridge, verifies 20 further Metal frames
+with no additional SDL ticks, then verifies SDL ticks resume after Metal is
+invalidated. The helper stub fails the stopped-clock assertion; the implemented
+helper passes. The simulator's advertised screen capability is overridden to
+exercise SDL's >60 Hz branch: this is **not a physical 120 Hz throughput test**.
+The native drawable-provider regression also fails without attachment
+notifications and passes with them, covering attach, frame completion, detach
+and repeated pause. See the [reproduction harnesses](evidence/metal-clock/README.md).
+The 60 Hz capability case also passes without creating a fallback clock. The
+desktop `main` build, unsigned iOS build, native drawable-provider test and
+frame-pacing test all pass after the ownership change.
+
+The coexistence finding is consistent with, but does not establish, an
+interaction between Core Animation and Metal refresh requests. There is no
+device Direct/Composited result for this change yet. It must not be presented as
+a proven portrait fix. The old SDL-surface probes retain their original behavior
+as historical controls; the ownership change applies to normal app rendering.
+
 ## Presentation paths checked and not established as defects
 
 - **Command-buffer `presentDrawable`:** Apple's documentation says this calls
@@ -209,6 +253,22 @@ replacing the application's pacing API preserves gameplay latency. A production
 CADisplayLink alternative is consequently an unvalidated workaround, not a
 verified performance-neutral fix. Rechecking the probe against Apple's sample
 found no new submission-sequence defect that explains the orientation split.
+
+The subsequently discovered implicit SDL clock (finding 3) further limits this
+comparison: it leaves a concrete application integration variable to isolate
+while **retaining CAMetalDisplayLink**. The user explicitly requires that API;
+replacing it with CADisplayLink is not the chosen direction.
+
+An additional Simulator experiment uses the production `MetalDisplayLink.mm`
+delegate and lease/provider code with real OS callbacks on a worker. In both
+the app-style nested main-run-loop pumping mode and an ordinary UIKit run loop,
+120 frames were submitted, all observed scheduled handlers preceded the supplied
+deadline, and four nonanimated layer-position changes reached the presentation
+tree without a forced transaction flush. The largest observed convergence delay
+was approximately 16.4 ms on that Simulator. This does not reproduce transaction
+starvation or establish a benefit from forcing CATransaction flushes. It is a
+small clear-pass harness, not the full application's workload; Simulator does
+not provide physical iPad scanout or the drawable presented-time API here.
 
 ## Reproduce the verified failure locally
 
