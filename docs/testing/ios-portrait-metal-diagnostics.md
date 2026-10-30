@@ -77,6 +77,14 @@ and gameplay lock/unlock, asserting the effective scene state. The installed
 coverage, not verification of the reported iPad behavior. The physical iPad
 orientation and Direct/Composited result remain pending.
 
+The subsequent physical-device v6 result confirms exact 1668×2420 drawables,
+but the HUD remains Composited. With Landscape selected, the report shows
+`orientation=1`, `prefersLocked=1`, and `effectiveLocked=1`: the system accepted
+the lock while the scene remained portrait. The previous Simulator pass did
+not validate this iPad transition. See the
+[iPhone/iPad comparison](../reviews/2026-10-30-ios-ipados-presentation-differences.md)
+for the source-policy distinction and remaining measurement limits.
+
 ## Completed control: UIKit with CAMetalDisplayLink
 
 The user reported that build `202610301152` (`20dd20d1`) still shows Composited

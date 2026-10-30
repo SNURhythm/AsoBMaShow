@@ -3,6 +3,16 @@
 Draft only. Not submitted to Apple or another service. This is an unresolved
 presentation investigation, not a claim of a confirmed operating-system defect.
 
+## Latest follow-up
+
+Build `202610301218` still has both reported symptoms. Its v6 snapshot confirms
+native 1668×2420 drawables and an accepted orientation lock, but the scene is
+portrait with a Landscape hint. The
+[iPhone/iPad source comparison](2026-10-30-ios-ipados-presentation-differences.md)
+records the updated evidence and separates the orientation-policy mismatch from
+the unresolved compositor decision. Older pending-control statements below
+refer to the earlier stages of this investigation.
+
 ## Reported environment and question
 
 The tester reports an 11-inch M5 iPad Pro on iPadOS 27.2. The device enumerated
