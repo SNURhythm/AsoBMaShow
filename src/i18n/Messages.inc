@@ -1638,7 +1638,7 @@
 {"settings.display.frame_cap.label", "Frame cap", "최대 프레임", "フレームレート上限", "帧率上限", "影格率上限"},
 {"settings.display.keep.label", "Keep", "유지", "維持", "保留", "保留"},
 {"settings.display.keep_display_changes.label", "Keep display changes?", "변경한 디스플레이 설정을 유지할까요?", "変更したディスプレイ設定を維持しますか？", "保留显示设置更改？", "保留顯示設定變更？"},
-{"settings.display.metal_display_link.description", "Alternative frame scheduling, off by default. May use composited presentation on some iPads. Applies immediately; turn off if latency or smoothness worsens.", "기본값이 꺼짐인 대체 프레임 스케줄링입니다. 일부 iPad에서는 합성 표시 경로를 사용할 수 있습니다. 즉시 적용되며, 지연이나 부드러움이 나빠지면 끄세요.", "初期設定ではオフの代替フレームスケジューリングです。一部のiPadでは合成表示になる場合があります。すぐに適用されます。遅延や滑らかさが悪化した場合はオフにしてください。", "替代帧调度方式，默认关闭。部分 iPad 可能会使用合成显示。立即生效；若延迟或流畅度变差，请关闭。", "替代影格排程方式，預設關閉。部分 iPad 可能會使用合成顯示。立即生效；若延遲或流暢度變差，請關閉。"},
+{"settings.display.metal_display_link.description", "Use Metal display-link scheduling during gameplay. On by default. Turn off if latency or smoothness worsens.", "플레이 중 Metal 디스플레이 링크로 프레임을 표시합니다. 기본값은 켜짐입니다. 지연이 늘거나 화면이 덜 부드러워지면 끄세요.", "プレイ中にMetalディスプレイリンクでフレームを表示します。初期設定はオンです。遅延や滑らかさが悪化した場合はオフにしてください。", "游戏过程中使用 Metal 显示链接调度帧。默认开启。若延迟或流畅度变差，请关闭。", "遊戲過程中使用 Metal 顯示連結排程影格。預設開啟。若延遲或流暢度變差，請關閉。"},
 {"settings.display.mode.label", "Mode", "모드", "モード", "模式", "模式"},
 {"settings.display.orientation.label", "Screen orientation", "화면 방향", "画面の向き", "屏幕方向", "螢幕方向"},
 {"settings.display.orientation_auto.label", "Auto", "자동", "自動", "自动", "自動"},

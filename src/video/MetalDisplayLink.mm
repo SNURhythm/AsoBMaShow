@@ -14,6 +14,7 @@ namespace video {
 struct MetalDisplayLinkWarmup {
   enum Phase { NeedsFrame, WaitingForDisplay, Displayed };
   std::atomic<Phase> phase{NeedsFrame};
+  double requestedAt = 0; // Render owner only; completion writes only phase.
 };
 struct MetalDisplayLinkState {
   // All state, callbacks and run-loop operations belong to one worker.
@@ -124,6 +125,7 @@ bool shouldPresent(void *layer, void *drawable) {
         nativeDrawable.texture.height == current->drawableSize.height &&
         nativeDrawable.texture.pixelFormat == current->pixelFormat &&
         warmup->phase.compare_exchange_strong(expected, MetalDisplayLinkWarmup::WaitingForDisplay)) {
+      warmup->requestedAt = CACurrentMediaTime();
       [nativeDrawable addPresentedHandler:^(id<MTLDrawable> presented) {
         warmup->phase.store(presented.presentedTime > 0
             ? MetalDisplayLinkWarmup::Displayed : MetalDisplayLinkWarmup::NeedsFrame,
@@ -189,6 +191,13 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
         state.drawableSize = layer.drawableSize;
         state.bounds = layer.bounds;
         state.pixelFormat = layer.pixelFormat;
+        state.warmup = std::make_shared<MetalDisplayLinkWarmup>();
+      }
+      if (state.warmup->phase.load(std::memory_order_acquire) ==
+              MetalDisplayLinkWarmup::WaitingForDisplay &&
+          CACurrentMediaTime() - state.warmup->requestedAt >= 1.0) {
+        // A missing observer must not strand this surface in fallback. Retire
+        // its token so a late completion cannot authorize the replacement.
         state.warmup = std::make_shared<MetalDisplayLinkWarmup>();
       }
       if (state.warmup->phase.load(std::memory_order_acquire) != MetalDisplayLinkWarmup::Displayed) {

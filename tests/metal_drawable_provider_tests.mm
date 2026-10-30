@@ -112,6 +112,16 @@ int main() {
       require(video::shouldPresent((__bridge void *)layer, (__bridge void *)probe) &&
                   probe.handler != nil && !link.needsOrdinaryFrame(),
               "ordinary present installs one display observer without attaching a link");
+      auto abandonedHandler = probe.handler;
+      state.warmup->requestedAt = CACurrentMediaTime() - 2.0;
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 7, [&] { return active; }) &&
+                  link.needsOrdinaryFrame(),
+              "missing display callback must request a fresh ordinary frame without attaching");
+      probe.presentedTime = 1.0;
+      abandonedHandler((id<MTLDrawable>)probe);
+      require(link.needsOrdinaryFrame(), "timed-out callback cannot unlock its replacement");
+      probe.presentedTime = 0;
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
       probe.handler((id<MTLDrawable>)probe);
       require(link.needsOrdinaryFrame(), "dropped frame cannot finish the display handoff");
       video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);

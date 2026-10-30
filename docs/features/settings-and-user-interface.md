@@ -112,13 +112,23 @@ throughput. Buffer count is not a user setting.
   The choice is saved with the profile.
 - Display retains orientation and platform display controls.
   On iOS, it also offers a saved **CAMetalDisplayLink** On/Off control.
-  It defaults to Off for new and existing profiles and applies on the next frame.
+  It defaults to On for new profiles and profiles without a saved preference.
+  An explicit saved Off remains an override.
   Off uses ordinary Metal drawable acquisition, SDL's high-refresh request and
-  the existing frame cap. On enables Metal display-link scheduling when supported;
-  unsupported frame caps and interrupted callbacks still use the normal fallback.
-  Startup and reattachment first present an ordinary frame and wait for its
-  displayed callback. UIKit rotation suspends the link; it can reattach after
-  the transition ends and an ordinary frame in the new geometry is displayed.
+  the existing frame cap. On enables Metal display-link scheduling only in the
+  orientation-locked gameplay scene, including preparation and in-game pauses.
+  Menus and results always use ordinary rendering. The link detaches before
+  leaving gameplay releases the orientation lock.
+  Gameplay entry and geometry reattachment first present an ordinary frame and
+  wait for its displayed callback. UIKit rotation suspends the link until the
+  transition ends. Unsupported frame caps and interrupted callbacks still use
+  the normal fallback.
+  If gameplay loses application activity, ordinary rendering resumes immediately
+  on return and remains in use until gameplay is left and entered again. There
+  is no timed foreground reattachment. A new gameplay scene entered while the
+  application is inactive also stays on ordinary rendering.
+  A missing ordinary-frame display callback is retried after one second, with
+  obsolete callbacks ignored.
   The Simulator uses the ordinary path because it lacks that display callback.
   Some iPads use Composited presentation with this option enabled. The game cannot
   query Direct/Composited through a documented public API; the Metal HUD remains

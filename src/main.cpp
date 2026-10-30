@@ -788,11 +788,22 @@ static void reportResultRecoveryWarning(
 
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+#if TARGET_OS_IPHONE
+  platform::IOSGameplayMetalPolicy iosGameplayMetal;
+#endif
   player_settings::PresentationOrientationState presentationOrientation;
   presentationOrientation.updateViewport(rendering::render_width, rendering::render_height);
   bool orientationLocked = false;
   auto appliedOrientation = context.settings.screenOrientation;
   context.setGameplayOrientationLocked = [&](bool locked) {
+#if TARGET_OS_IPHONE
+    if (locked != orientationLocked) {
+      // Gameplay owns this lock. Release the link before unlocking can rotate
+      // the layer; a new gameplay span starts its own displayed-frame handoff.
+      video::MetalDisplayLink::pauseCurrent();
+      iosGameplayMetal.setGameplayActive(locked, GetIOSPresentationState());
+    }
+#endif
     if (locked && !orientationLocked) {
       int logicalWidth = 0;
       int logicalHeight = 0;
@@ -1127,7 +1138,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const auto displayLinkViewport = GetIOSWindowSnapshot(s_window);
     bool iosDisplayLinkFrame = false;
     if (context.settings.iosMetalDisplayLink &&
-        !iosPreparedFrame.pending() && displayLinkState.active &&
+        !iosPreparedFrame.pending() && iosGameplayMetal.allows(displayLinkState) &&
         !context.replayVideoExportActive.load(std::memory_order_acquire) &&
         !context.rendererAccess.exportRequested()) {
       iosDisplayLinkFrame = iosDisplayLink.beginFrame(
@@ -1137,7 +1148,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               geometryGeneration = displayLinkViewport ? displayLinkViewport->geometryGeneration : 0] {
             const auto state = GetIOSPresentationState();
             const auto viewport = GetIOSWindowSnapshot(s_window);
-            return state.active && state.generation == generation &&
+            return iosGameplayMetal.allows(state) && state.generation == generation &&
                 viewport && !viewport->geometryChanging &&
                 viewport->geometryGeneration == geometryGeneration &&
                 !context.appInBackground.load(std::memory_order_acquire) &&
