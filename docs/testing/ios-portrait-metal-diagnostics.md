@@ -5,7 +5,41 @@ iPadOS 27.2: the Metal HUD stays Composited in portrait and returns to Direct in
 landscape. Reported drawable sizes are native (1668×2420 and 2420×1668), with
 Display Zoom disabled. The cause is not established; this is not a fix.
 
-## Firebase device test
+The first Firebase test (build commit
+`b5dc0d4ec360a8e515a6f6051189a33940fe48f1`) confirmed Composited in both portrait
+orientations (1 and 2), and Direct in landscape orientation 3. All reported
+Metal properties matched apart from width/height. The layer filled the window,
+was opaque, and had identity transforms, no mask, and no animations. The same
+level-10 secondary window existed in both modes. This provides no obvious
+app-layer explanation, but does not exclude system overlays or compositor policy.
+
+## Home indicator A/B test (snapshot v2)
+
+The next build adds **Hide home indicator: Off/On** beside the copy button.
+This is a temporary, session-only experiment, not a persisted setting or a fix.
+Startup behavior is unchanged. On sets `SDL_IOS_HIDE_HOME_INDICATOR=1`; Off resets
+that hint to SDL's default. Restarting the app also returns to the default.
+
+1. In portrait, leave the test Off and confirm the baseline HUD mode.
+2. Turn it On. Stop touching the screen, wait for the home indicator to disappear,
+   then record the settled HUD mode and Present Delay. Merely setting the request
+   does not prove that iPadOS actually hid the indicator.
+3. Copy the diagnostics and report whether the indicator visibly disappeared.
+   The copy tap can reveal it again; report the HUD state from before that tap.
+4. Turn the test Off and repeat the observation. Check landscape with On as well.
+
+Report Off → On → Off results, plus the v2 report's `homeIndicatorHint` and
+`prefersHomeIndicatorHidden` values. Another full report is only needed if the
+mode or geometry changes.
+
+SDL couples this hint to system gesture deferral: default fullscreen behavior
+dims the bar and defers edge gestures; auto-hide requests no edge deferral.
+Consequently a home swipe may act immediately while On. The report includes
+`deferredGestureEdges` to make that difference explicit. A positive result
+implicates this combined system-UI request, not necessarily the bar alone.
+An unchanged result does not establish a hardware limitation.
+
+## Baseline Firebase device test
 
 The PR targets `develop`, triggering the existing iOS Firebase workflow.
 

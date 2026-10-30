@@ -5948,7 +5948,7 @@ bool CopyIOSMetalPresentationDiagnostics() {
     UIScreen *screen = active.screen;
     const auto build = skin::compiledSkinBuildIdentity();
     NSMutableString *report = [NSMutableString stringWithFormat:
-        @"AsoBMaShow Metal presentation snapshot v1\ncommit=%s configuration=%s\n"
+        @"AsoBMaShow Metal presentation snapshot v2\ncommit=%s configuration=%s\n"
          "iOS=%@ orientation=%ld\n"
          "screen=%@ nativeBounds=%@ scale=%.4f nativeScale=%.4f mode=%@\n"
          "HUD Direct/Composited: record manually; not queried by this report.\n"
@@ -5957,6 +5957,9 @@ bool CopyIOSMetalPresentationDiagnostics() {
         UIDevice.currentDevice.systemVersion, (long)active.windowScene.interfaceOrientation,
         NSStringFromCGRect(screen.bounds), NSStringFromCGRect(screen.nativeBounds),
         screen.scale, screen.nativeScale, NSStringFromCGSize(screen.currentMode.size)];
+    const char *homeHint = SDL_GetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR);
+    [report appendFormat:@"homeIndicatorHint=%s (unset uses SDL fullscreen default)\n",
+                         homeHint != nullptr ? homeHint : "unset"];
     unsigned remaining = 128;
     unsigned windowCount = 0;
     for (UIWindow *window in active.windowScene.windows ?: @[active]) {
@@ -5964,11 +5967,12 @@ bool CopyIOSMetalPresentationDiagnostics() {
       UIViewController *controller = window.rootViewController;
       [report appendFormat:
           @"WINDOW key=%d hidden=%d alpha=%.3f level=%.3f bounds=%@ safeInsets=%@ "
-           "statusBarHidden=%d prefersHomeIndicatorHidden=%d\n",
+           "statusBarHidden=%d prefersHomeIndicatorHidden=%d deferredGestureEdges=%lu\n",
           window.isKeyWindow, window.hidden, window.alpha, window.windowLevel,
           NSStringFromCGRect(window.bounds), NSStringFromUIEdgeInsets(window.safeAreaInsets),
           window.windowScene.statusBarManager.statusBarHidden,
-          controller.prefersHomeIndicatorAutoHidden];
+          controller.prefersHomeIndicatorAutoHidden,
+          (unsigned long)controller.preferredScreenEdgesDeferringSystemGestures];
       AppendMetalDiagnosticLayer(report, window.layer, 0, remaining);
     }
     [report appendString:@"End (limits: 8 windows, 128 layers, depth 16).\n"];
