@@ -7,6 +7,37 @@ The user reports that manual display-link recreation did not help and requested
 source research instead of further device testing. This change contains research
 and a local reproducer only; it does not change application rendering.
 
+## Follow-up fix
+
+The subsequent fix validates each acquired drawable against the renderer-owned
+framebuffer extent and format before binding it. Rejected or missing drawables
+use a dummy texture with that same extent/format, so old depth/MSAA attachments
+remain compatible even if UIKit lays out the layer concurrently. Swap-chain
+resize now updates the framebuffer's stored extent. Secondary windows retain
+their own dimensions. This closes the encoding race without blocking main or
+recreating the display link; a rejected frame is not presented, and a reconciled
+frame resumes normal presentation.
+
+The app now coalesces and handles `SDL_EVENT_WINDOW_METAL_VIEW_RESIZED` alongside
+window/pixel-size events, and reasserts the intended layer size even when no
+bgfx reset is needed. Equal native property values are left untouched. iOS layer
+initialization explicitly selects Linear instead of Nearest; game texture
+samplers, frame latency, drawable count, resolution policy and pacing are unchanged.
+
+Regression coverage extends the existing native drawable-provider test under
+Metal API validation: supplied incompatible drawable, handled-nil fallback,
+resize recovery with and without MSAA, sRGB, and a distinct secondary-surface
+extent. The new test failed against the old backend and passes with the fix.
+The desktop `main` and unsigned iOS build passed, as did all 74 rendering/video
+tests and all 55 iOS build-setup checks. The generated-source checks verify the
+Linear initialization and unchanged main-thread boundary.
+
+The original reproducer below is retained as audit evidence. With the fix,
+`stale` and `reject` now exit successfully with `AUDIT scheduled=0`; `reconcile`
+continues to report `AUDIT scheduled=1`. The original abort outcomes refer to
+the audited commit above. These fixes do not establish a cure for the separate
+steady portrait compositor state described later in this report.
+
 ## Findings
 
 ### 1. Resize can combine a new drawable with stale MSAA attachments

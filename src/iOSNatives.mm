@@ -6049,10 +6049,12 @@ bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {
       const CGFloat maxScale = std::max(scaleX, scaleY);
       if (maxScale > 0.0 &&
           std::abs(scaleX - scaleY) <= maxScale * static_cast<CGFloat>(0.02)) {
-        layer.contentsScale = (scaleX + scaleY) * static_cast<CGFloat>(0.5);
+        const CGFloat scale = (scaleX + scaleY) * static_cast<CGFloat>(0.5);
+        if (layer.contentsScale != scale) layer.contentsScale = scale;
       }
     }
-    layer.drawableSize = CGSizeMake(width, height);
+    const CGSize size = CGSizeMake(width, height);
+    if (!CGSizeEqualToSize(layer.drawableSize, size)) layer.drawableSize = size;
     return true;
   }
 }

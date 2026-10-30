@@ -186,6 +186,66 @@ int main() {
     } else {
       std::puts("native attachment checks unavailable before macOS 14/iOS 17; provider checks passed");
     }
+    // Layout can publish a new layer extent before its resize event reaches
+    // the renderer. Both a supplied new drawable and handled-nil must remain
+    // safe with old depth/MSAA attachments. The next reconciled frame presents.
+    asobmashowMetalSetDrawableProvider(&provider);
+    allowPresentation = true;
+    for (const auto options : {uint32_t(0), uint32_t(BGFX_RESET_MSAA_X2),
+                              uint32_t(BGFX_RESET_MSAA_X2 | BGFX_RESET_SRGB_BACKBUFFER)}) {
+      const auto flags = BGFX_RESET_FLIP_AFTER_RENDER | options;
+      bgfx::reset(16, 16, flags);
+      bgfx::frame();
+      bgfx::setViewRect(0, 0, 0, 16, 16);
+      bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x123456ff);
+      layer.drawableSize = CGSizeMake(32, 8);
+      id<CAMetalDrawable> resized = [layer nextDrawable];
+      require(resized != nil, "resized layer supplies a drawable");
+      supplied = (__bridge void *)resized;
+      const auto beforePresent = presentationCalls;
+      const auto beforeAcquire = layer.acquisitions;
+      bgfx::touch(0);
+      bgfx::frame();
+      require(presentationCalls == beforePresent && layer.acquisitions == beforeAcquire,
+              "new layer extent cannot present against stale renderer attachments");
+      supplied = nullptr;
+      bgfx::touch(0);
+      bgfx::frame();
+      require(presentationCalls == beforePresent && layer.acquisitions == beforeAcquire,
+              "handled-nil uses compatible fallback attachments without reacquiring");
+
+      bgfx::reset(32, 8, flags);
+      bgfx::setViewRect(0, 0, 0, 32, 8);
+      bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x123456ff);
+      supplied = (__bridge void *)resized;
+      bgfx::touch(0);
+      bgfx::frame();
+      require(presentationCalls == beforePresent + 1 && layer.acquisitions == beforeAcquire,
+              "reconciling renderer attachments resumes the supplied drawable");
+      supplied = nullptr;
+      resized = nil;
+    }
+    // Secondary swap chains must use their own extent, not the main window's.
+    auto *secondaryLayer = [AsoDrawableProbeLayer new];
+    const auto secondary = bgfx::createFrameBuffer((__bridge void *)secondaryLayer, 12, 24);
+    require(bgfx::isValid(secondary), "secondary Metal swap chain created");
+    bgfx::frame();
+    id<CAMetalDrawable> secondaryDrawable = [secondaryLayer nextDrawable];
+    require(secondaryDrawable != nil, "secondary layer supplies a drawable");
+    supplied = (__bridge void *)secondaryDrawable;
+    const auto beforeSecondaryPresent = presentationCalls;
+    bgfx::setViewFrameBuffer(1, secondary);
+    bgfx::setViewRect(1, 0, 0, 12, 24);
+    bgfx::setViewClear(1, BGFX_CLEAR_COLOR, 0x123456ff);
+    bgfx::touch(1);
+    bgfx::frame();
+    require(presentationCalls == beforeSecondaryPresent + 1 && secondaryLayer.acquisitions == 1,
+            "secondary drawable presents using its own attachments");
+    supplied = nullptr;
+    secondaryDrawable = nil;
+    bgfx::destroy(secondary);
+    bgfx::frame();
+    asobmashowMetalSetDrawableProvider(nullptr);
     bgfx::shutdown();
     layer = nil;
   }

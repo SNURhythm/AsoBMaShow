@@ -39,6 +39,11 @@ static void asobmashowConfigureMetalLayer(void (^operation)(void))
         endif()
         set(configuration "${${part}}")
         if(part STREQUAL "initialization")
+            # Nearest on the whole layer can force composition when iPadOS
+            # scales it. Keep the normal linear layer filter on iOS; this does
+            # not alter the game's texture sampler settings.
+            string(REPLACE "nsstr(\"nearest\")" "nsstr(\"linear\")"
+                configuration "${configuration}")
             string(APPEND configuration [=[
 
             // Keep three drawables available to preserve ProMotion throughput.

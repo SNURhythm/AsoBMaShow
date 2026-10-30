@@ -9536,7 +9536,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(metal_drawable_provider_tests PRIVATE bgfx
             "-framework Foundation" "-framework QuartzCore" "-framework Metal")
         asobmashow_register_test(metal_drawable_provider_tests)
-        set_tests_properties(metal_drawable_provider_tests PROPERTIES RESOURCE_LOCK metal_device)
+        set_tests_properties(metal_drawable_provider_tests PROPERTIES
+            RESOURCE_LOCK metal_device ENVIRONMENT "MTL_DEBUG_LAYER=1")
         add_executable(bgfx_metal_readback_tests tests/bgfx_metal_readback_tests.mm)
         target_compile_features(bgfx_metal_readback_tests PRIVATE cxx_std_17)
         target_link_libraries(bgfx_metal_readback_tests PRIVATE bgfx "-framework Metal" "-framework Foundation")

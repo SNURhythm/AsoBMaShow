@@ -297,6 +297,10 @@ void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
                   preferredW, preferredH, renderW, renderH);
     renderW = preferredW;
     renderH = preferredH;
+  } else if (s_iosMetalLayer != nullptr) {
+    // A Metal-view-only layout event may change the layer without changing
+    // SDL's reported pixel size. Reconcile it even if bgfx needs no reset.
+    SetIOSMetalLayerDrawableSize(s_iosMetalLayer, renderW, renderH);
   }
 }
 #endif
@@ -1416,7 +1420,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       // on window resize
       if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
           (event.type == SDL_EVENT_WINDOW_RESIZED ||
-           event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
+           event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+           event.type == SDL_EVENT_WINDOW_METAL_VIEW_RESIZED)) {
         int logicalW = 0, logicalH = 0;
         platform::windowSize(s_window, &logicalW, &logicalH);
         if (!applyWindowResize(logicalW, logicalH)) {
@@ -1482,7 +1487,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       // Apply earlier viewport changes before either input dispatch path.
       const bool resizeEvent = (e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) &&
           (e.type == SDL_EVENT_WINDOW_RESIZED ||
-           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED);
+           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+           e.type == SDL_EVENT_WINDOW_METAL_VIEW_RESIZED);
       if (!resizeEvent) flushPendingResize();
       context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
 
@@ -1509,7 +1515,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
       if ((e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) &&
           (e.type == SDL_EVENT_WINDOW_RESIZED ||
-           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
+           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+           e.type == SDL_EVENT_WINDOW_METAL_VIEW_RESIZED)) {
         pendingResizeEvent = e;
         hasPendingResize = true;
 

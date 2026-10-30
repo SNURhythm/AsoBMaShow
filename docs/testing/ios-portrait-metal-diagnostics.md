@@ -1,5 +1,15 @@
 # Portrait Metal presentation experiment
 
+The follow-up source fix uses Linear at normal iOS startup, handles Metal-view
+resize notifications, and rejects drawables that do not match the renderer's
+attachments while keeping fallback rendering compatible. Native regressions and
+the unsigned iOS build pass. See the
+[source audit and fix](../reviews/2026-10-30-ios-metal-source-audit.md).
+The observations and manual instructions below describe the earlier experiments;
+in particular, older statements about a cold launch restoring Nearest are historical.
+The portrait Direct/Composited cause remains unconfirmed, and no further manual
+test is requested.
+
 This diagnostic branch investigates a report from an 11-inch M5 iPad Pro on
 iPadOS 27.2: the Metal HUD stays Composited in portrait and returns to Direct in
 landscape. Reported drawable sizes are native (1668×2420 and 2420×1668), with
