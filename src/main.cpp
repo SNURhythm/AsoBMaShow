@@ -68,6 +68,7 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
+#include "platform/IOSNativeMetalProbe.h"
 #include "video/IOSPresentationPacing.h"
 #include "video/MetalDisplayLink.h"
 #include "input/IOSTouchInput.h"
@@ -460,6 +461,9 @@ static int runApplication(const bgfx::Init &bgfxInit) {
 int AsoBMaShowMain(int argv, char **args) {
 #else
 int main(int argv, char **args) {
+#endif
+#if TARGET_OS_IPHONE
+  RunIOSNativeMetalProbeIfRequested();
 #endif
   // Set working directory to executable's directory
   std::filesystem::path exePath;

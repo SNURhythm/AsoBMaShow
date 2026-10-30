@@ -63,7 +63,10 @@ target_sources(main PRIVATE replay/ReplayReferenceAgreement.cpp)
 target_sources(main PRIVATE replay/ReplayProfileInventory.cpp)
 add_subdirectory(practice)
 if (IOS)
-    target_sources(main PRIVATE iOSNatives.mm notifications/LocalNotificationsIOS.mm)
+    target_sources(main PRIVATE iOSNatives.mm notifications/LocalNotificationsIOS.mm
+        platform/IOSNativeMetalProbe.mm)
+    set_source_files_properties(platform/IOSNativeMetalProbe.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(main PRIVATE "-framework UserNotifications")
 elseif (PLATFORM_ANDROID)
     target_sources(main PRIVATE AndroidNatives.cpp notifications/LocalNotificationsAndroid.cpp)

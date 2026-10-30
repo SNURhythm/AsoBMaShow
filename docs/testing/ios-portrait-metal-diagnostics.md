@@ -13,6 +13,48 @@ was opaque, and had identity transforms, no mask, and no animations. The same
 level-10 secondary window existed in both modes. This provides no obvious
 app-layer explanation, but does not exclude system overlays or compositor policy.
 
+## Native Metal cold-launch test
+
+1. Install the latest Firebase build and open Settings → Display.
+2. Tap **Native Metal on next launch**. After the armed message appears, close
+   the app from the app switcher and reopen it (backgrounding alone is not enough).
+3. A green triangle moving across a dark blue background is the native test.
+   There are no visible app controls. Let rotation settle and record the HUD mode,
+   resolution, refresh rate, and Present Delay in landscape and portrait.
+4. While in portrait, double-tap the surface. This copies a native-test snapshot
+   to the clipboard and continues normal app startup. Paste it with your observed
+   HUD modes. The snapshot identifies `AsoNativeProbeMetalLayer`.
+
+The request is consumed before running, so force-quitting during the test makes
+the next launch normal. To repeat, arm it again in Settings. If setup fails,
+normal startup continues and the clipboard contains the failure reason.
+
+The test runs at the start of `AsoBMaShowMain`, before `SDL_Init`, SDL window
+creation, bgfx initialization, and the app/audio worker. It creates a native
+UIKit window with a `CAMetalLayer`-backed view, a Metal device/queue, and a minimal
+triangle pipeline. A `CADisplayLink` requests the screen's maximum refresh rate;
+each callback draws and presents directly with Metal. Background/inactive scenes
+submit no frames. Double-tap invalidates the display link before removing the
+window. The probe has native-scale BGRA8, an opaque sRGB layer, three drawables,
+and no additional native UI overlay. Startup/launch windows are hidden during it.
+
+This isolates SDL's window/view setup and bgfx/app rendering, but retains the
+same app identity, Info.plist, SDL UIKit bootstrap/scene delegate, system UI,
+and device/OS. It also uses a different workload and frame scheduler. Direct in
+both orientations would narrow the issue to differences in the normal app path;
+Composited in portrait would show the symptom survives this simpler native path,
+not prove that every iPad app or all hardware must behave that way. The reported
+callback interval is not GPU completion time or presentation latency.
+
+Local verification: the unsigned iOS app builds successfully. An isolated
+Simulator harness compiling the actual probe source submitted ten frames,
+checked native layer properties and drawable resizing, invoked the exit handler,
+verified display-link invalidation, and verified consumed/unarmed startup.
+The harness stubbed the snapshot-copy boundary and main-thread dispatch; it did
+not exercise the full app's subsequent SDL startup or the physical iPad's
+presentation mode. A separate manual harness run visually confirmed the triangle
+on the Simulator's active display. The temporary harness app was then removed.
+
 ## Home indicator experiment result
 
 The tester reports that home-indicator hiding already existed and the added

@@ -2,6 +2,7 @@
 #include "SettingsSceneShared.h"
 
 #include "../path.h"
+#include "../platform/IOSNativeMetalProbe.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
 #include "../view/ScrollView.h"
@@ -652,6 +653,19 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
                      app_theme::sdl(copied ? app_theme::lime() : app_theme::coral()));
   });
   controls->addView(copyMetalDiagnostics);
+
+  auto *nativeProbe = makeControlButton(
+      kFitContentWidth, metrics.actionButtonHeight,
+      makeText("Native Metal on next launch", metrics.bodyTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  nativeProbe->setOnClickListener([this]() {
+    const bool armed = ArmIOSNativeMetalProbe();
+    setDisplayStatus(
+        armed ? "Test armed. Close the app from the app switcher, then reopen. Rotate and read the HUD; double-tap to copy diagnostics and return."
+              : "Could not save the native Metal test request.",
+        app_theme::sdl(armed ? app_theme::lime() : app_theme::coral()));
+  });
+  controls->addView(nativeProbe);
 
 #endif
 
