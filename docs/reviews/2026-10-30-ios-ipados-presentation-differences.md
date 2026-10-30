@@ -1,9 +1,10 @@
 # iPhone / iPad presentation comparison
 
-Status: unresolved compositor cause. Source comparison after Firebase build
-`202610301218` (`ce4ec03a`), which the user reports still has nonfunctional
-orientation selection and portrait Composited presentation. This pass makes no
-new renderer changes. The user wants the native scene-policy opt-out retained.
+Status: unresolved compositor cause. The latest reported build `202610301318`
+(`dae9e9f6`) still presents portrait as Composited after the drawable-layout
+repair. The orientation-manifest audit below finds no landscape-first policy
+to correct. Earlier sections retain their original build-specific evidence.
+The user wants CAMetalDisplayLink and the native scene-policy opt-out retained.
 
 ## New device evidence
 
@@ -183,3 +184,95 @@ This setting recommendation targets the observed orientation denial. It does
 not establish the cause of portrait Composited presentation: native 1668×2420
 drawables, CAMetalDisplayLink at requested 120 FPS/latency one, and the reported
 HUD state remain unchanged. The osu!lazer CADisplayLink control remains relevant.
+
+## Portrait versus landscape: orientation-manifest audit
+
+The user reports portrait still Composited after the native-pixel layout repair
+and asks whether a primary orientation or Info.plist declaration favors
+landscape. This pass inspects the **exported IPA**, not only the source plist:
+
+```text
+CFBundleVersion = 202610301318
+AsoBMaShowBuildCommit = dae9e9f6dc65f4541a08b47683dacfb1501bc098
+UISupportedInterfaceOrientations = [
+  UIInterfaceOrientationPortrait,
+  UIInterfaceOrientationPortraitUpsideDown,
+  UIInterfaceOrientationLandscapeLeft,
+  UIInterfaceOrientationLandscapeRight
+]
+UIInterfaceOrientation = absent
+UISupportedInterfaceOrientations~ipad = absent
+UILaunchStoryboardName = LaunchScreen
+```
+
+The universal orientation array applies without an iPad-specific override.
+It is injected by both Xcode configurations in `project.pbxproj`, explaining
+why the source `Info.plist` alone does not show it. Portrait is already first.
+The scene manifest selects `SDLUIKitSceneDelegate` and a single application
+scene; it contains no landscape preference. The launch storyboard's design
+frame is 375×667 with flexible width and height. SDL places its launch window
+in the connected scene's coordinate bounds, rather than fixing it to that
+design frame.
+
+Apple documents `UISupportedInterfaceOrientations` as the supported set. Its
+legacy `UIInterfaceOrientation` key defaults to portrait and is ignored when
+that supported set exists. Adding it would therefore not supply an effective
+portrait preference. `UIPreferredDefaultInterfaceOrientation` applies to
+compatible iPhone/iPad apps running on **visionOS**, not this iPadOS app.
+
+- [Supported orientations](https://developer.apple.com/documentation/bundleresources/information-property-list/uisupportedinterfaceorientations)
+- [Initial orientation and ignored-key rule](https://developer.apple.com/documentation/bundleresources/information-property-list/uiinterfaceorientation)
+- [Platform/device key fallback](https://developer.apple.com/documentation/bundleresources/managing-your-app-s-information-property-list)
+- [visionOS compatibility preference](https://developer.apple.com/documentation/bundleresources/information-property-list/uipreferreddefaultinterfaceorientation)
+
+### Source paths checked
+
+- `src/main.cpp` initializes the SDL hint with all four orientations, Portrait
+  first. Its 1280×720 creation arguments are not an orientation preference:
+  the hint is explicit and the iOS window is fullscreen/resizable.
+- `UIKit_GetSupportedOrientations` in `SDL_uikitwindow.m` uses membership checks
+  to form a bitmask. String order has no effect there. Inferring orientation
+  from the initial window dimensions is only a fallback when that mask is zero.
+- `UIKit_ComputeViewFrame` uses the actual window bounds and scene orientation.
+  Its old landscape-only workaround is not an unconditional landscape default.
+- `ios_drawable::fullscreenNativeSize` swaps native dimensions to match the
+  actual window's aspect. It does not select an interface orientation.
+- The production Metal-link delegate has no portrait/landscape branch. The
+  native probe uses the same draw/present function for both axes; only its
+  scheduler and source of drawables differ between CADisplayLink and
+  CAMetalDisplayLink modes.
+
+Apple's `UIScreen.nativeBounds` and `fixedCoordinateSpace` are defined in a
+portrait-up coordinate system. Their 1668×2420 ordering is therefore not
+evidence of the panel's hardware scanout orientation. Conversely, an identity
+transform in our layer snapshot does not expose every transform applied by the
+system compositor. A claim that the iPad has a landscape-native scanout path
+requiring an extra portrait rotation remains unverified.
+
+- [Native bounds](https://developer.apple.com/documentation/uikit/uiscreen/nativebounds)
+- [Fixed coordinate space](https://developer.apple.com/documentation/uikit/uiscreen/fixedcoordinatespace)
+
+### What the existing controls actually narrow
+
+The native CADisplayLink and native CAMetalDisplayLink probes used the same
+orientation declarations, scene manifest and launch storyboard. Source comparison
+between `2d498e0b` and `527a57ec` confirms those resources did not change. The
+reported portrait outcomes differed: Direct for CADisplayLink/nextDrawable,
+Composited for CAMetalDisplayLink/update.drawable. These were separate runs,
+not a simultaneous A/B test with identical system state.
+
+Together with occasional portrait Direct after foreground return, this weighs
+against a static landscape-first manifest being sufficient to cause the split.
+The remaining hypothesis is an interaction between the Metal-link scheduling/
+drawable path and orientation-dependent display state. The evidence does not
+yet distinguish scheduling, surface allocation, compositor promotion, or another
+shared integration condition, and does not establish an OS defect.
+
+The v8 timing capture compared three **portrait** attachment sessions. It did
+not measure a matched landscape session, and its geometry label is captured
+only when the link attaches. Rotating within one attachment can mix geometry
+states in that report. It cannot presently explain the landscape/portrait split.
+The next discriminating measurement would separate actual drawable geometry
+and timing by orientation, retaining a failing portrait and working landscape
+interval under the same link/settings. No manifest patch or new deployment is
+made on the basis of this audit.
