@@ -116,6 +116,10 @@ throughput. Buffer count is not a user setting.
   Off uses ordinary Metal drawable acquisition, SDL's high-refresh request and
   the existing frame cap. On enables Metal display-link scheduling when supported;
   unsupported frame caps and interrupted callbacks still use the normal fallback.
+  Startup and reattachment first present an ordinary frame and wait for its
+  displayed callback. UIKit rotation suspends the link; it can reattach after
+  the transition ends and an ordinary frame in the new geometry is displayed.
+  The Simulator uses the ordinary path because it lacks that display callback.
   Some iPads use Composited presentation with this option enabled. The game cannot
   query Direct/Composited through a documented public API; the Metal HUD remains
   the check for that status.

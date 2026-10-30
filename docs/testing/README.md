@@ -181,7 +181,8 @@ Require the `PASS actual SDL + production sizing` and `PASS actual SDL + product
 apply` messages; a successful launch alone does not prove the assertions passed.
 The sizing check preserves exact pixels across unchanged foreground layouts and
 still resizes when bounds or scale change. The orientation check covers unlocking
-before rotation, relocking after confirmation, cancellation, timeout and denial.
+before rotation, relocking after confirmation, paired native transition
+notifications, cancellation, timeout and denial.
 It requires iOS 26 or newer and does not test physical iPad windowing policy.
 Neither check measures Direct/Composited presentation or replaces the app.
 

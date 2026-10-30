@@ -18,7 +18,9 @@ public:
   MetalDisplayLink &operator=(const MetalDisplayLink &) = delete;
 
   bool beginFrame(void *layer, float refreshRate, std::uint32_t frameCap,
-                  std::uint64_t generation, std::function<bool()> isCurrent);
+                  std::uint64_t generation, std::function<bool()> isCurrent,
+                  std::uint64_t geometryGeneration = 0, bool geometryChanging = false);
+  bool needsOrdinaryFrame() const;
   bool hasFrame() const;
   bool didSchedulePresent() const;
   void endFrame();

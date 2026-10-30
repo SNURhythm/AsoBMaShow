@@ -17,6 +17,16 @@
 }
 @end
 
+@interface AsoPresentedProbe : NSObject
+@property(nonatomic, strong) id<MTLTexture> texture;
+@property(nonatomic, strong) CAMetalLayer *layer;
+@property(nonatomic) CFTimeInterval presentedTime;
+@property(nonatomic, copy) void (^handler)(id<MTLDrawable>);
+@end
+@implementation AsoPresentedProbe
+- (void)addPresentedHandler:(void (^)(id<MTLDrawable>))handler { self.handler = handler; }
+@end
+
 namespace {
 void require(bool value, const char *message) {
   if (!value) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
@@ -93,18 +103,40 @@ int main() {
       auto &state = *video::current;
       bool active = true;
       auto *owner = &state;
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 7, [&] { return active; }) &&
+                  state.link == nil && attachmentChanges.empty() && link.needsOrdinaryFrame(),
+              "startup must present an ordinary frame before attaching the Metal link");
+      auto *probe = [AsoPresentedProbe new];
+      probe.layer = layer;
+      probe.texture = leased.texture;
+      require(video::shouldPresent((__bridge void *)layer, (__bridge void *)probe) &&
+                  probe.handler != nil && !link.needsOrdinaryFrame(),
+              "ordinary present installs one display observer without attaching a link");
+      probe.handler((id<MTLDrawable>)probe);
+      require(link.needsOrdinaryFrame(), "dropped frame cannot finish the display handoff");
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      auto staleHandler = probe.handler;
+      link.pause();
+      link.beginFrame((__bridge void *)layer, 120, 0, 8, [&] { return active; });
+      probe.presentedTime = 1.0;
+      staleHandler((id<MTLDrawable>)probe);
+      require(link.needsOrdinaryFrame(), "old completion cannot unlock a new surface epoch");
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      require(state.link == nil, "submission alone does not attach the link");
+      probe.handler((id<MTLDrawable>)probe);
+      require(!link.needsOrdinaryFrame(), "displayed ordinary frame completes handoff");
       CFRunLoopTimerRef wake = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
           CFAbsoluteTimeGetCurrent(), 0, 0, 0, ^(CFRunLoopTimerRef) {
         const double now = CACurrentMediaTime();
         if (owner->frame.receive(now, now + 1.0)) owner->drawable = leased;
       });
       CFRunLoopAddTimer(CFRunLoopGetCurrent(), wake, kCFRunLoopDefaultMode);
-      const bool attached = link.beginFrame((__bridge void *)layer, 120, 0, 7,
+      const bool attached = link.beginFrame((__bridge void *)layer, 120, 0, 8,
                                             [&] { return active; });
       CFRunLoopTimerInvalidate(wake);
       CFRelease(wake);
       require(attached && attachmentChanges == std::vector<bool>{true},
-              "native attachment transfers refresh ownership before returning a frame");
+              "displayed ordinary frame permits native link attachment");
       const auto attachedAcquisitions = layer.acquisitions;
       const auto render = [] { bgfx::touch(0); bgfx::frame(); };
       // A link attached between iterations still owns acquisition.
@@ -138,7 +170,9 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "lifecycle rejection must not fall through to nextDrawable");
-      link.pause();
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 8,
+                               [] { return true; }, 1, true) && state.link == nil,
+              "rotation detaches the link and keeps ordinary acquisition available");
       require(attachmentChanges == std::vector<bool>({true, false}),
               "detaching restores fallback refresh ownership");
       link.pause();
@@ -147,6 +181,21 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions + 1,
               "pause detaches and restores ordinary acquisition");
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 8,
+                               [] { return true; }, 2, false) && link.needsOrdinaryFrame(),
+              "completed rotation requires a newly displayed ordinary frame");
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      staleHandler = probe.handler;
+      layer.drawableSize = CGSizeMake(8, 16);
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 8,
+                               [] { return true; }, 2, false),
+              "new drawable extent starts another ordinary handoff");
+      staleHandler((id<MTLDrawable>)probe);
+      probe.handler = nil;
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      require(link.needsOrdinaryFrame() && probe.handler == nil,
+              "old geometry cannot complete or register the new surface handoff");
+      layer.drawableSize = CGSizeMake(16, 16);
       require(!link.beginFrame((__bridge void *)layer, 120, 75, 9, [] { return true; }),
               "unsupported cap selects timer fallback");
       render();

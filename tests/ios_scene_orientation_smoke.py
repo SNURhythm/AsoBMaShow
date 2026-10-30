@@ -22,10 +22,10 @@ source=r'''
 static UIWindow *appWindow;
 static UIWindow *FindActiveWindow() { return appWindow; }
 static void require(bool value,const char *message) { if(!value){NSLog(@"FAIL %s",message);abort();} }
-static void pumpUntil(bool (^condition)(void)) {
+static void pumpUntil(bool (^condition)(void),const char *message="orientation transition timed out") {
  double end=CACurrentMediaTime()+5;
  while(!condition() && CACurrentMediaTime()<end) { @autoreleasepool { SDL_PumpEvents();CFRunLoopRunInMode(kCFRunLoopDefaultMode,.004,true); } }
- require(condition(),"orientation transition timed out");
+ require(condition(),message);
 }
 '''+apply+r'''
 
@@ -48,6 +48,16 @@ static int audit(int,char**) {
   require(window!=nullptr,"SDL window");
   appWindow=(__bridge UIWindow*)SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER,nullptr);
   require(appWindow!=nil,"actual SDL UIKit window");
+  __block unsigned transitionStarts=0, transitionEnds=0, transitionDepth=0;
+  auto *center=NSNotificationCenter.defaultCenter;
+  id willTransition=[center addObserverForName:@"SDLUIKitWindowWillTransition" object:appWindow queue:nil usingBlock:^(NSNotification *) {
+    require(NSThread.isMainThread,"transition starts on UIKit main");
+    ++transitionStarts; ++transitionDepth;
+  }];
+  id didTransition=[center addObserverForName:@"SDLUIKitWindowDidTransition" object:appWindow queue:nil usingBlock:^(NSNotification *) {
+    require(NSThread.isMainThread && transitionDepth>0,"transition completion follows its start on main");
+    ++transitionEnds; --transitionDepth;
+  }];
 
   Method requestMethod=class_getInstanceMethod(UIWindowScene.class,@selector(requestGeometryUpdateWithPreferences:errorHandler:));
   originalRequest=(decltype(originalRequest))method_setImplementation(requestMethod,(IMP)checkRequest);
@@ -57,8 +67,11 @@ static int audit(int,char**) {
   screen_orientation::apply(screen_orientation::Mode::Landscape,false);
   require(!appWindow.rootViewController.prefersInterfaceOrientationLocked,"must not lock portrait while Landscape is pending");
   pumpUntil(^bool { return UIInterfaceOrientationIsLandscape(appWindow.windowScene.effectiveGeometry.interfaceOrientation) && appWindow.windowScene.effectiveGeometry.isInterfaceOrientationLocked; });
+  pumpUntil(^bool { return transitionStarts>=1 && transitionDepth==0; },"actual SDL must announce and complete landscape rotation");
   screen_orientation::apply(screen_orientation::Mode::Portrait,false);
   pumpUntil(^bool { return appWindow.windowScene.effectiveGeometry.interfaceOrientation==UIInterfaceOrientationPortrait && appWindow.windowScene.effectiveGeometry.isInterfaceOrientationLocked; });
+  pumpUntil(^bool { return transitionStarts>=2 && transitionDepth==0; },"actual SDL must announce and complete portrait rotation");
+  require(transitionStarts==transitionEnds,"each real orientation transition publishes completion");
   screen_orientation::apply(mode,false);
   pumpUntil(^bool { return !appWindow.windowScene.effectiveGeometry.isInterfaceOrientationLocked; });
   screen_orientation::apply(mode,true);
@@ -110,7 +123,8 @@ static int audit(int,char**) {
   savedError=nil;
   class_replaceMethod(controllerClass,invalidate,originalInvalidate,"v@:");
   method_setImplementation(requestMethod,(IMP)originalRequest);
-  NSLog(@"PASS actual SDL + production apply: unlocked requests, confirmed relock, Auto/gameplay, timeout, cancellation, denial, stale completion");
+  [center removeObserver:willTransition]; [center removeObserver:didTransition];
+  NSLog(@"PASS actual SDL + production apply: transition boundaries, unlocked requests, confirmed relock, Auto/gameplay, timeout, cancellation, denial, stale completion");
   SDL_DestroyWindow(window);SDL_Quit();
  }
  return 0;

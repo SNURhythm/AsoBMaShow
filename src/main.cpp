@@ -1133,14 +1133,19 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       iosDisplayLinkFrame = iosDisplayLink.beginFrame(
           s_iosMetalLayer, displayLinkViewport ? displayLinkViewport->refreshRate : 0.0F,
           context.framePacer.currentFrameCap(), displayLinkState.generation,
-          [&, generation = displayLinkState.generation] {
+          [&, generation = displayLinkState.generation,
+              geometryGeneration = displayLinkViewport ? displayLinkViewport->geometryGeneration : 0] {
             const auto state = GetIOSPresentationState();
+            const auto viewport = GetIOSWindowSnapshot(s_window);
             return state.active && state.generation == generation &&
+                viewport && !viewport->geometryChanging &&
+                viewport->geometryGeneration == geometryGeneration &&
                 !context.appInBackground.load(std::memory_order_acquire) &&
                 !context.quitFlag.load(std::memory_order_acquire) &&
                 !context.replayVideoExportActive.load(std::memory_order_acquire) &&
                 !context.rendererAccess.exportRequested();
-          });
+          }, displayLinkViewport ? displayLinkViewport->geometryGeneration : 0,
+          displayLinkViewport && displayLinkViewport->geometryChanging);
     } else {
       iosDisplayLink.pause();
     }
@@ -1758,6 +1763,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           s_fullscreenBgaCache.invalidate();
           uiPresentationSchedule.invalidate();
         }
+        if (iosDisplayLink.needsOrdinaryFrame()) uiPresentationSchedule.invalidate();
 #endif
         const auto uiNow = SDL_GetTicks();
         const bool continuousPresentation = sceneManager.currentScene &&
