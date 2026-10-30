@@ -172,10 +172,8 @@ bool InstallIOSGameplayTouchInput(void *nativeView) {
   if (![NSThread isMainThread] || nativeView == nullptr) return false;
   UIView *view = (__bridge UIView *)nativeView;
   if (![view isKindOfClass:[UIView class]]) return false;
-  const bool enabled = !gameplayTouchRecognizer || gameplayTouchRecognizer.enabled;
   UninstallIOSGameplayTouchInput();
   gameplayTouchRecognizer = [[AsoGameplayTouchRecognizer alloc] init];
-  gameplayTouchRecognizer.enabled = enabled;
   [view addGestureRecognizer:gameplayTouchRecognizer];
   gameplayTouchInstalled.store(true, std::memory_order_release);
   return true;

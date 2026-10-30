@@ -138,7 +138,6 @@ static float s_renderScale = 1.0f;
 static uint32_t s_bgfxResetFlags = 0;
 #if TARGET_OS_IPHONE
 static void *s_iosMetalLayer = nullptr;
-static SdlMetalViewOwner *s_iosMetalViewOwner = nullptr;
 #endif
 
 namespace {
@@ -684,7 +683,6 @@ int main(int argv, char **args) {
                 "Could not install direct UIKit gameplay touch input; retaining SDL raw input");
   }
   s_iosMetalLayer = pd.nwh;
-  s_iosMetalViewOwner = &metalView;
   int metalDrawableW = 0;
   int metalDrawableH = 0;
   getIOSMetalDrawableSize(win, windowLogicalWidth, windowLogicalHeight,
@@ -747,7 +745,6 @@ int main(int argv, char **args) {
   s_window = nullptr;
 #if TARGET_OS_IPHONE
   s_iosMetalLayer = nullptr;
-  s_iosMetalViewOwner = nullptr;
 #endif
   TextInputBox::releaseCachedCursors();
   SDL_Quit();
@@ -1012,41 +1009,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (discard) video::MetalDisplayLink::pauseCurrent();
     bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
   };
-  int iosSurfaceOrientation = 0;
-  const auto renewIOSMetalSurface = [&](int width, int height) {
-    if (!s_iosMetalViewOwner || !IOSApplicationActive()) return false;
-    // Candidate workaround: replace the layer-owned surface, not just its
-    // display-link attachment. No steady-frame changes or GPU completion wait.
-    iosDisplayLink.pause();
-    bgfx::PlatformData replacement{};
-    SdlMetalViewOwner retired;
-    const bool replaced = platform::onMain([&] {
-      if (!IOSApplicationActive()) return false;
-      if (!replace_bgfx_metal_view(replacement, s_window, *s_iosMetalViewOwner, retired))
-        return false;
-      s_iosMetalLayer = replacement.nwh;
-      if (!InstallIOSGameplayTouchInput(s_iosMetalViewOwner->get()))
-        SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "Metal surface renewal retained SDL touch fallback");
-      SetIOSMetalLayerDrawableSize(s_iosMetalLayer, width, height);
-      return true;
-    });
-    if (!replaced) return false;
-    bgfx::setPlatformData(replacement);
-    bgfx::reset(width, height, activeBgfxResetFlags);
-    // iOS bgfx runs synchronously on this worker. Consume the changed native
-    // handle without presenting, before releasing the old view on main.
-    bgfx::frame(BGFX_FRAME_DISCARD);
-    platform::runOnMain([&] { retired.reset(); });
-    context.restoreGameplayRenderViews();
-    s_fullscreenBgaCache.invalidate();
-    iosSurfaceOrientation = width > height ? 1 : -1;
-    SDL_Log("iOS Metal surface renewed: %dx%d; CAMetalDisplayLink resumes next frame", width, height);
-    return true;
-  };
-  {
-    std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex);
-    renewIOSMetalSurface(rendering::render_width, rendering::render_height);
-  }
 #endif
 #if !TARGET_OS_IPHONE
   FramePacer idlePresentationPacer;
@@ -1173,7 +1135,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const auto displayLinkState = GetIOSPresentationState();
     const auto displayLinkViewport = GetIOSWindowSnapshot(s_window);
     bool iosDisplayLinkFrame = false;
-    bool iosSurfaceChangedThisFrame = false;
     if (!iosPreparedFrame.pending() && displayLinkState.active &&
         !context.replayVideoExportActive.load(std::memory_order_acquire) &&
         !context.rendererAccess.exportRequested()) {
@@ -1269,14 +1230,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if (targetRenderW <= 0 || targetRenderH <= 0) {
         return true;
       }
-      const bool surfaceOrientationChanged =
-#if TARGET_OS_IPHONE
-          iosSurfaceOrientation != (targetRenderW > targetRenderH ? 1 : -1);
-#else
-          false;
-#endif
       if (targetRenderW == rendering::render_width &&
-          targetRenderH == rendering::render_height && !surfaceOrientationChanged) {
+          targetRenderH == rendering::render_height) {
         presentationOrientation.updateViewport(targetRenderW, targetRenderH);
         sceneManager.setPresentationOrientation(
             presentationOrientation.orientation());
@@ -1291,13 +1246,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if (!bgfxLock.owns_lock()) {
         return false;
       }
-#if TARGET_OS_IPHONE
-      if (surfaceOrientationChanged) {
-        if (!renewIOSMetalSurface(targetRenderW, targetRenderH)) return false;
-        iosDisplayLinkFrame = false;
-        iosSurfaceChangedThisFrame = true;
-      }
-#endif
 
       rendering::widthScale =
           static_cast<float>(targetRenderW) / static_cast<float>(logicalW);
@@ -1697,7 +1645,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
     if (context.quitFlag.load(std::memory_order_acquire)) break;
 #if TARGET_OS_IPHONE
-    if (iosSurfaceChangedThisFrame) continue;
     if (iosPreparedFrame.pending()) {
       // Keep handling cancellation/quit while inactive, but do not append a
       // second scene's draws or enter owner work before the discard above.

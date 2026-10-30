@@ -410,12 +410,14 @@ source-backed cure is established, and no further manual test is requested.
 ## Subsequent Firebase candidate
 
 After the research pass, the user explicitly requested deployment of a candidate
-for remote testing. The app now renews the SDL Metal view/layer after startup
+for remote testing. Build `202610301152` renewed the SDL Metal view/layer after startup
 initialization and on portrait/landscape changes, then rebinds bgfx and gameplay
 input. This targets a different lifetime from the failed link-only recreation.
 The storage experiment does not establish that layer state causes composition;
-the change remains a device-test hypothesis. See the
-[current candidate and validation limits](../testing/ios-portrait-metal-diagnostics.md#current-candidate-replace-the-sdl-metal-surface).
+the tester reported portrait still Composited. The replacement code has been
+removed. The next build supplies the previously missing pure UIKit
+CAMetalDisplayLink control before SDL starts. See the
+[current control and validation limits](../testing/ios-portrait-metal-diagnostics.md#current-control-uikit-with-cametaldisplaylink).
 
 ## Primary references
 

@@ -9,7 +9,27 @@ The observations and manual instructions below describe the earlier experiments;
 in particular, older statements about a cold launch restoring Nearest are historical.
 The portrait Direct/Composited cause remains unconfirmed.
 
-## Current candidate: replace the SDL Metal surface
+## Current control: UIKit with CAMetalDisplayLink
+
+The user reported that build `202610301152` (`20dd20d1`) still shows Composited
+in portrait. Surface replacement did not resolve the symptom and has been
+removed, including its extra startup/rotation work.
+
+The next diagnostic build automatically runs the missing plain UIKit
+CAMetalDisplayLink control once, before SDL initialization. It uses the same
+native triangle renderer as the earlier CADisplayLink control, now with
+`update.drawable`, requested latency 1 and the display's maximum refresh rate.
+No SDL window, bgfx renderer or SDL refresh clock exists in this control.
+The one-time request is consumed before starting, so force-quitting cannot trap
+subsequent launches. Double-tap to copy the report and continue normal startup.
+Settings → Display → Native Metal display link on next launch can repeat it.
+
+Read the Metal HUD in portrait and landscape on the triangle screen. This is
+a missing comparison, not a claimed fix. A Direct result would make SDL/app
+integration worth isolating further; a Composited result would reproduce it
+without those components, but would not by itself prove an OS defect.
+
+## Failed candidate: replace the SDL Metal surface
 
 The user subsequently requested another Firebase candidate for remote device
 testing. This candidate replaces the SDL Metal view and its CAMetalLayer once
@@ -30,8 +50,7 @@ including its disabled state. The rapid replacement harness logged UIKit
 appearance-transition warnings; it did not crash or lose the replacement view.
 Simulator cannot validate the physical iPad's Direct/Composited behavior.
 
-For this build, check a fresh portrait launch and a landscape-to-portrait
-rotation, alongside touch responsiveness and the HUD mode in both orientations.
+The tester reported portrait still Composited; the candidate is retired.
 
 ## Earlier candidates
 

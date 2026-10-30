@@ -89,3 +89,15 @@ storage. Thus the failed device recreation test did not test replacement of the
 layer's storage or system presentation state. This does not prove stale storage
 on the iPad or explain why backgrounding helped; see the
 [experiment and limitations](evidence/metal-pool/README.md).
+
+## Subsequent remote-test follow-up
+
+The user subsequently authorized more Firebase tests. Build `202610301152`
+(`20dd20d1`) replaced the SDL Metal view/layer at startup and orientation
+changes; portrait remained Composited. That workaround has been removed.
+The next diagnostic build runs the missing plain UIKit CAMetalDisplayLink
+control once before SDL initialization. Its local Simulator check rendered
+20 real Metal-link frames without SDL calls, handled resize and teardown, and
+returned immediately on a subsequent unarmed startup. The physical-device
+result for this control is still pending; the remaining-boundary discussion
+above describes the evidence before this new build.

@@ -6,19 +6,6 @@
 #include <SDL3/SDL_metal.h>
 #endif
 
-bool replace_bgfx_metal_view(bgfx::PlatformData &pd, SDL_Window *window,
-                            SdlMetalViewOwner &current, SdlMetalViewOwner &retired) {
-  if (!current || retired) return false;
-  bgfx::PlatformData replacementData{};
-  SdlMetalViewOwner replacement;
-  if (!setup_bgfx_platform_data(replacementData, window, replacement) || !replacement)
-    return false;
-  retired = std::move(current);
-  current = std::move(replacement);
-  pd = replacementData;
-  return true;
-}
-
 #if defined(__ANDROID__)
 AndroidNativeWindowOwner acquireAndroidNativeWindow(SDL_Window *window) {
   if (!platform::isMainThread())

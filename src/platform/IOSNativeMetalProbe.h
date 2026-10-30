@@ -7,6 +7,7 @@ enum class IOSNativeMetalProbeMode {
   NativeWindow = 1,
   SDLSurface = 2,
   SDLMetalDisplayLink = 3,
+  NativeMetalDisplayLink = 4,
 };
 bool ArmIOSNativeMetalProbe(
     IOSNativeMetalProbeMode mode = IOSNativeMetalProbeMode::NativeWindow);

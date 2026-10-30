@@ -692,10 +692,10 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
 
   auto *nativeProbe = makeControlButton(
       kFitContentWidth, metrics.actionButtonHeight,
-      makeText("Native Metal on next launch", metrics.bodyTextSize,
+      makeText("Native Metal display link on next launch", metrics.bodyTextSize,
                app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   nativeProbe->setOnClickListener([this]() {
-    const bool armed = ArmIOSNativeMetalProbe();
+    const bool armed = ArmIOSNativeMetalProbe(IOSNativeMetalProbeMode::NativeMetalDisplayLink);
     setDisplayStatus(
         armed ? "Test armed. Close the app from the app switcher, then reopen. Rotate and read the HUD; double-tap to copy diagnostics and return."
               : "Could not save the native Metal test request.",

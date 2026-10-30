@@ -19,8 +19,3 @@ AndroidNativeWindowOwner acquireAndroidNativeWindow(SDL_Window *window);
 // Keep the Metal view alive until bgfx shuts down, then reset it before the window.
 bool setup_bgfx_platform_data(bgfx::PlatformData &pd, SDL_Window *sdlWindow,
                               SdlMetalViewOwner &metalView);
-
-// Main-thread surface replacement. Keep retired alive until the renderer has
-// consumed the new platform data, then release it on main.
-bool replace_bgfx_metal_view(bgfx::PlatformData &pd, SDL_Window *window,
-                            SdlMetalViewOwner &current, SdlMetalViewOwner &retired);
