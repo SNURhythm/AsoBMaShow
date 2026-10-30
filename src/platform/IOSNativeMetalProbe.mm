@@ -12,9 +12,6 @@
 
 namespace {
 NSString *const kProbeRequest = @"AsoBMaShowNativeMetalProbeOnce";
-// Temporary remote-test build: run the missing UIKit/Metal-link control once.
-// Consume before entering the probe so force-quitting still returns to the app.
-NSString *const kNativeMetalControlSeen = @"AsoBMaShowNativeMetalLinkControl20261030";
 NSInteger sSDLProbeMode = 0; // Main-thread startup only.
 }
 
@@ -250,12 +247,8 @@ void RunIOSNativeMetalProbeIfRequested() {
   NSCAssert(NSThread.isMainThread, @"Native probe must run before application startup on main");
   @autoreleasepool {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    NSInteger mode = [defaults integerForKey:kProbeRequest];
-    if (mode == 0 && ![defaults boolForKey:kNativeMetalControlSeen])
-      mode = static_cast<NSInteger>(IOSNativeMetalProbeMode::NativeMetalDisplayLink);
+    const NSInteger mode = [defaults integerForKey:kProbeRequest];
     if (mode == 0) return;
-    if (mode == static_cast<NSInteger>(IOSNativeMetalProbeMode::NativeMetalDisplayLink))
-      [defaults setBool:YES forKey:kNativeMetalControlSeen];
     [defaults removeObjectForKey:kProbeRequest];
     [defaults synchronize]; // Consume first: force-quit/crash cannot trap the next launch.
     if (mode == static_cast<NSInteger>(IOSNativeMetalProbeMode::SDLSurface) ||

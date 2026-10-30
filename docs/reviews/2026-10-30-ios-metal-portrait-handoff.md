@@ -109,3 +109,21 @@ control once before SDL initialization. Its local Simulator check rendered
 returned immediately on a subsequent unarmed startup. The physical-device
 result for this control is still pending; the remaining-boundary discussion
 above describes the evidence before this new build.
+
+The user then supplied the missing control result: portrait Composited on
+`527a57ec`, native UIKit window before SDL/bgfx initialization, CAMetalDisplayLink
+with `update.drawable`, latency 1, 682 submitted frames. More Space was enabled;
+the report shows 970×1408 points and 1940×2816 drawable/screen mode. Its visible
+Metal layer is opaque, full-window, Linear filtered, BGRA8/sRGB, three drawables,
+and untransformed/unclipped. This closes the earlier missing-control gap.
+The one reported 8.360 ms callback interval does not establish presentation
+timing. The phone control remains Direct at the same reported OS version/120 FPS.
+
+The native probe shares the app bundle's `UIRequiresFullScreen = YES` setting.
+The next candidate opts out of this compatibility mode on version 27 and later
+using `UIRequiresFullScreenIgnoredStartingWithVersion = "27"`, while retaining
+the existing Metal path. Apple documents different scene resizing behavior
+for the compatibility flag in the 27 SDK. This is a remaining app-level policy
+to isolate, not an established cause or proof of an OS bug. The automatic probe
+is removed; normal startup resumes. See the
+[candidate and test scope](../testing/ios-portrait-metal-diagnostics.md#current-candidate-native-scene-sizing-on-ipados-27).

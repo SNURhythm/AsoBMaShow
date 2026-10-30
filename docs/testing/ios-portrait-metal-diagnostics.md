@@ -16,13 +16,40 @@ and presentation configuration a key distinction; 120 FPS or the reported OS
 version alone cannot explain the difference. It does not establish an iPadOS
 bug or replace the pending plain UIKit/Metal-link comparison on the iPad.
 
-## Current control: UIKit with CAMetalDisplayLink
+## Current candidate: native scene sizing on iPadOS 27
+
+The plain UIKit control also remained Composited in portrait on build
+`202610301157` (`527a57ec`). Its report confirms `SDL not initialized`,
+`bgfx not initialized`, CAMetalDisplayLink/update.drawable, latency 1, 682
+submitted frames, and one 8.360 ms callback interval. The user confirmed More
+Space was enabled: window 970×1408 points, drawable/screen mode 1940×2816,
+opaque BGRA8/sRGB, three drawables, Linear filters and no transforms or clipping.
+That callback interval is not a presentation-latency measurement. SDL and bgfx
+are not necessary to reproduce this case, but the native probe still shares
+the application bundle's scene configuration.
+
+The next candidate adds `UIRequiresFullScreenIgnoredStartingWithVersion = "27"`.
+It retains `UIRequiresFullScreen = YES` for older systems, but opts out of that
+compatibility behavior on version 27 and later. Apple documents discrete scene
+resizing for apps linked against the 27 SDK that retain this compatibility
+flag. This is an unverified scene-policy hypothesis, not proof of the portrait
+cause. The application already supplies a launch screen, all orientations,
+SDL scene lifecycle and resize handling. Window resizing can now follow the
+normal iPadOS policy. CAMetalDisplayLink, latency, rate and drawable count stay
+unchanged. See [Apple TN3192](https://developer.apple.com/documentation/technotes/tn3192-migrating-your-app-from-the-deprecated-uirequiresfullscreen-key?changes=_3_3).
+
+Normal application startup is restored. The native triangle remains available
+only when explicitly armed in Settings. Snapshot v5 reports the installed
+bundle's full-screen keys and scene bounds. Check the normal app in fullscreen
+portrait and landscape, keeping More Space unchanged for this comparison.
+
+## Completed control: UIKit with CAMetalDisplayLink
 
 The user reported that build `202610301152` (`20dd20d1`) still shows Composited
 in portrait. Surface replacement did not resolve the symptom and has been
 removed, including its extra startup/rotation work.
 
-The next diagnostic build automatically runs the missing plain UIKit
+Build `202610301157` automatically ran the missing plain UIKit
 CAMetalDisplayLink control once, before SDL initialization. It uses the same
 native triangle renderer as the earlier CADisplayLink control, now with
 `update.drawable`, requested latency 1 and the display's maximum refresh rate.

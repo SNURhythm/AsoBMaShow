@@ -5992,7 +5992,7 @@ bool CopyIOSMetalPresentationDiagnostics() {
     UIScreen *screen = active.screen;
     const auto build = skin::compiledSkinBuildIdentity();
     NSMutableString *report = [NSMutableString stringWithFormat:
-        @"AsoBMaShow Metal presentation snapshot v4\ncommit=%s configuration=%s\n"
+        @"AsoBMaShow Metal presentation snapshot v5\ncommit=%s configuration=%s\n"
          "iOS=%@ orientation=%ld\n"
          "screen=%@ nativeBounds=%@ scale=%.4f nativeScale=%.4f mode=%@\n"
          "HUD Direct/Composited: record manually; not queried by this report.\n"
@@ -6001,6 +6001,12 @@ bool CopyIOSMetalPresentationDiagnostics() {
         UIDevice.currentDevice.systemVersion, (long)active.windowScene.interfaceOrientation,
         NSStringFromCGRect(screen.bounds), NSStringFromCGRect(screen.nativeBounds),
         screen.scale, screen.nativeScale, NSStringFromCGSize(screen.currentMode.size)];
+    NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+    [report appendFormat:@"BUNDLE requiresFullScreen=%d ignoreFullScreenFrom=%@\n"
+                          "SCENE coordinateBounds=%@ screenIsMain=%d\n",
+        [info[@"UIRequiresFullScreen"] boolValue],
+        info[@"UIRequiresFullScreenIgnoredStartingWithVersion"] ?: @"unset",
+        NSStringFromCGRect(active.windowScene.coordinateSpace.bounds), screen == UIScreen.mainScreen];
     [report appendFormat:@"%s", linkDiagnostics.c_str()];
     const char *homeHint = SDL_GetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR);
     [report appendFormat:@"homeIndicatorHint=%s (unset uses SDL fullscreen default)\n",
