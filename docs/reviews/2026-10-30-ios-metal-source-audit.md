@@ -407,6 +407,16 @@ physical results and new local source/identity checks still do not identify
 which state changes when portrait becomes Direct after backgrounding. No new
 source-backed cure is established, and no further manual test is requested.
 
+## Subsequent Firebase candidate
+
+After the research pass, the user explicitly requested deployment of a candidate
+for remote testing. The app now renews the SDL Metal view/layer after startup
+initialization and on portrait/landscape changes, then rebinds bgfx and gameplay
+input. This targets a different lifetime from the failed link-only recreation.
+The storage experiment does not establish that layer state causes composition;
+the change remains a device-test hypothesis. See the
+[current candidate and validation limits](../testing/ios-portrait-metal-diagnostics.md#current-candidate-replace-the-sdl-metal-surface).
+
 ## Primary references
 
 - [Apple CAMetalDisplayLink sample and download](https://developer.apple.com/documentation/metal/achieving-smooth-frame-rates-with-a-metal-display-link)

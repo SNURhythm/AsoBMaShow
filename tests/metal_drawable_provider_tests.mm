@@ -258,6 +258,26 @@ int main() {
     bgfx::destroy(secondary);
     bgfx::frame();
     asobmashowMetalSetDrawableProvider(nullptr);
+    // A surface renewal hands the renderer a different layer before retiring
+    // the old SDL view. The discard must consume that handle without drawing.
+    auto *replacementLayer = [AsoDrawableProbeLayer new];
+    const auto oldAcquisitions = layer.acquisitions;
+    bgfx::PlatformData replacement{};
+    replacement.nwh = (__bridge void *)replacementLayer;
+    bgfx::setPlatformData(replacement);
+    bgfx::reset(8, 32, BGFX_RESET_FLIP_AFTER_RENDER);
+    bgfx::frame(BGFX_FRAME_DISCARD);
+    require(layer.acquisitions == oldAcquisitions && replacementLayer.acquisitions == 0,
+            "surface handoff discard acquires neither old nor replacement layer");
+    require(replacementLayer.device != nil &&
+                CGSizeEqualToSize(replacementLayer.drawableSize, CGSizeMake(8, 32)),
+            "discard consumes replacement platform data and configures its drawable extent");
+    bgfx::setViewRect(0, 0, 0, 8, 32);
+    bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x123456ff);
+    bgfx::touch(0);
+    bgfx::frame();
+    require(layer.acquisitions == oldAcquisitions && replacementLayer.acquisitions == 1,
+            "first frame after renewal acquires only the replacement layer");
     bgfx::shutdown();
     layer = nil;
   }

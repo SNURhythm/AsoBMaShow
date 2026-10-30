@@ -7,8 +7,33 @@ the unsigned iOS build pass. See the
 [source audit and fix](../reviews/2026-10-30-ios-metal-source-audit.md).
 The observations and manual instructions below describe the earlier experiments;
 in particular, older statements about a cold launch restoring Nearest are historical.
-The portrait Direct/Composited cause remains unconfirmed, and no further manual
-test is requested.
+The portrait Direct/Composited cause remains unconfirmed.
+
+## Current candidate: replace the SDL Metal surface
+
+The user subsequently requested another Firebase candidate for remote device
+testing. This candidate replaces the SDL Metal view and its CAMetalLayer once
+after startup initialization and on portrait/landscape changes. It detaches
+the old display link, rebinds bgfx and gameplay touch input, consumes the native
+handle change with a discarded frame, and releases the old view on main before
+resuming CAMetalDisplayLink. Input stays paused if it was paused before rebinding.
+Frame-rate and resolution policy, requested latency 1 and three drawables remain
+unchanged. Ordinary frames do not replace the surface.
+
+This tests layer-owned presentation state that a display-link-only restart
+retained. It is an unverified workaround, not an identified portrait root cause.
+The native Metal regression confirms that handoff does not acquire from either
+layer during discard and that the next rendered frame uses only the new layer.
+A local SDL Simulator smoke check completed four replacements and 32 real Metal
+callbacks, preserving the controller and rebinding the production recognizer,
+including its disabled state. The rapid replacement harness logged UIKit
+appearance-transition warnings; it did not crash or lose the replacement view.
+Simulator cannot validate the physical iPad's Direct/Composited behavior.
+
+For this build, check a fresh portrait launch and a landscape-to-portrait
+rotation, alongside touch responsiveness and the HUD mode in both orientations.
+
+## Earlier candidates
 
 Device follow-up on Firebase build `202610301045` (commit `2c868e6f`) confirms
 that portrait still shows Composited. The resize and filter corrections did not
