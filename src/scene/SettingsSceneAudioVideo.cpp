@@ -3,6 +3,7 @@
 
 #include "../path.h"
 #include "../platform/IOSNativeMetalProbe.h"
+#include "../video/MetalDisplayLink.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
 #include "../view/ScrollView.h"
@@ -653,6 +654,19 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
                      app_theme::sdl(copied ? app_theme::lime() : app_theme::coral()));
   });
   controls->addView(copyMetalDiagnostics);
+
+  auto *recreateMetalLink = makeControlButton(
+      kFitContentWidth, metrics.actionButtonHeight,
+      makeText("Recreate Metal display link (test)", metrics.bodyTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  recreateMetalLink->setOnClickListener([this]() {
+    const bool queued = video::MetalDisplayLink::requestRecreationForDiagnostics();
+    setDisplayStatus(
+        queued ? "Recreation queued for the next frame. Stay in the app, read the HUD, then copy diagnostics."
+               : "No attached app Metal display link; nothing was changed.",
+        app_theme::sdl(queued ? app_theme::lime() : app_theme::coral()));
+  });
+  controls->addView(recreateMetalLink);
 
   const auto currentMetalFilter = GetIOSMetalMagnificationFilter();
   std::vector<GameplaySkinChoiceButton> metalFilters;

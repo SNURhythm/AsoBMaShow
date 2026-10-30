@@ -38,6 +38,8 @@ const video::MetalDrawableProvider provider{acquire, present};
 
 int main() {
   @autoreleasepool {
+    require(!video::MetalDisplayLink::requestRecreationForDiagnostics(),
+            "diagnostic recreation cannot run without an owner on this thread");
     auto *layer = [AsoDrawableProbeLayer new];
     bgfx::renderFrame();
     bgfx::Init init;
@@ -92,6 +94,15 @@ int main() {
       state.link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
       require(state.link != nil, "native link attaches for deterministic ownership checks");
       ((CAMetalDisplayLink *)state.link).paused = YES;
+      require(video::MetalDisplayLink::requestRecreationForDiagnostics(),
+              "diagnostic recreation accepts an attached owner-thread link");
+      id originalLink = state.link;
+      require(video::MetalDisplayLink::requestRecreationForDiagnostics() &&
+                  state.manualRequests == 1 && state.link == originalLink,
+              "repeated requests coalesce without interrupting the current link");
+      require(video::MetalDisplayLink::diagnosticsForCurrentThread().find(
+                  "manualRequests=1 manualRecreations=0 recreationPending=1") != std::string::npos,
+              "snapshot distinguishes queued recreation from completed recreation");
       const auto attachedAcquisitions = layer.acquisitions;
       const auto render = [] { bgfx::touch(0); bgfx::frame(); };
       // A link attached between iterations still owns acquisition.
@@ -115,6 +126,39 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "endFrame must preserve attached layer ownership");
+      require(state.link == originalLink && state.recreationRequested,
+              "queued recreation does not detach a current or retiring frame");
+      const auto sizeBefore = layer.drawableSize;
+      const auto countBefore = layer.maximumDrawableCount;
+      NSString *filterBefore = layer.magnificationFilter;
+      auto *owner = &state;
+      // Supply one deterministic wake on the real owner run loop. Headless
+      // layers need not receive real CAMetalDisplayLink callbacks.
+      CFRunLoopTimerRef wake = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
+          CFAbsoluteTimeGetCurrent(), 0, 0, 0, ^(CFRunLoopTimerRef) {
+        const double now = CACurrentMediaTime();
+        if (owner->frame.receive(now, now + 1.0)) owner->drawable = leased;
+      });
+      CFRunLoopAddTimer(CFRunLoopGetCurrent(), wake, kCFRunLoopDefaultMode);
+      const bool recreated = link.beginFrame((__bridge void *)layer, 120, 0, 7,
+                                             [&] { return active; });
+      CFRunLoopTimerInvalidate(wake);
+      CFRelease(wake);
+      require(recreated && state.link != originalLink && state.link != nil &&
+                  state.creationSerial == 1 && state.manualRecreations == 1 &&
+                  !state.recreationRequested,
+              "next frame replaces the link exactly once before obtaining its lease");
+      require(layer.acquisitions == attachedAcquisitions &&
+                  CGSizeEqualToSize(layer.drawableSize, sizeBefore) &&
+                  layer.maximumDrawableCount == countBefore &&
+                  [layer.magnificationFilter isEqualToString:filterBefore] &&
+                  ((CAMetalDisplayLink *)state.link).preferredFrameLatency == 1.0F &&
+                  ((CAMetalDisplayLink *)state.link).preferredFrameRateRange.preferred == 120,
+              "recreation preserves drawable ownership, filter, geometry and pacing requests");
+      require(video::MetalDisplayLink::diagnosticsForCurrentThread().find(
+                  "manualRequests=1 manualRecreations=1 recreationPending=0") != std::string::npos,
+              "snapshot confirms completed replacement");
+      link.endFrame(); // Do not present the fixture's already-presented drawable again.
       state.generation = 8;
       state.isCurrent = [&] { return active; };
       state.frame.begin(8);
@@ -124,7 +168,12 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "lifecycle rejection must not fall through to nextDrawable");
+      require(video::MetalDisplayLink::requestRecreationForDiagnostics(),
+              "another request can be queued before lifecycle cancellation");
       link.pause();
+      require(!state.recreationRequested && state.manualRecreations == 1 &&
+                  !video::MetalDisplayLink::requestRecreationForDiagnostics(),
+              "lifecycle pause cancels pending recreation without reporting completion");
       render();
       require(layer.acquisitions == attachedAcquisitions + 1,
               "pause detaches and restores ordinary acquisition");

@@ -12,6 +12,7 @@
 #include "platform/IOSApplicationRuntime.h"
 #include "platform/GenerationMailbox.h"
 #include "replay/ReplayNativeExportOperation.h"
+#include "video/MetalDisplayLink.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -5981,15 +5982,17 @@ bool SetIOSMetalMagnificationFilter(bool linear) {
 }
 
 bool CopyIOSMetalPresentationDiagnostics() {
-  if (!platform::isMainThread())
-    return platform::onMain([] { return CopyIOSMetalPresentationDiagnostics(); });
+  // Capture thread-local app-link evidence before dispatching to UIKit. The
+  // cold-launch native probes have no app-link owner on their calling thread.
+  const auto linkDiagnostics = video::MetalDisplayLink::diagnosticsForCurrentThread();
+  return platform::onMain([&] {
   @autoreleasepool {
     UIWindow *active = FindActiveWindow();
     if (active == nil) return false;
     UIScreen *screen = active.screen;
     const auto build = skin::compiledSkinBuildIdentity();
     NSMutableString *report = [NSMutableString stringWithFormat:
-        @"AsoBMaShow Metal presentation snapshot v3\ncommit=%s configuration=%s\n"
+        @"AsoBMaShow Metal presentation snapshot v4\ncommit=%s configuration=%s\n"
          "iOS=%@ orientation=%ld\n"
          "screen=%@ nativeBounds=%@ scale=%.4f nativeScale=%.4f mode=%@\n"
          "HUD Direct/Composited: record manually; not queried by this report.\n"
@@ -5998,6 +6001,7 @@ bool CopyIOSMetalPresentationDiagnostics() {
         UIDevice.currentDevice.systemVersion, (long)active.windowScene.interfaceOrientation,
         NSStringFromCGRect(screen.bounds), NSStringFromCGRect(screen.nativeBounds),
         screen.scale, screen.nativeScale, NSStringFromCGSize(screen.currentMode.size)];
+    [report appendFormat:@"%s", linkDiagnostics.c_str()];
     const char *homeHint = SDL_GetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR);
     [report appendFormat:@"homeIndicatorHint=%s (unset uses SDL fullscreen default)\n",
                          homeHint != nullptr ? homeHint : "unset"];
@@ -6022,6 +6026,7 @@ bool CopyIOSMetalPresentationDiagnostics() {
     UIPasteboard.generalPasteboard.string = report;
     return true;
   }
+  });
 }
 
 bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {

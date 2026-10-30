@@ -7,6 +7,7 @@
 #import <Metal/Metal.h>
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 
 namespace video {
 struct MetalDisplayLinkState {
@@ -21,6 +22,10 @@ struct MetalDisplayLinkState {
   float rate = 0;
   double retryAfter = 0;
   bool claimed = false, scheduled = false;
+  // Temporary, owner-thread diagnostics; no per-frame timing collection.
+  bool recreationRequested = false;
+  std::uint64_t creationSerial = 0, manualRequests = 0, manualRecreations = 0;
+  double createdAt = 0;
 };
 }
 
@@ -69,6 +74,7 @@ void invalidate(MetalDisplayLinkState &state) {
   state.delegate = nil;
   state.layer = nil;
   state.rate = 0;
+  state.recreationRequested = false;
 }
 bool geometryMatches(const MetalDisplayLinkState &state, void *layer) {
   if (layer != (__bridge void *)state.layer || state.drawable == nil ||
@@ -129,7 +135,8 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
     @autoreleasepool {
       if (CACurrentMediaTime() < state.retryAfter) return false;
       auto *layer = (__bridge CAMetalLayer *)nativeLayer;
-      if (state.layer != layer) invalidate(state);
+      const bool recreate = state.recreationRequested;
+      if (state.layer != layer || recreate) invalidate(state);
       if (state.link == nil) {
         state.layer = layer;
         auto *delegate = [AsoMetalDisplayLinkDelegate new];
@@ -146,6 +153,9 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
         link.preferredFrameLatency = 1.0F;
         link.paused = YES;
         [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
+        ++state.creationSerial;
+        state.createdAt = CACurrentMediaTime();
+        if (recreate) ++state.manualRecreations;
       }
       auto *link = (CAMetalDisplayLink *)state.link;
       if (state.rate != rate) {
@@ -181,4 +191,31 @@ void MetalDisplayLink::endFrame() { video::endFrame(*state_); }
 // forbids nextDrawable. Detach before timer fallback or export takes ownership.
 void MetalDisplayLink::pause() { invalidate(*state_); }
 void MetalDisplayLink::pauseCurrent() { if (current) invalidate(*current); }
+bool MetalDisplayLink::requestRecreationForDiagnostics() {
+  if (current == nullptr || current->link == nil) return false;
+  if (!current->recreationRequested) {
+    current->recreationRequested = true;
+    ++current->manualRequests;
+  }
+  return true;
+}
+
+std::string MetalDisplayLink::diagnosticsForCurrentThread() {
+  if (current == nullptr)
+    return "APP_METAL_LINK ownerOnCallingThread=0 (native probe or non-owner caller)\n";
+  const auto &state = *current;
+  const double now = CACurrentMediaTime();
+  char report[512];
+  std::snprintf(report, sizeof(report),
+      "APP_METAL_LINK ownerOnCallingThread=1 attached=%d creationSerial=%llu "
+      "linkAgeSeconds=%.3f requestedRate=%.3f preferredFrameLatency=1 "
+      "manualRequests=%llu manualRecreations=%llu recreationPending=%d "
+      "retryInSeconds=%.3f capturedAtMediaTime=%.3f\n",
+      state.link != nil, static_cast<unsigned long long>(state.creationSerial),
+      state.link != nil ? now - state.createdAt : 0.0, state.rate,
+      static_cast<unsigned long long>(state.manualRequests),
+      static_cast<unsigned long long>(state.manualRecreations),
+      state.recreationRequested, std::max(0.0, state.retryAfter - now), now);
+  return report;
+}
 } // namespace video

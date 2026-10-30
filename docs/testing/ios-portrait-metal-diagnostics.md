@@ -51,7 +51,66 @@ drawables, opaque BGRA8/sRGB, three drawables, identity transforms and the same
 secondary window. All captured layer properties match. This is not evidence
 that CAMetalDisplayLink universally prevents Direct mode.
 
-## Next test: layer magnification filter
+## Filter and foreground-return results
+
+On build `b15bd311545ede102cda2d7ef1e3e9920bae5d24`, normal rendering in
+landscape with Display Zoom enabled changed Composited → Direct → Composited
+when the tester selected Nearest → Linear → Nearest. The three v3 snapshots
+differ only in the CAMetalLayer's magnification filter. This isolates the filter
+as a cause in that configuration; no FPS or latency improvement was measured.
+
+In portrait, the tester reports initial composition with Linear, followed by
+Direct after spending some time backgrounded and reopening, with Zoom enabled
+and disabled. They subsequently observed the same symptom with Nearest in
+portrait. The portrait recovery therefore is not specific to Linear. Backgrounding
+invalidates the app's CAMetalDisplayLink, and foreground rendering creates another;
+elapsed time, other app lifecycle work and system presentation state also change.
+These observations do not identify which of those causes the transition.
+
+## Next test: foreground waiting versus display-link recreation
+
+Keep orientation, Zoom, magnification filter and frame cap fixed within each
+trial. Use normal app rendering in portrait and reproduce Composited before
+starting each trial. A cold launch can help reproduce the state, but also resets
+the filter to Nearest: explicitly reselect Linear if that is the chosen test.
+
+1. **Foreground wait:** copy the baseline diagnostics, leave the app visible for
+   the same duration previously spent backgrounded, and copy again. Record HUD
+   mode, Present Delay and elapsed time. Do not change settings or recreate the
+   link during this trial.
+2. **Recreate only:** reproduce the same starting state, copy diagnostics, then
+   choose **Recreate Metal display link (test)** in Settings → Display. Stay in
+   the foreground, record whether the HUD changes immediately or after waiting
+   the same interval, and copy diagnostics again.
+3. **Background control:** reproduce the starting state once more, copy, then
+   background for that same interval, reopen and copy. Record the HUD outcome.
+
+Snapshot v4 adds `APP_METAL_LINK` evidence captured on the application owner
+thread before the UIKit layer snapshot. `creationSerial` counts successful link
+creations; `linkAgeSeconds` is time since that creation. `capturedAtMediaTime`
+allows elapsed-time comparison. `manualRequests`, `manualRecreations` and
+`recreationPending` distinguish a queued request from an actual replacement.
+For the recreate-only trial, require `manualRecreations` to increase by one,
+`recreationPending=0` and `attached=1`. An automatic creation during the wait
+trial also increases `creationSerial`, so that trial was not purely a wait on
+the same attachment. The cold-launch probes report no app-link owner on their
+calling thread; their own scheduler is still identified by their probe header.
+
+The manual action runs only on the application/Metal owner thread. It queues
+replacement until the next beginFrame, after retiring the current lease. Repeated
+requests before that boundary coalesce; a lifecycle/export pause cancels the
+pending request. It adds no GPU drain, deliberate fallback frame, artificial delay, saved
+setting or automatic restart policy. It does not change the filter, layer size,
+drawable pool, requested frame rate or preferred frame latency one. Reports
+confirm link creation, not actual presentation or the compositor's decision.
+
+Focused native coverage checks request deferral/coalescing, one-time replacement,
+preserved layer/pacing state, report counters and cancellation. It uses a real
+Metal link with a deterministic run-loop wake, not physical display callbacks.
+The existing frame-pacer tests and unsigned iOS build also pass. Device HUD and
+latency remain unverified.
+
+## Layer magnification filter instructions
 
 The bgfx Metal backend sets `magnificationFilter` to `nearest` during swap-chain
 initialization. The native probes leave it untouched; Apple's documented default

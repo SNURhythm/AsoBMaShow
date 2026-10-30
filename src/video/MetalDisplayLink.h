@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 namespace video {
 struct MetalDisplayLinkState;
@@ -23,6 +24,9 @@ public:
   void endFrame();
   void pause();
   static void pauseCurrent();
+  // Diagnostic branch only. Called on the application/Metal owner thread.
+  static bool requestRecreationForDiagnostics();
+  static std::string diagnosticsForCurrentThread();
 
 private:
   std::unique_ptr<MetalDisplayLinkState> state_;
