@@ -118,3 +118,39 @@ The current evidence establishes the wrongly oriented lock and successful
 native sizing, but not a common root cause linking the orientation regression
 and the older compositing symptom. Preserve that distinction rather than
 attributing both to one unobserved iPadOS defect.
+
+## Corrected orientation transition
+
+The controller now requests a lock only when the effective scene orientation is
+inside the requested mask. The app waits for an existing effective lock to clear
+before issuing its geometry request (a bounded main-queue wait, at most one
+second). SDL's effective-geometry callback re-evaluates the preference after
+rotation. Auto or gameplay lock cancels obsolete queued work; late errors cannot
+replace a newer request. Snapshot v7 retains request status and error domain/code
+and reports effective orientation separately.
+
+The [native regression harness](evidence/ios-scene-orientation/README.md) first
+failed against the old controller, then passed with the corrected implementation,
+including synthetic denial and cancellation. The unsigned iOS build passes.
+The actual iPad outcome still requires device verification. No compositor change
+or change to CAMetalDisplayLink pacing is included in this fix.
+
+## Additional control: osu!lazer
+
+The user reports osu!lazer is Direct on the same iPad in both orientations. Its
+installed version/settings are not supplied. This is additional evidence against
+a blanket inability of this iPad to present portrait content directly.
+
+Current osu-framework commit `f05a31a9d82972e9b752060370ec17df17bdabda` uses
+`SDL_SetiOSAnimationCallback` for its iOS loop, explicitly described as
+CADisplayLink; the iOS host defaults to single-thread execution. Its project pins
+`ppy.Veldrid` to `4.9.69-ga405fe8484`, whose Metal swapchain uses `nextDrawable`.
+That backend presents via a command buffer followed by commit. Thus the checked
+upstream path is not the CAMetalDisplayLink/update.drawable path used here.
+This verifies source behavior, not the exact installed osu!lazer binary.
+
+- [iOS loop](https://github.com/ppy/osu-framework/blob/f05a31a9d82972e9b752060370ec17df17bdabda/osu.Framework.iOS/IOSWindow.cs#L52-L63)
+- [iOS execution default](https://github.com/ppy/osu-framework/blob/f05a31a9d82972e9b752060370ec17df17bdabda/osu.Framework.iOS/IOSGameHost.cs#L48-L54)
+- [Pinned backend](https://github.com/ppy/osu-framework/blob/f05a31a9d82972e9b752060370ec17df17bdabda/osu.Framework/osu.Framework.csproj#L29)
+- [Drawable acquisition](https://github.com/ppy/veldrid/blob/a405fe8484/src/Veldrid/MTL/MTLSwapchain.cs#L144-L150)
+- [Presentation](https://github.com/ppy/veldrid/blob/a405fe8484/src/Veldrid/MTL/MTLGraphicsDevice.cs#L553-L557)

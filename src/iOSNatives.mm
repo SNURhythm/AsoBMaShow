@@ -4517,14 +4517,77 @@ std::string GetIOSApplicationSupportPath() {
   }
 }
 
+// iOS scene orientation transition. All state and callbacks belong to main.
+namespace {
+NSUInteger sOrientationRequestGeneration = 0;
+UIInterfaceOrientationMask sOrientationRequestedMask = UIInterfaceOrientationMaskAll;
+NSString *sOrientationRequestStatus = @"none";
+NSError *sOrientationRequestError = nil;
+
+UIInterfaceOrientation CurrentIOSSceneOrientation(UIWindow *window) {
+  if (@available(iOS 16.0, *)) {
+    if (window.windowScene != nil)
+      return window.windowScene.effectiveGeometry.interfaceOrientation;
+  }
+  return window.windowScene != nil ? window.windowScene.interfaceOrientation
+                                  : window.rootViewController.interfaceOrientation;
+}
+
+void RequestIOSOrientationAfterUnlock(UIWindow *window,
+                                     UIInterfaceOrientationMask mask,
+                                     NSUInteger generation,
+                                     CFTimeInterval deadline) {
+  if (generation != sOrientationRequestGeneration) return;
+  if (@available(iOS 16.0, *)) {
+    UIWindowScene *scene = window.windowScene;
+    if (scene == nil || scene.activationState != UISceneActivationStateForegroundActive) {
+      sOrientationRequestStatus = @"cancelled-inactive";
+      return;
+    }
+    if (mask & (1UL << CurrentIOSSceneOrientation(window))) {
+      sOrientationRequestStatus = @"matched";
+      if (@available(iOS 26.0, *))
+        [window.rootViewController setNeedsUpdateOfPrefersInterfaceOrientationLocked];
+      return;
+    }
+    if (@available(iOS 26.0, *)) {
+      if (scene.effectiveGeometry.isInterfaceOrientationLocked) {
+        if (CACurrentMediaTime() >= deadline) {
+          sOrientationRequestStatus = @"unlock-timeout";
+          return;
+        }
+        sOrientationRequestStatus = @"waiting-for-unlock";
+        // UIKit applies lock preferences asynchronously. This bounded wait runs
+        // only for an explicit mode change, never in the per-frame render path.
+        __weak UIWindow *weakWindow = window;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC),
+            dispatch_get_main_queue(), ^{
+              RequestIOSOrientationAfterUnlock(weakWindow, mask, generation, deadline);
+            });
+        return;
+      }
+    }
+    sOrientationRequestStatus = @"requested";
+    UIWindowSceneGeometryPreferencesIOS *preferences =
+        [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
+    [scene requestGeometryUpdateWithPreferences:preferences errorHandler:^(NSError *error) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (generation != sOrientationRequestGeneration) return;
+        sOrientationRequestStatus = @"denied";
+        sOrientationRequestError = error;
+        NSLog(@"Could not apply screen orientation: %@", error);
+      });
+    }];
+  }
+}
+} // namespace
+
 void screen_orientation::apply(Mode mode, bool lockCurrent) {
   const auto update = ^{
     UIWindow *window = FindActiveWindow();
     if (window == nil) return;
     static UIInterfaceOrientation lockedOrientation = UIInterfaceOrientationUnknown;
-    const UIInterfaceOrientation current = window.windowScene != nil
-        ? window.windowScene.interfaceOrientation
-        : window.rootViewController.interfaceOrientation;
+    const UIInterfaceOrientation current = CurrentIOSSceneOrientation(window);
     if (lockCurrent && lockedOrientation == UIInterfaceOrientationUnknown) {
       lockedOrientation = current;
     } else if (!lockCurrent) {
@@ -4559,10 +4622,15 @@ void screen_orientation::apply(Mode mode, bool lockCurrent) {
       mask = UIInterfaceOrientationMaskPortrait;
       hint = "Portrait";
     }
+    const NSUInteger generation = ++sOrientationRequestGeneration;
+    sOrientationRequestedMask = mask;
+    sOrientationRequestError = nil;
+    sOrientationRequestStatus = lockCurrent ? @"gameplay-lock"
+        : mode == Mode::Auto ? @"auto" : @"matched";
     SDL_SetHint(SDL_HINT_ORIENTATIONS, hint);
     if (@available(iOS 26.0, *)) {
-      // Resizable iPad scenes do not honor the legacy orientation mask alone.
-      // SDL derives this preference from the same mask, including gameplay lock.
+      // SDL releases the lock while the current orientation is outside the
+      // requested mask, then reacquires it on effective-geometry confirmation.
       [window.rootViewController setNeedsUpdateOfPrefersInterfaceOrientationLocked];
     }
     if (@available(iOS 16.0, *)) {
@@ -4571,12 +4639,7 @@ void screen_orientation::apply(Mode mode, bool lockCurrent) {
       // UIKit, including the user's system rotation lock.
       if (window.windowScene != nil && !lockCurrent && mode != Mode::Auto &&
           !(mask & (1UL << current))) {
-        UIWindowSceneGeometryPreferencesIOS *preferences =
-            [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
-        [window.windowScene requestGeometryUpdateWithPreferences:preferences
-            errorHandler:^(NSError *error) {
-              NSLog(@"Could not apply screen orientation: %@", error);
-            }];
+        RequestIOSOrientationAfterUnlock(window, mask, generation, CACurrentMediaTime() + 1.0);
       } else if (window.windowScene == nil) {
         // SDL2 also supports the pre-UIScene application lifecycle.
         [UIViewController attemptRotationToDeviceOrientation];
@@ -5926,7 +5989,7 @@ bool CopyIOSMetalPresentationDiagnostics() {
     UIScreen *screen = active.screen;
     const auto build = skin::compiledSkinBuildIdentity();
     NSMutableString *report = [NSMutableString stringWithFormat:
-        @"AsoBMaShow Metal presentation snapshot v6\ncommit=%s configuration=%s\n"
+        @"AsoBMaShow Metal presentation snapshot v7\ncommit=%s configuration=%s\n"
          "iOS=%@ orientation=%ld\n"
          "screen=%@ nativeBounds=%@ scale=%.4f nativeScale=%.4f mode=%@\n"
          "HUD Direct/Composited: record manually; not queried by this report.\n"
@@ -5947,6 +6010,17 @@ bool CopyIOSMetalPresentationDiagnostics() {
           active.rootViewController.prefersInterfaceOrientationLocked,
           active.windowScene.effectiveGeometry.isInterfaceOrientationLocked];
     }
+    const UIInterfaceOrientation effectiveOrientation = CurrentIOSSceneOrientation(active);
+    const BOOL orientationMatches = (sOrientationRequestedMask & (1UL << effectiveOrientation)) != 0;
+    NSString *orientationStatus = sOrientationRequestStatus;
+    if (orientationMatches && [orientationStatus isEqualToString:@"requested"])
+      orientationStatus = @"matched";
+    [report appendFormat:@"ORIENTATION_REQUEST serial=%lu mask=%lu effective=%ld matches=%d "
+                          "status=%@ errorDomain=%@ errorCode=%ld reason=%@\n",
+        (unsigned long)sOrientationRequestGeneration, (unsigned long)sOrientationRequestedMask,
+        (long)effectiveOrientation, orientationMatches, orientationStatus,
+        sOrientationRequestError.domain ?: @"none", (long)sOrientationRequestError.code,
+        sOrientationRequestError.localizedDescription ?: @"none"];
     [report appendFormat:@"%s", linkDiagnostics.c_str()];
     const char *homeHint = SDL_GetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR);
     [report appendFormat:@"homeIndicatorHint=%s (unset uses SDL fullscreen default)\n",

@@ -459,3 +459,19 @@ sizes do not prove identical layer geometry or direct-display eligibility. If
 app-layer state does not explain the difference, a physical-device system trace
 or a separate minimal Metal reproduction will still be needed. Remove this
 temporary English-only diagnostic control after the investigation.
+
+## Orientation transition correction (snapshot v7)
+
+Explicit mode changes release an incompatible orientation lock and wait for
+UIKit's effective unlock before requesting rotation. The controller requests
+locking again only after the effective scene orientation matches the setting.
+Auto and gameplay lock invalidate obsolete pending requests. The one-second
+unlock deadline bounds the asynchronous wait; no retry loop runs during normal
+rendering. Snapshot v7 adds `ORIENTATION_REQUEST` with the effective orientation,
+mask match, request status and any UIKit error. A denied geometry request leaves
+the incompatible scene unlocked instead of locking the wrong orientation.
+
+Native Simulator integration tests cover actual rotation/relock, Auto/gameplay,
+unlock timeout, cancellation and a synthetic refusal. This repairs the verified
+lock-order defect, but does not establish that iPadOS will accept the geometry
+request or change the Metal HUD mode. CAMetalDisplayLink remains enabled.
