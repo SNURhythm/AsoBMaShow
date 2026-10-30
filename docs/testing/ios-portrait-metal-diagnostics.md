@@ -67,7 +67,13 @@ invalidates the app's CAMetalDisplayLink, and foreground rendering creates anoth
 elapsed time, other app lifecycle work and system presentation state also change.
 These observations do not identify which of those causes the transition.
 
-## Next test: foreground waiting versus display-link recreation
+## Historical test: foreground waiting versus display-link recreation
+
+The user reports that manual link recreation did not help and stopped manual
+testing on 2026-10-30. These instructions are retained as experiment provenance,
+not a request to repeat the test. The subsequent
+[source audit](../reviews/2026-10-30-ios-metal-source-audit.md) records a locally
+reproduced resize/MSAA defect and the remaining limits of the portrait diagnosis.
 
 Keep orientation, Zoom, magnification filter and frame cap fixed within each
 trial. Use normal app rendering in portrait and reproduce Composited before
