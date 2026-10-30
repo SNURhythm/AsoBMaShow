@@ -9,6 +9,9 @@ namespace video {
 struct MetalDrawableProvider {
   bool (*acquire)(void *layer, void **drawable);
   bool (*shouldPresent)(void *layer, void *drawable);
+  // Optional diagnostics immediately before presentDrawable. Implementations
+  // may observe scheduling/display asynchronously, never change submission.
+  void (*willPresent)(void *layer, void *drawable, void *commandBuffer) = nullptr;
 };
 }
 

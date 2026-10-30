@@ -5981,7 +5981,8 @@ bool SetIOSMetalMagnificationFilter(bool linear) {
 bool CopyIOSMetalPresentationDiagnostics() {
   // Capture thread-local app-link evidence before dispatching to UIKit. The
   // cold-launch native probes have no app-link owner on their calling thread.
-  const auto linkDiagnostics = video::MetalDisplayLink::diagnosticsForCurrentThread();
+  const auto linkDiagnostics = GetIOSLifecycleDiagnostics() +
+      video::MetalDisplayLink::diagnosticsForCurrentThread();
   return platform::onMain([&] {
   @autoreleasepool {
     UIWindow *active = FindActiveWindow();
@@ -5989,7 +5990,7 @@ bool CopyIOSMetalPresentationDiagnostics() {
     UIScreen *screen = active.screen;
     const auto build = skin::compiledSkinBuildIdentity();
     NSMutableString *report = [NSMutableString stringWithFormat:
-        @"AsoBMaShow Metal presentation snapshot v7\ncommit=%s configuration=%s\n"
+        @"AsoBMaShow Metal presentation snapshot v8\ncommit=%s configuration=%s\n"
          "iOS=%@ orientation=%ld\n"
          "screen=%@ nativeBounds=%@ scale=%.4f nativeScale=%.4f mode=%@\n"
          "HUD Direct/Composited: record manually; not queried by this report.\n"

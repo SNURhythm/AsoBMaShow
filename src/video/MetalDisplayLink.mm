@@ -1,6 +1,7 @@
 #include "MetalDisplayLink.h"
 #include "MetalDisplayLinkFrame.h"
 #include "MetalDrawableProvider.h"
+#include "MetalPresentationTiming.h"
 
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <deque>
 
 namespace video {
 struct MetalDisplayLinkState {
@@ -24,10 +26,12 @@ struct MetalDisplayLinkState {
   float rate = 0;
   double retryAfter = 0;
   bool claimed = false, scheduled = false;
-  // Temporary, owner-thread diagnostics; no per-frame timing collection.
+  // Temporary diagnostic branch: bounded startup capture and 1 Hz follow-up.
   bool recreationRequested = false;
   std::uint64_t creationSerial = 0, manualRequests = 0, manualRecreations = 0;
   double createdAt = 0;
+  std::deque<MetalPresentationTiming> timing;
+  std::shared_ptr<MetalPresentationSample> timingSample;
 };
 }
 
@@ -41,9 +45,16 @@ API_AVAILABLE(macos(14.0), ios(17.0))
 @implementation AsoMetalDisplayLinkDelegate
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link
             needsUpdate:(CAMetalDisplayLinkUpdate *)update {
-  if (state->link == link && state->isCurrent && state->isCurrent() &&
-      update.drawable != nil &&
-      state->frame.receive(CACurrentMediaTime(), update.targetTimestamp)) {
+  if (state->link != link || !state->isCurrent || !state->isCurrent()) return;
+  const double now = CACurrentMediaTime();
+  const bool accepted = update.drawable != nil &&
+      state->frame.receive(now, update.targetTimestamp);
+  if (!state->timing.empty()) {
+    const auto sample = state->timing.back().record(
+        now, update.targetTimestamp, update.targetPresentationTimestamp, accepted);
+    if (accepted) state->timingSample = sample;
+  }
+  if (accepted) {
     state->drawable = update.drawable;
     CFRunLoopStop(CFRunLoopGetCurrent());
   }
@@ -60,13 +71,18 @@ void endFrame(MetalDisplayLinkState &state) {
   state.isCurrent = {};
   state.claimed = false;
   state.scheduled = false;
+  state.timingSample.reset();
 }
 void pause(MetalDisplayLinkState &state) {
   endFrame(state);
   if (@available(macOS 14.0, iOS 17.0, *))
     ((CAMetalDisplayLink *)state.link).paused = YES;
 }
-void invalidate(MetalDisplayLinkState &state) {
+void invalidate(MetalDisplayLinkState &state, const char *reason = "pause") {
+  if (state.link != nil && !state.timing.empty() && state.timing.back().detachedAt == 0) {
+    state.timing.back().detachedAt = CACurrentMediaTime();
+    state.timing.back().detachReason = reason;
+  }
   pause(state);
   if (@available(macOS 14.0, iOS 17.0, *)) {
     [(CAMetalDisplayLink *)state.link invalidate];
@@ -112,7 +128,32 @@ bool shouldPresent(void *layer, void *drawable) {
   state.scheduled = state.scheduled || allowed;
   return allowed;
 }
-const MetalDrawableProvider provider{acquireDrawable, shouldPresent};
+void observePresentation(void *layer, void *drawable, void *commandBuffer) {
+  if (current == nullptr || !current->timingSample ||
+      layer != (__bridge void *)current->layer ||
+      drawable != (__bridge void *)current->drawable || !current->scheduled) return;
+  const std::weak_ptr<MetalPresentationSample> sample = current->timingSample;
+  id<MTLCommandBuffer> command = (__bridge id<MTLCommandBuffer>)commandBuffer;
+  [command addScheduledHandler:^(id<MTLCommandBuffer>) {
+    if (const auto retained = sample.lock())
+      retained->scheduledObserved.store(CACurrentMediaTime(), std::memory_order_relaxed);
+  }];
+#if !TARGET_OS_SIMULATOR
+  id<CAMetalDrawable> nativeDrawable = (__bridge id<CAMetalDrawable>)drawable;
+  [nativeDrawable addPresentedHandler:^(id<MTLDrawable> displayed) {
+    if (const auto retained = sample.lock()) {
+      retained->presented.store(displayed.presentedTime, std::memory_order_relaxed);
+      retained->presentationObserved.store(true, std::memory_order_release);
+    }
+  }];
+#else
+  // The Simulator SDK omits presentedTime/addPresentedHandler entirely.
+  current->timingSample->presentationObserved.store(true, std::memory_order_release);
+#endif
+  // Measure after installing observers, immediately before the existing call.
+  current->timingSample->request.store(CACurrentMediaTime(), std::memory_order_relaxed);
+}
+const MetalDrawableProvider provider{acquireDrawable, shouldPresent, observePresentation};
 }
 
 MetalDisplayLink::MetalDisplayLink(std::function<void(bool)> attachmentChanged)
@@ -143,7 +184,7 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
       if (CACurrentMediaTime() < state.retryAfter) return false;
       auto *layer = (__bridge CAMetalLayer *)nativeLayer;
       const bool recreate = state.recreationRequested;
-      if (state.layer != layer || recreate) invalidate(state);
+      if (state.layer != layer || recreate) invalidate(state, recreate ? "manual" : "layerChanged");
       if (state.link == nil) {
         state.layer = layer;
         auto *delegate = [AsoMetalDisplayLinkDelegate new];
@@ -162,6 +203,14 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
         [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
         ++state.creationSerial;
         state.createdAt = CACurrentMediaTime();
+        if (state.timing.size() == 4) state.timing.pop_front();
+        auto &timing = state.timing.emplace_back();
+        timing.serial = state.creationSerial;
+        timing.generation = generation;
+        timing.attachedAt = state.createdAt;
+        timing.rate = rate;
+        timing.width = layer.drawableSize.width;
+        timing.height = layer.drawableSize.height;
         if (recreate) ++state.manualRecreations;
       }
       auto *link = (CAMetalDisplayLink *)state.link;
@@ -188,7 +237,7 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
       }
       if (state.frame.ready() && state.isCurrent && state.isCurrent()) return true;
       const bool missingCallback = state.isCurrent && state.isCurrent();
-      pause();
+      invalidate(state, missingCallback ? "callbackTimeout" : "cancelled");
       if (missingCallback) state.retryAfter = CACurrentMediaTime() + 1.0;
     }
   }
@@ -227,6 +276,12 @@ std::string MetalDisplayLink::diagnosticsForCurrentThread() {
       static_cast<unsigned long long>(state.manualRequests),
       static_cast<unsigned long long>(state.manualRecreations),
       state.recreationRequested, std::max(0.0, state.retryAfter - now), now);
-  return report;
+  std::string result = report;
+  result += "METAL_TIMING_POLICY firstCallbacks=120 recentSamples=16 recentIntervalSeconds=1 "
+            "sessions=4 clock=CACurrentMediaTime status=diagnostic\n"
+            "scheduledObserved is handler delivery, not exact GPU scheduling; "
+            "presented=0 is unavailable/pending, not proof of on-time display.\n";
+  for (const auto &timing : state.timing) result += timing.report();
+  return result;
 }
 } // namespace video

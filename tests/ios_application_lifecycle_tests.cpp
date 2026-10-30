@@ -92,10 +92,39 @@ void testInterruptedFrameRetiresBeforeFreshDraws() {
   require(!frame.finish(state.presentation(), submit) && queued.empty(),
           "preparation beginning inactive must never be presented");
 }
+void testDiagnosticHistoryPreservesActivationBoundary() {
+  platform::IOSApplicationLifecycle state;
+  const auto observe = [&](Uint32 type, double at) {
+    SDL_Event event{};
+    event.type = type;
+    state.observe(event, at);
+  };
+  observe(SDL_EVENT_WILL_ENTER_BACKGROUND, 10);
+  observe(SDL_EVENT_DID_ENTER_BACKGROUND, 11);
+  observe(SDL_EVENT_WILL_ENTER_FOREGROUND, 20);
+  observe(SDL_EVENT_DID_ENTER_FOREGROUND, 21);
+  const auto events = state.diagnostics();
+  require(events.size() == 4, "diagnostics retain the lifecycle transition timestamps");
+  require(events[2].observedAt == 20 && !events[2].presentation.active &&
+              events[3].observedAt == 21 && events[3].presentation.active &&
+              events[3].presentation.generation == 1,
+          "diagnostics must distinguish entering foreground from becoming active");
+  observe(SDL_EVENT_MOUSE_MOTION, 22);
+  require(state.diagnostics().size() == 4, "ordinary input must not evict lifecycle evidence");
+  for (unsigned i = 0; i < 20; ++i) {
+    observe(SDL_EVENT_WILL_ENTER_BACKGROUND, 30 + i * 2);
+    observe(SDL_EVENT_DID_ENTER_FOREGROUND, 31 + i * 2);
+  }
+  const auto recent = state.diagnostics();
+  require(recent.size() == 16 && recent.front().observedAt == 54 &&
+              recent.back().observedAt == 69,
+          "lifecycle history remains bounded and chronological across many resumes");
+}
 }
 int main() {
   testPermissionAndBackgroundCancellation();
   testExportStartingDuringPermissionInterruption();
   testInterruptedFrameRetiresBeforeFreshDraws();
+  testDiagnosticHistoryPreservesActivationBoundary();
   std::cout << "iOS application lifecycle tests passed\n";
 }

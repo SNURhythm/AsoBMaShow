@@ -10,11 +10,14 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--sdl-framework", type=pathlib.Path,
                     help="existing arm64 iOS Simulator SDL3.framework")
 parser.add_argument("--output", required=True, type=pathlib.Path)
-parser.add_argument("--pool-only", action="store_true",
+experiment = parser.add_mutually_exclusive_group()
+experiment.add_argument("--pool-only", action="store_true",
                     help="build the adjacent drawable-pool research harness only")
+experiment.add_argument("--resume-only", action="store_true",
+                    help="build the adjacent lifecycle timing research harness only")
 args = parser.parse_args()
-if not args.pool_only and args.sdl_framework is None:
-    parser.error("--sdl-framework is required unless --pool-only is selected")
+if not (args.pool_only or args.resume_only) and args.sdl_framework is None:
+    parser.error("--sdl-framework is required unless --pool-only or --resume-only is selected")
 source = pathlib.Path(__file__).resolve().parent
 root = source.parents[3]
 sdk = subprocess.check_output(
@@ -26,6 +29,9 @@ experiments = [
 if args.pool_only:
     experiments = [("Audit", "com.snurhythm.live-pool-audit", "AuditScene",
                     "../metal-pool/pool_harness.mm")]
+if args.resume_only:
+    experiments = [("Audit", "com.snurhythm.metal-resume-audit", "AuditScene",
+                    "../metal-resume/resume_harness.mm")]
 for executable, bundle_id, scene, harness in experiments:
     app = args.output / (executable + ".app")
     app.mkdir(parents=True, exist_ok=True)

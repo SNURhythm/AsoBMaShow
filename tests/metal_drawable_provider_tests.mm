@@ -23,6 +23,8 @@ void require(bool value, const char *message) {
 }
 void *supplied = nullptr;
 unsigned providerCalls = 0, presentationCalls = 0;
+unsigned presentationObservations = 0;
+id<MTLCommandBuffer> observedCommand = nil;
 bool allowPresentation = true;
 bool acquire(void *, void **drawable) {
   ++providerCalls;
@@ -34,7 +36,13 @@ bool present(void *, void *drawable) {
   ++presentationCalls;
   return allowPresentation;
 }
-const video::MetalDrawableProvider provider{acquire, present};
+void observePresentation(void *, void *drawable, void *commandBuffer) {
+  require(drawable == supplied, "diagnostic hook observes the presented drawable");
+  observedCommand = (__bridge id<MTLCommandBuffer>)commandBuffer;
+  require(observedCommand != nil, "diagnostic hook receives the actual presentation command buffer");
+  ++presentationObservations;
+}
+const video::MetalDrawableProvider provider{acquire, present, observePresentation};
 }
 
 int main() {
@@ -75,6 +83,12 @@ int main() {
     bgfx::frame();
     require(providerCalls == 3 && presentationCalls == 2 && layer.acquisitions == acquired,
             "valid borrowed provider drawable uses ordinary command-buffer presentation");
+    require(presentationObservations == 1,
+            "only an accepted presentation reaches the timing hook");
+    [observedCommand waitUntilScheduled];
+    require(observedCommand.status >= MTLCommandBufferStatusScheduled,
+            "observed presentation command buffer is actually submitted");
+    observedCommand = nil;
     supplied = nullptr;
     drawable = nil;
 
@@ -119,9 +133,15 @@ int main() {
       state.frame.begin(7);
       require(state.frame.receive(10.0, 10.008), "synthetic fresh callback seeds lease");
       state.drawable = leased;
+      const double callbackAt = CACurrentMediaTime();
+      state.timing.emplace_back();
+      state.timingSample = state.timing.back().record(callbackAt, callbackAt + .008,
+                                                    callbackAt + .016, true);
       render();
       require(link.didSchedulePresent() && layer.acquisitions == attachedAcquisitions,
               "accepted lease presents normally without reacquiring");
+      require(state.timingSample->request.load() >= callbackAt,
+              "production observer records the real bgfx presentation request");
       render();
       require(layer.acquisitions == attachedAcquisitions,
               "consumed lease remains managed nil on repeated acquisition");

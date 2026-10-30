@@ -35,6 +35,7 @@ bool PollIOSApplicationEvent(SDL_Event *event);
 bool WaitIOSApplicationEvent(SDL_Event *event, int timeoutMs);
 bool IOSApplicationActive();
 platform::IOSPresentationState GetIOSPresentationState();
+std::string GetIOSLifecycleDiagnostics();
 std::optional<IOSWindowSnapshot> GetIOSWindowSnapshot(SDL_Window *window);
 std::uint64_t GetIOSCompletedPumpLifecycleGeneration();
 void ResumeIOSGameplayTouchInput(std::uint64_t expectedGeneration);

@@ -3,6 +3,7 @@
 #include "ui/PresentationSchedule.h"
 #include "video/IOSPresentationPacing.h"
 #include "video/MetalDisplayLinkFrame.h"
+#include "video/MetalPresentationTiming.h"
 
 #include <chrono>
 #include <limits>
@@ -89,6 +90,51 @@ void testDisplayLinkFrameRejectsInterruptionAndResize() {
   idle.receive(1.0, 1.008);
   idle.finish();
   require(!idle.claim(true, 1, true), "idle frame must not leak a drawable to later work");
+}
+
+void testMetalTimingRetainsStartupAndBoundsRecentHistory() {
+  video::MetalPresentationTiming timing;
+  auto first = timing.record(10, 10.008, 10.016, true);
+  require(first != nullptr, "startup callback must be retained for resume comparison");
+  std::weak_ptr<video::MetalPresentationSample> replaced;
+  for (unsigned i = 1; i < 120; ++i)
+    require(timing.record(10 + i * .008, 10.008 + i * .008, 10.016 + i * .008, true) != nullptr,
+            "initial burst preserves consecutive callback timing");
+  require(!timing.record(10.96, 10.968, 10.976, true),
+          "steady capture must not install handlers every frame");
+  for (unsigned i = 0; i < 100; ++i) {
+    auto sample = timing.record(12 + i * 1.01, 12.008 + i * 1.01, 12.016 + i * 1.01, true);
+    require(sample != nullptr, "sparse steady samples continue after the startup burst");
+    if (i == 0) replaced = sample;
+  }
+  const auto retained = timing.samples();
+  require(retained.size() == 136 && retained.front() == first && replaced.expired(),
+          "rolling capture preserves startup and releases overwritten samples without growing");
+}
+
+void testMetalTimingSeparatesRequestedTargetsFromObservedPresentation() {
+  video::MetalPresentationTiming timing;
+  auto onTime = timing.record(10, 10.008, 10.016, true);
+  auto late = timing.record(11, 11.008, 11.016, true);
+  auto unavailable = timing.record(12, 12.008, 12.016, true);
+  require(onTime && late && unavailable, "samples exist for timing classification");
+  onTime->request = 10.001;
+  onTime->scheduledObserved = 10.009; // Late observer does not prove a late request.
+  onTime->presented = 10.016;
+  onTime->presentationObserved = true;
+  late->request = 11.009;
+  late->presented = 11.024;
+  late->presentationObserved = true;
+  unavailable->request = 12.001;
+  unavailable->presentationObserved = true; // Simulator/unsupported timestamp: zero.
+  timing.record(13, 12.999, 13.008, false);
+  const auto report = timing.report();
+  require(report.find("requested=3 requestLate=1") != std::string::npos &&
+              report.find("displayed=2 displayLateGt1ms=1 unavailable=1 pending=0") != std::string::npos,
+          "missing/zero presentation timestamps must not become on-time displayed frames");
+  require(report.find("targetLeadMs[n=4 min=8.000 p50=16.000") != std::string::npos &&
+              report.find("displayDeltaMs[n=2 min=0.000 p50=0.000 p95=8.000") != std::string::npos,
+          "assigned lead and actual target miss must remain separate measurements");
 }
 
 void testUncappedPacingNeverWaits() {
@@ -332,6 +378,8 @@ int main() {
   testDisplayLinkRatePreservesCapSemantics();
   testDisplayLinkFrameRejectsStaleAndRepeatedDrawables();
   testDisplayLinkFrameRejectsInterruptionAndResize();
+  testMetalTimingRetainsStartupAndBoundsRecentHistory();
+  testMetalTimingSeparatesRequestedTargetsFromObservedPresentation();
   testIOSDrawableWaitConsumesTheFrameBudget();
   testIOSFrameBudgetPreservesCapsAndIdleWaits();
   testIdleGateRetainsWaitWithoutGpuVsync();

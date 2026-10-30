@@ -482,3 +482,19 @@ confirmed **Windowed Apps** is selected. Further lock-order changes are not a
 remedy for that policy. Full Screen Apps is the relevant existing-build check;
 its effect on orientation and compositing is not yet verified. See the
 [confirmed refusal](../reviews/2026-10-30-ios-ipados-presentation-differences.md#confirmed-windowing-mode-refusal).
+
+## V8: compare timing across background and foreground
+
+V8 retains four Metal-link attachment sessions and sixteen lifecycle events.
+Each session records its first 120 callbacks, then at most one sample per second
+in a sixteen-sample ring. The ordinary Copy Metal Presentation Diagnostics
+action includes this history, including timeout/manual detach reasons. No new
+setting or deliberate pacing delay is introduced.
+
+Keep orientation, zoom and rate fixed. Note the HUD mode before backgrounding;
+when a return changes it to Direct, copy the report soon afterward. The previous
+session remains available for comparison. The report separates assigned target
+lead, submission margin and actual display versus target. Pending/unavailable
+display timestamps are not counted as successful display. See the
+[timing investigation](../reviews/2026-10-30-metal-resume-timing.md) for interpretation
+and measurement limits. This diagnostic build does not claim to fix compositing.

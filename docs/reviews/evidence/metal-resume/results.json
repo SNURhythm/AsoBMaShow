@@ -1,0 +1,100 @@
+{
+  "initial": {
+    "limitation": "Simulator cannot supply presentedTime or physical Direct/Composited evidence",
+    "retryPolls": 0,
+    "lifecycle": [
+      {
+        "at": 1904257.3748162088,
+        "generation": 0,
+        "active": true,
+        "type": 261
+      },
+      {
+        "at": 1904257.3933809588,
+        "generation": 0,
+        "active": true,
+        "type": 262
+      }
+    ],
+    "report": "APP_METAL_LINK ownerOnCallingThread=1 attached=1 creationSerial=1 linkAgeSeconds=3.590 requestedRate=60.000 preferredFrameLatency=1 manualRequests=0 manualRecreations=0 recreationPending=0 retryInSeconds=0.000 capturedAtMediaTime=1904260.984\nMETAL_TIMING_POLICY firstCallbacks=120 recentSamples=16 recentIntervalSeconds=1 sessions=4 clock=CACurrentMediaTime status=diagnostic\nscheduledObserved is handler delivery, not exact GPU scheduling; presented=0 is unavailable/pending, not proof of on-time display.\nMETAL_TIMING serial=1 generation=0 attachedAt=1904257.394 detachedAt=0.000 detachReason=none rateAtAttach=60.000 drawableAtAttach=48x32 callbacks=160 rejected=0\n startup samples=120 accepted=120 requested=120 requestLate=0 displayed=0 displayLateGt1ms=0 unavailable=120 pending=0\n  targetLeadMs[n=120 min=25.128 p50=32.753 p95=32.828 max=32.862]\n  deadlineLeadMs[n=120 min=8.462 p50=16.086 p95=16.161 max=16.196]\n  targetAfterDeadlineMs[n=120 min=16.667 p50=16.667 p95=16.667 max=16.667]\n  callbackToRequestMs[n=120 min=0.043 p50=0.055 p95=0.069 max=0.091]\n  requestMarginMs[n=120 min=8.401 p50=16.028 p95=16.110 max=16.139]\n  scheduledObservedMarginMs[n=120 min=7.167 p50=13.827 p95=15.722 max=15.873]\n  sample at=1904257.404 accepted=1 deadline=1904257.417 target=1904257.433 request=1904257.404 scheduledObserved=1904257.405 presented=0.000\n  sample at=1904257.419 accepted=1 deadline=1904257.433 target=1904257.450 request=1904257.419 scheduledObserved=1904257.420 presented=0.000\n  sample at=1904257.438 accepted=1 deadline=1904257.450 target=1904257.467 request=1904257.438 scheduledObserved=1904257.439 presented=0.000\n  sample at=1904260.035 accepted=1 deadline=1904260.050 target=1904260.067 request=1904260.035 scheduledObserved=1904260.036 presented=0.000\n  sample at=1904260.067 accepted=1 deadline=1904260.083 target=1904260.100 request=1904260.067 scheduledObserved=1904260.068 presented=0.000\n  sample at=1904260.085 accepted=1 deadline=1904260.100 target=1904260.117 request=1904260.085 scheduledObserved=1904260.086 presented=0.000\n",
+    "framesInPhase": 160,
+    "sessions": [
+      {
+        "serial": 1,
+        "displayed": 0,
+        "generation": 0,
+        "samples": 120,
+        "detached": 0,
+        "attached": 1904257.3944136254,
+        "requests": 120,
+        "scheduled": 120
+      }
+    ]
+  },
+  "resumed": {
+    "limitation": "Simulator cannot supply presentedTime or physical Direct/Composited evidence",
+    "retryPolls": 1,
+    "lifecycle": [
+      {
+        "at": 1904257.3748162088,
+        "generation": 0,
+        "active": true,
+        "type": 261
+      },
+      {
+        "at": 1904257.3933809588,
+        "generation": 0,
+        "active": true,
+        "type": 262
+      },
+      {
+        "at": 1904261.2500402087,
+        "generation": 1,
+        "active": false,
+        "type": 259
+      },
+      {
+        "at": 1904265.4367585422,
+        "generation": 1,
+        "active": false,
+        "type": 260
+      },
+      {
+        "at": 1904265.6678084587,
+        "generation": 1,
+        "active": false,
+        "type": 261
+      },
+      {
+        "at": 1904265.6749786672,
+        "generation": 1,
+        "active": true,
+        "type": 262
+      }
+    ],
+    "report": "APP_METAL_LINK ownerOnCallingThread=1 attached=0 creationSerial=2 linkAgeSeconds=0.000 requestedRate=0.000 preferredFrameLatency=1 manualRequests=0 manualRecreations=0 recreationPending=0 retryInSeconds=0.000 capturedAtMediaTime=1904269.286\nMETAL_TIMING_POLICY firstCallbacks=120 recentSamples=16 recentIntervalSeconds=1 sessions=4 clock=CACurrentMediaTime status=diagnostic\nscheduledObserved is handler delivery, not exact GPU scheduling; presented=0 is unavailable/pending, not proof of on-time display.\nMETAL_TIMING serial=1 generation=0 attachedAt=1904257.394 detachedAt=1904261.251 detachReason=cancelled rateAtAttach=60.000 drawableAtAttach=48x32 callbacks=171 rejected=0\n startup samples=120 accepted=120 requested=120 requestLate=0 displayed=0 displayLateGt1ms=0 unavailable=120 pending=0\n  targetLeadMs[n=120 min=25.128 p50=32.753 p95=32.828 max=32.862]\n  deadlineLeadMs[n=120 min=8.462 p50=16.086 p95=16.161 max=16.196]\n  targetAfterDeadlineMs[n=120 min=16.667 p50=16.667 p95=16.667 max=16.667]\n  callbackToRequestMs[n=120 min=0.043 p50=0.055 p95=0.069 max=0.091]\n  requestMarginMs[n=120 min=8.401 p50=16.028 p95=16.110 max=16.139]\n  scheduledObservedMarginMs[n=120 min=7.167 p50=13.827 p95=15.722 max=15.873]\n recent samples=1 accepted=1 requested=1 requestLate=0 displayed=0 displayLateGt1ms=0 unavailable=1 pending=0\n  targetLeadMs[n=1 min=32.751 p50=32.751 p95=32.751 max=32.751]\n  deadlineLeadMs[n=1 min=16.084 p50=16.084 p95=16.084 max=16.084]\n  targetAfterDeadlineMs[n=1 min=16.667 p50=16.667 p95=16.667 max=16.667]\n  callbackToRequestMs[n=1 min=0.052 p50=0.052 p95=0.052 max=0.052]\n  requestMarginMs[n=1 min=16.032 p50=16.032 p95=16.032 max=16.032]\n  scheduledObservedMarginMs[n=1 min=15.417 p50=15.417 p95=15.417 max=15.417]\n  sample at=1904257.404 accepted=1 deadline=1904257.417 target=1904257.433 request=1904257.404 scheduledObserved=1904257.405 presented=0.000\n  sample at=1904257.419 accepted=1 deadline=1904257.433 target=1904257.450 request=1904257.419 scheduledObserved=1904257.420 presented=0.000\n  sample at=1904257.438 accepted=1 deadline=1904257.450 target=1904257.467 request=1904257.438 scheduledObserved=1904257.439 presented=0.000\n  sample at=1904260.067 accepted=1 deadline=1904260.083 target=1904260.100 request=1904260.067 scheduledObserved=1904260.068 presented=0.000\n  sample at=1904260.085 accepted=1 deadline=1904260.100 target=1904260.117 request=1904260.085 scheduledObserved=1904260.086 presented=0.000\n  sample at=1904261.101 accepted=1 deadline=1904261.117 target=1904261.133 request=1904261.101 scheduledObserved=1904261.101 presented=0.000\nMETAL_TIMING serial=2 generation=1 attachedAt=1904265.679 detachedAt=1904269.286 detachReason=pause rateAtAttach=60.000 drawableAtAttach=48x32 callbacks=160 rejected=0\n startup samples=120 accepted=120 requested=120 requestLate=0 displayed=0 displayLateGt1ms=0 unavailable=120 pending=0\n  targetLeadMs[n=120 min=25.154 p50=31.719 p95=32.838 max=33.202]\n  deadlineLeadMs[n=120 min=8.487 p50=15.053 p95=16.171 max=16.535]\n  targetAfterDeadlineMs[n=120 min=16.667 p50=16.667 p95=16.667 max=16.667]\n  callbackToRequestMs[n=120 min=0.039 p50=0.058 p95=0.084 max=0.147]\n  requestMarginMs[n=120 min=8.429 p50=14.981 p95=16.109 max=16.482]\n  scheduledObservedMarginMs[n=120 min=8.015 p50=14.271 p95=15.546 max=15.787]\n  sample at=1904265.684 accepted=1 deadline=1904265.700 target=1904265.717 request=1904265.684 scheduledObserved=1904265.684 presented=0.000\n  sample at=1904265.701 accepted=1 deadline=1904265.717 target=1904265.733 request=1904265.701 scheduledObserved=1904265.701 presented=0.000\n  sample at=1904265.734 accepted=1 deadline=1904265.750 target=1904265.767 request=1904265.734 scheduledObserved=1904265.735 presented=0.000\n  sample at=1904268.301 accepted=1 deadline=1904268.317 target=1904268.333 request=1904268.301 scheduledObserved=1904268.301 presented=0.000\n  sample at=1904268.324 accepted=1 deadline=1904268.333 target=1904268.350 request=1904268.324 scheduledObserved=1904268.324 presented=0.000\n  sample at=1904268.352 accepted=1 deadline=1904268.367 target=1904268.383 request=1904268.352 scheduledObserved=1904268.353 presented=0.000\n",
+    "framesInPhase": 160,
+    "sessions": [
+      {
+        "serial": 1,
+        "displayed": 0,
+        "generation": 0,
+        "samples": 121,
+        "detached": 1904261.2507405004,
+        "attached": 1904257.3944136254,
+        "requests": 121,
+        "scheduled": 121
+      },
+      {
+        "serial": 2,
+        "displayed": 0,
+        "generation": 1,
+        "samples": 120,
+        "detached": 1904269.2855592922,
+        "attached": 1904265.6787448337,
+        "requests": 120,
+        "scheduled": 120
+      }
+    ]
+  }
+}
