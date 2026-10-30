@@ -872,6 +872,7 @@ json settingsToJson(const AppSettings &settings) {
       {"hispeedAutoAdjust", settings.hispeedAutoAdjust},
       {"uiThemeMode", static_cast<int>(settings.uiThemeMode)},
       {"screenOrientation", static_cast<int>(settings.screenOrientation)},
+      {"iosMetalDisplayLink", settings.iosMetalDisplayLink},
       {"systemPlaybackShowJacket", settings.systemPlaybackShowJacket},
       {"systemPlaybackShowTitle", settings.systemPlaybackShowTitle},
       {"systemPlaybackShowArtist", settings.systemPlaybackShowArtist},
@@ -1252,6 +1253,7 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readEnum(document, "uiThemeMode", settings.uiThemeMode, diagnostics);
   readEnum(document, "screenOrientation", settings.screenOrientation, diagnostics);
+  readValue(document, "iosMetalDisplayLink", settings.iosMetalDisplayLink, diagnostics);
   readValue(document, "systemPlaybackShowJacket",
             settings.systemPlaybackShowJacket, diagnostics);
   readValue(document, "systemPlaybackShowTitle",

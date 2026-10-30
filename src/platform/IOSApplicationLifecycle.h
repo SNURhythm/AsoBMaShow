@@ -3,20 +3,13 @@
 #include "../ThreadCompat.h"
 #include "../input/InputLifecycle.h"
 #include <cstdint>
-#include <array>
 #include <mutex>
 #include <optional>
-#include <vector>
 
 namespace platform {
 struct IOSPresentationState {
   bool active = true;
   std::uint64_t generation = 0;
-};
-struct IOSLifecycleDiagnostic {
-  Uint32 type = 0;
-  double observedAt = 0;
-  IOSPresentationState presentation;
 };
 
 // SDL maps UIKit resignActive (including permission alerts) to WILL_BACKGROUND.
@@ -24,7 +17,7 @@ struct IOSLifecycleDiagnostic {
 // the earlier notification and resumes only after UIKit becomes active again.
 class IOSApplicationLifecycle {
 public:
-  void observe(const SDL_Event &event, double observedAt = 0) {
+  void observe(const SDL_Event &event) {
     std::optional<std::stop_source> cancel;
     {
       const std::lock_guard lock(mutex);
@@ -45,15 +38,6 @@ public:
                  input::isForegroundLifecycleEvent(event)) {
         state.active = true;
       }
-      if (observedAt > 0 && (event.type == SDL_EVENT_WILL_ENTER_BACKGROUND ||
-          event.type == SDL_EVENT_DID_ENTER_BACKGROUND ||
-          event.type == SDL_EVENT_WILL_ENTER_FOREGROUND ||
-          event.type == SDL_EVENT_DID_ENTER_FOREGROUND ||
-          event.type == SDL_EVENT_TERMINATING)) {
-        history[historyNext] = {event.type, observedAt, state};
-        historyNext = (historyNext + 1) % history.size();
-        if (historyCount < history.size()) ++historyCount;
-      }
       if (background || terminating) cancel = exportStop;
     }
     // Stop callbacks may call into native code; never run them under our lock.
@@ -62,15 +46,6 @@ public:
   IOSPresentationState presentation() const {
     const std::lock_guard lock(mutex);
     return state;
-  }
-  std::vector<IOSLifecycleDiagnostic> diagnostics() const {
-    const std::lock_guard lock(mutex);
-    std::vector<IOSLifecycleDiagnostic> result;
-    result.reserve(historyCount);
-    const auto first = historyCount == history.size() ? historyNext : 0;
-    for (std::size_t i = 0; i < historyCount; ++i)
-      result.push_back(history[(first + i) % history.size()]);
-    return result;
   }
   void beginExport(std::stop_source stop) {
     bool cancel;
@@ -94,8 +69,6 @@ private:
   IOSPresentationState state;
   bool interrupted = false, background = false, terminating = false;
   std::optional<std::stop_source> exportStop;
-  std::array<IOSLifecycleDiagnostic, 16> history;
-  std::size_t historyNext = 0, historyCount = 0;
 };
 
 // bgfx::discard() only resets encoder state. Submitted draws require

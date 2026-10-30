@@ -63,8 +63,6 @@ function(asobmashow_patch_bgfx_metal_presentation content_variable)
     set(present_fixed [=[if (asobmashowMetalShouldPresent(frameBuffer.m_swapChain->m_metalLayer,
                             frameBuffer.m_swapChain->m_drawable))
                         {
-                            asobmashowMetalWillPresent(frameBuffer.m_swapChain->m_metalLayer,
-                                frameBuffer.m_swapChain->m_drawable, presentCommandBuffer);
                             presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);
                         }]=])
     foreach(hook include acquire fallback extent present)

@@ -15,12 +15,6 @@ bool asobmashowMetalShouldPresent(void* layer, void* drawable)
     const auto* provider = metalDrawableProvider.load(std::memory_order_acquire);
     return !provider || provider->shouldPresent(layer, drawable);
 }
-void asobmashowMetalWillPresent(void* layer, void* drawable, void* commandBuffer)
-{
-    const auto* provider = metalDrawableProvider.load(std::memory_order_acquire);
-    if (provider && provider->willPresent)
-        provider->willPresent(layer, drawable, commandBuffer);
-}
 }
 extern "C" void asobmashowMetalSetDrawableProvider(const video::MetalDrawableProvider* provider)
 {

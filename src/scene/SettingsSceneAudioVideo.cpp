@@ -2,8 +2,6 @@
 #include "SettingsSceneShared.h"
 
 #include "../path.h"
-#include "../platform/IOSNativeMetalProbe.h"
-#include "../video/MetalDisplayLink.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
 #include "../view/ScrollView.h"
@@ -491,6 +489,24 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
       i18n::message("settings.display.orientation_help.message"),
       orientationControls, metrics.modeCardHeight, metrics.cardsWidth));
 #endif
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  const auto applyMetalDisplayLink = [this](bool enabled) {
+    context.settings.iosMetalDisplayLink = enabled;
+    persistSettings();
+  };
+  auto *metalDisplayLinkControl = makeGameplaySkinChoiceRow(
+      metrics, overlayPortal, "", true,
+      {{.label = i18n::message("settings.audio_video.off.label"),
+        .selected = !context.settings.iosMetalDisplayLink,
+        .action = [applyMetalDisplayLink] { applyMetalDisplayLink(false); }},
+       {.label = i18n::message("settings.audio_video.on.label"),
+        .selected = context.settings.iosMetalDisplayLink,
+        .action = [applyMetalDisplayLink] { applyMetalDisplayLink(true); }}}, true);
+  cardsColumn->addView(makeCard(
+      metrics, "CAMetalDisplayLink",
+      i18n::message("settings.display.metal_display_link.description"),
+      metalDisplayLinkControl, metrics.modeCardHeight, metrics.cardsWidth));
+#endif
   if (audioVideoSession == nullptr ||
       context.displaySettingsManager == nullptr) {
     cardsColumn->addView(makeCard(
@@ -641,95 +657,6 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   displayStatusText =
       makeWrappedText("", metrics.bodyTextSize, app_theme::textSecondary());
   controls->addView(displayStatusText);
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  auto *copyMetalDiagnostics = makeControlButton(
-      kFitContentWidth, metrics.actionButtonHeight,
-      makeText("Copy Metal diagnostics", metrics.bodyTextSize,
-               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-  copyMetalDiagnostics->setOnClickListener([this]() {
-    const bool copied = CopyIOSMetalPresentationDiagnostics();
-    setDisplayStatus(copied ? "Metal diagnostics copied. Paste with the HUD mode."
-                            : "No active iOS window; diagnostics not copied.",
-                     app_theme::sdl(copied ? app_theme::lime() : app_theme::coral()));
-  });
-  controls->addView(copyMetalDiagnostics);
-
-  auto *recreateMetalLink = makeControlButton(
-      kFitContentWidth, metrics.actionButtonHeight,
-      makeText("Recreate Metal display link (test)", metrics.bodyTextSize,
-               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-  recreateMetalLink->setOnClickListener([this]() {
-    const bool queued = video::MetalDisplayLink::requestRecreationForDiagnostics();
-    setDisplayStatus(
-        queued ? "Recreation queued for the next frame. Stay in the app, read the HUD, then copy diagnostics."
-               : "No attached app Metal display link; nothing was changed.",
-        app_theme::sdl(queued ? app_theme::lime() : app_theme::coral()));
-  });
-  controls->addView(recreateMetalLink);
-
-  const auto currentMetalFilter = GetIOSMetalMagnificationFilter();
-  std::vector<GameplaySkinChoiceButton> metalFilters;
-  for (const bool linear : {false, true}) {
-    metalFilters.push_back({.label = linear ? "Linear" : "Nearest",
-        .selected = currentMetalFilter == (linear ? "linear" : "nearest"),
-        .tryAction = [this, linear] {
-      const bool applied = SetIOSMetalMagnificationFilter(linear);
-      setDisplayStatus(
-          applied ? (linear ? "Metal magnification: Linear. Read the HUD, then copy diagnostics."
-                            : "Metal magnification: Nearest. Read the HUD, then copy diagnostics.")
-                  : "No active Metal surface; filter was not changed.",
-          app_theme::sdl(applied ? app_theme::lime() : app_theme::coral()));
-      return applied;
-    }});
-  }
-  controls->addView(makeGameplaySkinChoiceRow(
-      metrics, overlayPortal, "Metal magnification filter (test)",
-      !currentMetalFilter.empty(), std::move(metalFilters)));
-  controls->addView(makeWrappedText(
-      "Temporary test. Nearest restores the app default; restarting also resets it.",
-      metrics.smallTextSize, app_theme::textMuted()));
-
-  auto *nativeProbe = makeControlButton(
-      kFitContentWidth, metrics.actionButtonHeight,
-      makeText("Native Metal display link on next launch", metrics.bodyTextSize,
-               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-  nativeProbe->setOnClickListener([this]() {
-    const bool armed = ArmIOSNativeMetalProbe(IOSNativeMetalProbeMode::NativeMetalDisplayLink);
-    setDisplayStatus(
-        armed ? "Test armed. Close the app from the app switcher, then reopen. Rotate and read the HUD; double-tap to copy diagnostics and return."
-              : "Could not save the native Metal test request.",
-        app_theme::sdl(armed ? app_theme::lime() : app_theme::coral()));
-  });
-  controls->addView(nativeProbe);
-
-  auto *sdlProbe = makeControlButton(
-      kFitContentWidth, metrics.actionButtonHeight,
-      makeText("SDL surface on next launch", metrics.bodyTextSize,
-               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-  sdlProbe->setOnClickListener([this]() {
-    const bool armed = ArmIOSNativeMetalProbe(IOSNativeMetalProbeMode::SDLSurface);
-    setDisplayStatus(
-        armed ? "SDL surface test armed. Close and reopen the app. Rotate and read the HUD; double-tap to copy diagnostics and return."
-              : "Could not save the SDL surface test request.",
-        app_theme::sdl(armed ? app_theme::lime() : app_theme::coral()));
-  });
-  controls->addView(sdlProbe);
-
-  auto *metalLinkProbe = makeControlButton(
-      kFitContentWidth, metrics.actionButtonHeight,
-      makeText("SDL Metal display link on next launch", metrics.bodyTextSize,
-               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
-  metalLinkProbe->setOnClickListener([this]() {
-    const bool armed = ArmIOSNativeMetalProbe(IOSNativeMetalProbeMode::SDLMetalDisplayLink);
-    setDisplayStatus(
-        armed ? "Metal display link test armed. Close and reopen the app. Rotate and read the HUD; double-tap to copy diagnostics and return."
-              : "Could not save the Metal display link test request.",
-        app_theme::sdl(armed ? app_theme::lime() : app_theme::coral()));
-  });
-  controls->addView(metalLinkProbe);
-
-#endif
 
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.display.display.label"), i18n::message("settings.display.changes_preview_15_seconds.message"),

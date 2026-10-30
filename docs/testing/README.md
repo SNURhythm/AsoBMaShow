@@ -159,6 +159,32 @@ device files. These device checks complement the host
 `text_view_font_lifetime_tests` and `skin_resource_catalog_tests`; desktop font
 fixtures alone cannot detect an Android system font changing to COLRv1.
 
+## iOS Metal sizing and scene orientation
+
+Two optional Simulator checks exercise the production helpers with a real SDL
+UIKit window. Use an arm64 Simulator SDL3.framework built from the pinned SDL
+revision and an already booted Simulator:
+
+```sh
+python3 tests/ios_metal_sizing_smoke.py --sdl-framework /path/to/SDL3.framework --output /tmp/asobmashow-metal-sizing
+xcrun simctl install booted /tmp/asobmashow-metal-sizing/Sizing.app
+xcrun simctl launch --console-pty booted com.snurhythm.metal-sizing-audit
+xcrun simctl uninstall booted com.snurhythm.metal-sizing-audit
+
+python3 tests/ios_scene_orientation_smoke.py --sdl-framework /path/to/SDL3.framework --output /tmp/asobmashow-orientation
+xcrun simctl install booted /tmp/asobmashow-orientation/Smoke.app
+xcrun simctl launch --console-pty booted com.snurhythm.sdl-orientation-smoke
+xcrun simctl uninstall booted com.snurhythm.sdl-orientation-smoke
+```
+
+Require the `PASS actual SDL + production sizing` and `PASS actual SDL + production
+apply` messages; a successful launch alone does not prove the assertions passed.
+The sizing check preserves exact pixels across unchanged foreground layouts and
+still resizes when bounds or scale change. The orientation check covers unlocking
+before rotation, relocking after confirmation, cancellation, timeout and denial.
+It requires iOS 26 or newer and does not test physical iPad windowing policy.
+Neither check measures Direct/Composited presentation or replaces the app.
+
 ## iOS native source reader
 
 With an already booted iOS Simulator, run `scripts/ios_native_document_test.sh`

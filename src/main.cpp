@@ -68,7 +68,6 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
-#include "platform/IOSNativeMetalProbe.h"
 #include "platform/IOSSDLRefreshClock.h"
 #include "video/IOSPresentationPacing.h"
 #include "video/MetalDisplayLink.h"
@@ -466,9 +465,6 @@ int AsoBMaShowMain(int argv, char **args) {
 #else
 int main(int argv, char **args) {
 #endif
-#if TARGET_OS_IPHONE
-  RunIOSNativeMetalProbeIfRequested();
-#endif
   // Set working directory to executable's directory
   std::filesystem::path exePath;
 #ifdef _WIN32
@@ -673,10 +669,6 @@ int main(int argv, char **args) {
     return EXIT_FAILURE;
   }
 #if TARGET_OS_IPHONE
-  if (RunIOSSDLMetalProbeIfRequested(pd.nwh)) {
-    // The test may finish in a different orientation than startup.
-    SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
-  }
   if (!InstallIOSGameplayTouchInput(metalView.get())) {
     SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                 "Could not install direct UIKit gameplay touch input; retaining SDL raw input");
@@ -1134,7 +1126,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const auto displayLinkState = GetIOSPresentationState();
     const auto displayLinkViewport = GetIOSWindowSnapshot(s_window);
     bool iosDisplayLinkFrame = false;
-    if (!iosPreparedFrame.pending() && displayLinkState.active &&
+    if (context.settings.iosMetalDisplayLink &&
+        !iosPreparedFrame.pending() && displayLinkState.active &&
         !context.replayVideoExportActive.load(std::memory_order_acquire) &&
         !context.rendererAccess.exportRequested()) {
       iosDisplayLinkFrame = iosDisplayLink.beginFrame(

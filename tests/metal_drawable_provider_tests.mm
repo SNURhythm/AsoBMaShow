@@ -23,8 +23,6 @@ void require(bool value, const char *message) {
 }
 void *supplied = nullptr;
 unsigned providerCalls = 0, presentationCalls = 0;
-unsigned presentationObservations = 0;
-id<MTLCommandBuffer> observedCommand = nil;
 bool allowPresentation = true;
 bool acquire(void *, void **drawable) {
   ++providerCalls;
@@ -36,19 +34,11 @@ bool present(void *, void *drawable) {
   ++presentationCalls;
   return allowPresentation;
 }
-void observePresentation(void *, void *drawable, void *commandBuffer) {
-  require(drawable == supplied, "diagnostic hook observes the presented drawable");
-  observedCommand = (__bridge id<MTLCommandBuffer>)commandBuffer;
-  require(observedCommand != nil, "diagnostic hook receives the actual presentation command buffer");
-  ++presentationObservations;
-}
-const video::MetalDrawableProvider provider{acquire, present, observePresentation};
+const video::MetalDrawableProvider provider{acquire, present};
 }
 
 int main() {
   @autoreleasepool {
-    require(!video::MetalDisplayLink::requestRecreationForDiagnostics(),
-            "diagnostic recreation cannot run without an owner on this thread");
     auto *layer = [AsoDrawableProbeLayer new];
     bgfx::renderFrame();
     bgfx::Init init;
@@ -83,12 +73,6 @@ int main() {
     bgfx::frame();
     require(providerCalls == 3 && presentationCalls == 2 && layer.acquisitions == acquired,
             "valid borrowed provider drawable uses ordinary command-buffer presentation");
-    require(presentationObservations == 1,
-            "only an accepted presentation reaches the timing hook");
-    [observedCommand waitUntilScheduled];
-    require(observedCommand.status >= MTLCommandBufferStatusScheduled,
-            "observed presentation command buffer is actually submitted");
-    observedCommand = nil;
     supplied = nullptr;
     drawable = nil;
 
@@ -100,26 +84,27 @@ int main() {
     if (@available(macOS 14.0, iOS 17.0, *)) {
       std::vector<bool> attachmentChanges;
       video::MetalDisplayLink link([&](bool attached) { attachmentChanges.push_back(attached); });
-      require(attachmentChanges.empty(), "constructing an inactive link leaves the fallback clock alone");
+      require(attachmentChanges.empty(), "inactive link leaves the fallback refresh clock alone");
       // White-box native fixture: use a real attached CAMetalDisplayLink and
       // real drawable, but seed the lease deterministically. No claim of native
       // callback delivery: a headless layer need not receive display updates.
       id<CAMetalDrawable> leased = [layer nextDrawable];
       require(leased != nil, "native drawable available before attaching link");
       auto &state = *video::current;
-      state.layer = layer;
-      state.link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
-      require(state.link != nil, "native link attaches for deterministic ownership checks");
-      ((CAMetalDisplayLink *)state.link).paused = YES;
-      require(video::MetalDisplayLink::requestRecreationForDiagnostics(),
-              "diagnostic recreation accepts an attached owner-thread link");
-      id originalLink = state.link;
-      require(video::MetalDisplayLink::requestRecreationForDiagnostics() &&
-                  state.manualRequests == 1 && state.link == originalLink,
-              "repeated requests coalesce without interrupting the current link");
-      require(video::MetalDisplayLink::diagnosticsForCurrentThread().find(
-                  "manualRequests=1 manualRecreations=0 recreationPending=1") != std::string::npos,
-              "snapshot distinguishes queued recreation from completed recreation");
+      bool active = true;
+      auto *owner = &state;
+      CFRunLoopTimerRef wake = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
+          CFAbsoluteTimeGetCurrent(), 0, 0, 0, ^(CFRunLoopTimerRef) {
+        const double now = CACurrentMediaTime();
+        if (owner->frame.receive(now, now + 1.0)) owner->drawable = leased;
+      });
+      CFRunLoopAddTimer(CFRunLoopGetCurrent(), wake, kCFRunLoopDefaultMode);
+      const bool attached = link.beginFrame((__bridge void *)layer, 120, 0, 7,
+                                            [&] { return active; });
+      CFRunLoopTimerInvalidate(wake);
+      CFRelease(wake);
+      require(attached && attachmentChanges == std::vector<bool>{true},
+              "native attachment transfers refresh ownership before returning a frame");
       const auto attachedAcquisitions = layer.acquisitions;
       const auto render = [] { bgfx::touch(0); bgfx::frame(); };
       // A link attached between iterations still owns acquisition.
@@ -127,65 +112,23 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "attached idle lease must return handled nil without nextDrawable");
-      bool active = true;
       state.generation = 7;
       state.isCurrent = [&] { return active; };
       state.frame.begin(7);
       require(state.frame.receive(10.0, 10.008), "synthetic fresh callback seeds lease");
       state.drawable = leased;
-      const double callbackAt = CACurrentMediaTime();
-      state.timing.emplace_back();
-      state.timingSample = state.timing.back().record(callbackAt, callbackAt + .008,
-                                                    callbackAt + .016, true);
       render();
       require(link.didSchedulePresent() && layer.acquisitions == attachedAcquisitions,
               "accepted lease presents normally without reacquiring");
-      require(state.timingSample->request.load() >= callbackAt,
-              "production observer records the real bgfx presentation request");
       render();
       require(layer.acquisitions == attachedAcquisitions,
               "consumed lease remains managed nil on repeated acquisition");
       link.endFrame();
+      require(attachmentChanges == std::vector<bool>{true},
+              "ending a frame retains Metal refresh ownership");
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "endFrame must preserve attached layer ownership");
-      require(state.link == originalLink && state.recreationRequested,
-              "queued recreation does not detach a current or retiring frame");
-      const auto sizeBefore = layer.drawableSize;
-      const auto countBefore = layer.maximumDrawableCount;
-      NSString *filterBefore = layer.magnificationFilter;
-      auto *owner = &state;
-      // Supply one deterministic wake on the real owner run loop. Headless
-      // layers need not receive real CAMetalDisplayLink callbacks.
-      CFRunLoopTimerRef wake = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
-          CFAbsoluteTimeGetCurrent(), 0, 0, 0, ^(CFRunLoopTimerRef) {
-        const double now = CACurrentMediaTime();
-        if (owner->frame.receive(now, now + 1.0)) owner->drawable = leased;
-      });
-      CFRunLoopAddTimer(CFRunLoopGetCurrent(), wake, kCFRunLoopDefaultMode);
-      const bool recreated = link.beginFrame((__bridge void *)layer, 120, 0, 7,
-                                             [&] { return active; });
-      CFRunLoopTimerInvalidate(wake);
-      CFRelease(wake);
-      require(recreated && state.link != originalLink && state.link != nil &&
-                  state.creationSerial == 1 && state.manualRecreations == 1 &&
-                  !state.recreationRequested,
-              "next frame replaces the link exactly once before obtaining its lease");
-      require(attachmentChanges == std::vector<bool>{true},
-              "attaching a display link transfers refresh ownership before returning its frame");
-      require(layer.acquisitions == attachedAcquisitions &&
-                  CGSizeEqualToSize(layer.drawableSize, sizeBefore) &&
-                  layer.maximumDrawableCount == countBefore &&
-                  [layer.magnificationFilter isEqualToString:filterBefore] &&
-                  ((CAMetalDisplayLink *)state.link).preferredFrameLatency == 1.0F &&
-                  ((CAMetalDisplayLink *)state.link).preferredFrameRateRange.preferred == 120,
-              "recreation preserves drawable ownership, filter, geometry and pacing requests");
-      require(video::MetalDisplayLink::diagnosticsForCurrentThread().find(
-                  "manualRequests=1 manualRecreations=1 recreationPending=0") != std::string::npos,
-              "snapshot confirms completed replacement");
-      link.endFrame(); // Do not present the fixture's already-presented drawable again.
-      require(attachmentChanges == std::vector<bool>{true},
-              "ending a frame retains display-link refresh ownership");
       state.generation = 8;
       state.isCurrent = [&] { return active; };
       state.frame.begin(8);
@@ -195,17 +138,12 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "lifecycle rejection must not fall through to nextDrawable");
-      require(video::MetalDisplayLink::requestRecreationForDiagnostics(),
-              "another request can be queued before lifecycle cancellation");
       link.pause();
       require(attachmentChanges == std::vector<bool>({true, false}),
-              "detaching the link restores fallback refresh ownership immediately");
+              "detaching restores fallback refresh ownership");
       link.pause();
       require(attachmentChanges == std::vector<bool>({true, false}),
-              "repeated pause does not repeatedly rebuild the fallback clock");
-      require(!state.recreationRequested && state.manualRecreations == 1 &&
-                  !video::MetalDisplayLink::requestRecreationForDiagnostics(),
-              "lifecycle pause cancels pending recreation without reporting completion");
+              "repeated pause does not rebuild the fallback clock");
       render();
       require(layer.acquisitions == attachedAcquisitions + 1,
               "pause detaches and restores ordinary acquisition");
@@ -246,13 +184,20 @@ int main() {
       require(presentationCalls == beforePresent && layer.acquisitions == beforeAcquire,
               "handled-nil uses compatible fallback attachments without reacquiring");
 
+      asobmashowMetalSetDrawableProvider(nullptr);
+      bgfx::touch(0);
+      bgfx::frame();
+      require(layer.acquisitions == beforeAcquire + 1,
+              "ordinary acquisition also rejects resized drawables before attachment reconciliation");
+      asobmashowMetalSetDrawableProvider(&provider);
+
       bgfx::reset(32, 8, flags);
       bgfx::setViewRect(0, 0, 0, 32, 8);
       bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x123456ff);
       supplied = (__bridge void *)resized;
       bgfx::touch(0);
       bgfx::frame();
-      require(presentationCalls == beforePresent + 1 && layer.acquisitions == beforeAcquire,
+      require(presentationCalls == beforePresent + 1 && layer.acquisitions == beforeAcquire + 1,
               "reconciling renderer attachments resumes the supplied drawable");
       supplied = nullptr;
       resized = nil;

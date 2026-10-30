@@ -4,7 +4,7 @@ parser=argparse.ArgumentParser(description='Build the native SDL drawable sizing
 parser.add_argument('--sdl-framework',type=Path,required=True)
 parser.add_argument('--output',type=Path,required=True)
 args=parser.parse_args()
-root=Path(__file__).resolve().parents[4]
+root=Path(__file__).resolve().parents[1]
 out=args.output.resolve()
 app=out/'Sizing.app'
 app.mkdir(parents=True,exist_ok=True)

@@ -2,7 +2,6 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
-#include "BuildIdentity.h"
 #include "bms_search/DownloadRetryWait.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/IOSMusicStream.h"
@@ -13,7 +12,6 @@
 #include "platform/IOSApplicationRuntime.h"
 #include "platform/GenerationMailbox.h"
 #include "replay/ReplayNativeExportOperation.h"
-#include "video/MetalDisplayLink.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <AVFoundation/AVFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -4520,9 +4518,6 @@ std::string GetIOSApplicationSupportPath() {
 // iOS scene orientation transition. All state and callbacks belong to main.
 namespace {
 NSUInteger sOrientationRequestGeneration = 0;
-UIInterfaceOrientationMask sOrientationRequestedMask = UIInterfaceOrientationMaskAll;
-NSString *sOrientationRequestStatus = @"none";
-NSError *sOrientationRequestError = nil;
 
 UIInterfaceOrientation CurrentIOSSceneOrientation(UIWindow *window) {
   if (@available(iOS 16.0, *)) {
@@ -4541,11 +4536,9 @@ void RequestIOSOrientationAfterUnlock(UIWindow *window,
   if (@available(iOS 16.0, *)) {
     UIWindowScene *scene = window.windowScene;
     if (scene == nil || scene.activationState != UISceneActivationStateForegroundActive) {
-      sOrientationRequestStatus = @"cancelled-inactive";
       return;
     }
     if (mask & (1UL << CurrentIOSSceneOrientation(window))) {
-      sOrientationRequestStatus = @"matched";
       if (@available(iOS 26.0, *))
         [window.rootViewController setNeedsUpdateOfPrefersInterfaceOrientationLocked];
       return;
@@ -4553,10 +4546,8 @@ void RequestIOSOrientationAfterUnlock(UIWindow *window,
     if (@available(iOS 26.0, *)) {
       if (scene.effectiveGeometry.isInterfaceOrientationLocked) {
         if (CACurrentMediaTime() >= deadline) {
-          sOrientationRequestStatus = @"unlock-timeout";
           return;
         }
-        sOrientationRequestStatus = @"waiting-for-unlock";
         // UIKit applies lock preferences asynchronously. This bounded wait runs
         // only for an explicit mode change, never in the per-frame render path.
         __weak UIWindow *weakWindow = window;
@@ -4567,14 +4558,11 @@ void RequestIOSOrientationAfterUnlock(UIWindow *window,
         return;
       }
     }
-    sOrientationRequestStatus = @"requested";
     UIWindowSceneGeometryPreferencesIOS *preferences =
         [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
     [scene requestGeometryUpdateWithPreferences:preferences errorHandler:^(NSError *error) {
       dispatch_async(dispatch_get_main_queue(), ^{
         if (generation != sOrientationRequestGeneration) return;
-        sOrientationRequestStatus = @"denied";
-        sOrientationRequestError = error;
         NSLog(@"Could not apply screen orientation: %@", error);
       });
     }];
@@ -4623,10 +4611,6 @@ void screen_orientation::apply(Mode mode, bool lockCurrent) {
       hint = "Portrait";
     }
     const NSUInteger generation = ++sOrientationRequestGeneration;
-    sOrientationRequestedMask = mask;
-    sOrientationRequestError = nil;
-    sOrientationRequestStatus = lockCurrent ? @"gameplay-lock"
-        : mode == Mode::Auto ? @"auto" : @"matched";
     SDL_SetHint(SDL_HINT_ORIENTATIONS, hint);
     if (@available(iOS 26.0, *)) {
       // SDL releases the lock while the current orientation is outside the
@@ -5886,168 +5870,6 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
     preferredHeight = preferred.height;
     return true;
   }
-}
-
-namespace {
-CAMetalLayer *FindDiagnosticMetalLayer(CALayer *layer, unsigned depth,
-                                      unsigned &remaining) {
-  if (layer == nil || remaining == 0 || depth > 16) return nil;
-  --remaining;
-  if (layer.hidden || layer.opacity == 0) return nil;
-  if ([layer isKindOfClass:CAMetalLayer.class]) return (CAMetalLayer *)layer;
-  for (CALayer *child in layer.sublayers) {
-    if (remaining == 0) break;
-    if (CAMetalLayer *metal = FindDiagnosticMetalLayer(child, depth + 1, remaining))
-      return metal;
-  }
-  return nil;
-}
-
-// No layer contents, labels, identifiers, or addresses: only presentation
-// metadata. Bounded even if a native sheet has a large private layer tree.
-void AppendMetalDiagnosticLayer(NSMutableString *report, CALayer *layer,
-                               unsigned depth, unsigned &remaining) {
-  if (remaining == 0 || depth > 16) return;
-  --remaining;
-  const CATransform3D t = layer.transform;
-  [report appendFormat:
-      @"depth=%u class=%@ bounds=%@ position=%@ anchor=%@ scale=%.4f "
-       "opaque=%d opacity=%.3f hidden=%d masksToBounds=%d mask=%d corner=%.3f "
-       "animations=%lu\n"
-       " transform=[%.4f %.4f %.4f %.4f; %.4f %.4f %.4f %.4f; "
-       "%.4f %.4f %.4f %.4f; %.4f %.4f %.4f %.4f]\n",
-      depth, NSStringFromClass(layer.class), NSStringFromCGRect(layer.bounds),
-      NSStringFromCGPoint(layer.position), NSStringFromCGPoint(layer.anchorPoint),
-      layer.contentsScale, layer.opaque, layer.opacity, layer.hidden,
-      layer.masksToBounds, layer.mask != nil, layer.cornerRadius,
-      (unsigned long)layer.animationKeys.count,
-      t.m11, t.m12, t.m13, t.m14, t.m21, t.m22, t.m23, t.m24,
-      t.m31, t.m32, t.m33, t.m34, t.m41, t.m42, t.m43, t.m44];
-  [report appendFormat:
-      @" contentsRect=%@ gravity=%@ sublayerTransformIdentity=%d "
-       "geometryFlipped=%d rasterize=%d rasterizationScale=%.4f\n"
-       " magnificationFilter=%@ minificationFilter=%@ minificationFilterBias=%.3f\n",
-      NSStringFromCGRect(layer.contentsRect), layer.contentsGravity,
-      CATransform3DIsIdentity(layer.sublayerTransform), layer.geometryFlipped,
-      layer.shouldRasterize, layer.rasterizationScale,
-      layer.magnificationFilter, layer.minificationFilter, layer.minificationFilterBias];
-  if ([layer isKindOfClass:CAMetalLayer.class]) {
-    CAMetalLayer *metal = (CAMetalLayer *)layer;
-    [report appendFormat:
-        @" METAL drawable=%@ pixelFormat=%lu framebufferOnly=%d "
-         "presentsWithTransaction=%d drawableCount=%lu timeout=%d colorspace=%@\n",
-        NSStringFromCGSize(metal.drawableSize), (unsigned long)metal.pixelFormat,
-        metal.framebufferOnly, metal.presentsWithTransaction,
-        (unsigned long)metal.maximumDrawableCount, metal.allowsNextDrawableTimeout,
-        metal.colorspace ? (__bridge NSString *)CGColorSpaceGetName(metal.colorspace)
-                         : @"nil"];
-  }
-  if (depth == 16) {
-    if (layer.sublayers.count != 0) [report appendString:@"[depth limit]\n"];
-    return;
-  }
-  for (CALayer *child in layer.sublayers) {
-    if (remaining == 0) break;
-    AppendMetalDiagnosticLayer(report, child, depth + 1, remaining);
-  }
-}
-} // namespace
-
-std::string GetIOSMetalMagnificationFilter() {
-  return platform::onMain([]() -> std::string {
-    unsigned remaining = 128;
-    CAMetalLayer *layer = FindDiagnosticMetalLayer(FindActiveWindow().layer, 0, remaining);
-    const char *filter = layer.magnificationFilter.UTF8String;
-    return filter != nullptr ? filter : "";
-  });
-}
-
-bool SetIOSMetalMagnificationFilter(bool linear) {
-  return platform::onMain([linear] {
-    unsigned remaining = 128;
-    CAMetalLayer *layer = FindDiagnosticMetalLayer(FindActiveWindow().layer, 0, remaining);
-    if (layer == nil) return false;
-    NSString *filter = linear ? kCAFilterLinear : kCAFilterNearest;
-    if (![layer.magnificationFilter isEqualToString:filter]) {
-      [CATransaction begin];
-      [CATransaction setDisableActions:YES];
-      layer.magnificationFilter = filter;
-      [CATransaction commit];
-    }
-    return static_cast<bool>([layer.magnificationFilter isEqualToString:filter]);
-  });
-}
-
-bool CopyIOSMetalPresentationDiagnostics() {
-  // Capture thread-local app-link evidence before dispatching to UIKit. The
-  // cold-launch native probes have no app-link owner on their calling thread.
-  const auto linkDiagnostics = GetIOSLifecycleDiagnostics() +
-      video::MetalDisplayLink::diagnosticsForCurrentThread();
-  return platform::onMain([&] {
-  @autoreleasepool {
-    UIWindow *active = FindActiveWindow();
-    if (active == nil) return false;
-    UIScreen *screen = active.screen;
-    const auto build = skin::compiledSkinBuildIdentity();
-    NSMutableString *report = [NSMutableString stringWithFormat:
-        @"AsoBMaShow Metal presentation snapshot v8\ncommit=%s configuration=%s\n"
-         "iOS=%@ orientation=%ld\n"
-         "screen=%@ nativeBounds=%@ scale=%.4f nativeScale=%.4f mode=%@\n"
-         "HUD Direct/Composited: record manually; not queried by this report.\n"
-         "App layers only; system compositor overlays are not visible here.\n",
-        build.commit.c_str(), build.configuration.c_str(),
-        UIDevice.currentDevice.systemVersion, (long)active.windowScene.interfaceOrientation,
-        NSStringFromCGRect(screen.bounds), NSStringFromCGRect(screen.nativeBounds),
-        screen.scale, screen.nativeScale, NSStringFromCGSize(screen.currentMode.size)];
-    NSDictionary *info = NSBundle.mainBundle.infoDictionary;
-    [report appendFormat:@"BUNDLE requiresFullScreen=%d ignoreFullScreenFrom=%@\n"
-                          "SCENE coordinateBounds=%@ screenIsMain=%d\n",
-        [info[@"UIRequiresFullScreen"] boolValue],
-        info[@"UIRequiresFullScreenIgnoredStartingWithVersion"] ?: @"unset",
-        NSStringFromCGRect(active.windowScene.coordinateSpace.bounds), screen == UIScreen.mainScreen];
-    if (@available(iOS 26.0, *)) {
-      [report appendFormat:@"ORIENTATION hint=%s prefersLocked=%d effectiveLocked=%d\n",
-          SDL_GetHint(SDL_HINT_ORIENTATIONS) ?: "unset",
-          active.rootViewController.prefersInterfaceOrientationLocked,
-          active.windowScene.effectiveGeometry.isInterfaceOrientationLocked];
-    }
-    const UIInterfaceOrientation effectiveOrientation = CurrentIOSSceneOrientation(active);
-    const BOOL orientationMatches = (sOrientationRequestedMask & (1UL << effectiveOrientation)) != 0;
-    NSString *orientationStatus = sOrientationRequestStatus;
-    if (orientationMatches && [orientationStatus isEqualToString:@"requested"])
-      orientationStatus = @"matched";
-    [report appendFormat:@"ORIENTATION_REQUEST serial=%lu mask=%lu effective=%ld matches=%d "
-                          "status=%@ errorDomain=%@ errorCode=%ld reason=%@\n",
-        (unsigned long)sOrientationRequestGeneration, (unsigned long)sOrientationRequestedMask,
-        (long)effectiveOrientation, orientationMatches, orientationStatus,
-        sOrientationRequestError.domain ?: @"none", (long)sOrientationRequestError.code,
-        sOrientationRequestError.localizedDescription ?: @"none"];
-    [report appendFormat:@"%s", linkDiagnostics.c_str()];
-    const char *homeHint = SDL_GetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR);
-    [report appendFormat:@"homeIndicatorHint=%s (unset uses SDL fullscreen default)\n",
-                         homeHint != nullptr ? homeHint : "unset"];
-    unsigned remaining = 128;
-    unsigned windowCount = 0;
-    for (UIWindow *window in active.windowScene.windows ?: @[active]) {
-      if (windowCount++ == 8 || remaining == 0) break;
-      UIViewController *controller = window.rootViewController;
-      [report appendFormat:
-          @"WINDOW key=%d hidden=%d alpha=%.3f level=%.3f bounds=%@ safeInsets=%@ "
-           "statusBarHidden=%d prefersHomeIndicatorHidden=%d deferredGestureEdges=%lu\n",
-          window.isKeyWindow, window.hidden, window.alpha, window.windowLevel,
-          NSStringFromCGRect(window.bounds), NSStringFromUIEdgeInsets(window.safeAreaInsets),
-          window.windowScene.statusBarManager.statusBarHidden,
-          controller.prefersHomeIndicatorAutoHidden,
-          (unsigned long)controller.preferredScreenEdgesDeferringSystemGestures];
-      AppendMetalDiagnosticLayer(report, window.layer, 0, remaining);
-    }
-    [report appendString:@"End (limits: 8 windows, 128 layers, depth 16).\n"];
-    // Capture before touching the clipboard; no native alert, layout forcing,
-    // drawable acquisition, or recurring work perturbs the measured layer tree.
-    UIPasteboard.generalPasteboard.string = report;
-    return true;
-  }
-  });
 }
 
 bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {

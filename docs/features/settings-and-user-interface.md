@@ -109,8 +109,16 @@ throughput. Buffer count is not a user setting.
   sample rate/buffer settings, and test sound/status. Mono audio in Audio Output
   defaults to Off; turning it On immediately averages the left and right channels
   into both ears for gameplay, chart previews, and interface sounds.
-  The choice is saved with the profile. Display retains orientation
-  and platform display controls.
+  The choice is saved with the profile.
+- Display retains orientation and platform display controls.
+  On iOS, it also offers a saved **CAMetalDisplayLink** On/Off control.
+  It defaults to Off for new and existing profiles and applies on the next frame.
+  Off uses ordinary Metal drawable acquisition, SDL's high-refresh request and
+  the existing frame cap. On enables Metal display-link scheduling when supported;
+  unsupported frame caps and interrupted callbacks still use the normal fallback.
+  Some iPads use Composited presentation with this option enabled. The game cannot
+  query Direct/Composited through a documented public API; the Metal HUD remains
+  the check for that status.
 - BMS Library groups folders, chart preview mode, archive preview/extraction
   preferences, and cache cleanup. Chart Preview offers Highlight (default),
   Beginning, and Preview File in both selectors. Preview File reveals a

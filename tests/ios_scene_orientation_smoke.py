@@ -4,7 +4,7 @@ parser = argparse.ArgumentParser(description="Build the native SDL orientation r
 parser.add_argument("--sdl-framework", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
 args = parser.parse_args()
-root = Path(__file__).resolve().parents[4]
+root = Path(__file__).resolve().parents[1]
 out = args.output.resolve()
 out.mkdir(parents=True, exist_ok=True)
 app = out / "Smoke.app"
@@ -73,14 +73,14 @@ static int audit(int,char**) {
   const unsigned beforeTimeout=requests;
   RequestIOSOrientationAfterUnlock(appWindow,UIInterfaceOrientationMaskLandscape,
       sOrientationRequestGeneration,CACurrentMediaTime()-1);
-  require([sOrientationRequestStatus isEqualToString:@"unlock-timeout"] && requests==beforeTimeout,"bounded unlock timeout");
+  require(requests==beforeTimeout,"bounded unlock timeout");
 
   // Auto supersedes a request that is still waiting for the old lock to release.
   screen_orientation::apply(screen_orientation::Mode::Landscape,false);
   const NSUInteger staleGeneration=sOrientationRequestGeneration;
   screen_orientation::apply(mode,false);
   RequestIOSOrientationAfterUnlock(appWindow,UIInterfaceOrientationMaskLandscape,staleGeneration,CACurrentMediaTime()+1);
-  require([sOrientationRequestStatus isEqualToString:@"auto"] && requests==beforeTimeout,"Auto cancels queued geometry request");
+  require(requests==beforeTimeout,"Auto cancels queued geometry request");
   pumpUntil(^bool { return !appWindow.windowScene.effectiveGeometry.isInterfaceOrientationLocked; });
 
   // Suppress iPhone's legacy mask-driven autorotation to model a resizable
@@ -94,8 +94,9 @@ static int audit(int,char**) {
   pumpUntil(^bool { return savedError!=nil; });
   NSError *denied=[NSError errorWithDomain:UISceneErrorDomain code:UISceneErrorCodeGeometryRequestDenied userInfo:@{NSLocalizedDescriptionKey:@"Synthetic geometry denial"}];
   savedError(denied);
-  pumpUntil(^bool { return [sOrientationRequestStatus isEqualToString:@"denied"]; });
-  require(sOrientationRequestError.code==UISceneErrorCodeGeometryRequestDenied,"denial retained for diagnostics");
+  __block bool denialDrained=false;
+  dispatch_async(dispatch_get_main_queue(),^{ denialDrained=true; });
+  pumpUntil(^bool { return denialDrained; });
   require(!appWindow.rootViewController.prefersInterfaceOrientationLocked &&
           !appWindow.windowScene.effectiveGeometry.isInterfaceOrientationLocked &&
           appWindow.windowScene.effectiveGeometry.interfaceOrientation==UIInterfaceOrientationPortrait,
@@ -105,7 +106,7 @@ static int audit(int,char**) {
   __block bool drained=false;
   dispatch_async(dispatch_get_main_queue(),^{ drained=true; });
   pumpUntil(^bool { return drained; });
-  require([sOrientationRequestStatus isEqualToString:@"auto"] && sOrientationRequestError==nil,"late denial cannot overwrite Auto");
+  require(!appWindow.rootViewController.prefersInterfaceOrientationLocked,"late denial cannot relock Auto");
   savedError=nil;
   class_replaceMethod(controllerClass,invalidate,originalInvalidate,"v@:");
   method_setImplementation(requestMethod,(IMP)originalRequest);

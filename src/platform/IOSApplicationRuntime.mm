@@ -10,7 +10,6 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <QuartzCore/QuartzCore.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -18,8 +17,6 @@
 #include <memory>
 #include <mutex>
 #include <deque>
-#include <iomanip>
-#include <sstream>
 
 namespace {
 struct Runtime {
@@ -52,12 +49,7 @@ thread_local platform::OwnedApplicationEvent currentEvent;
 
 bool SDLCALL lifecycleWatch(void *opaque, SDL_Event *event) {
   auto &state = *static_cast<Runtime *>(opaque);
-  const bool transition = event->type == SDL_EVENT_WILL_ENTER_BACKGROUND ||
-      event->type == SDL_EVENT_DID_ENTER_BACKGROUND ||
-      event->type == SDL_EVENT_WILL_ENTER_FOREGROUND ||
-      event->type == SDL_EVENT_DID_ENTER_FOREGROUND ||
-      event->type == SDL_EVENT_TERMINATING;
-  state.lifecycle.observe(*event, transition ? CACurrentMediaTime() : 0);
+  state.lifecycle.observe(*event);
   return true;
 }
 
@@ -199,23 +191,6 @@ bool IOSApplicationActive() {
 platform::IOSPresentationState GetIOSPresentationState() {
   const auto state = currentRuntime();
   return state ? state->lifecycle.presentation() : platform::IOSPresentationState{};
-}
-
-std::string GetIOSLifecycleDiagnostics() {
-  const auto state = currentRuntime();
-  if (!state) return "IOS_LIFECYCLE runtime=0\n";
-  std::ostringstream out;
-  out << std::fixed << std::setprecision(3);
-  for (const auto &event : state->lifecycle.diagnostics()) {
-    const char *name = event.type == SDL_EVENT_WILL_ENTER_BACKGROUND ? "willResignActive"
-        : event.type == SDL_EVENT_DID_ENTER_BACKGROUND ? "didEnterBackground"
-        : event.type == SDL_EVENT_WILL_ENTER_FOREGROUND ? "willEnterForeground"
-        : event.type == SDL_EVENT_DID_ENTER_FOREGROUND ? "didBecomeActive" : "terminating";
-    out << "IOS_LIFECYCLE event=" << name << " at=" << event.observedAt
-        << " generation=" << event.presentation.generation
-        << " active=" << event.presentation.active << '\n';
-  }
-  return out.str();
 }
 
 std::optional<IOSWindowSnapshot> GetIOSWindowSnapshot(SDL_Window *window) {
