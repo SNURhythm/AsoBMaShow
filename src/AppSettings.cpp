@@ -385,7 +385,7 @@ std::string parsePacemakerTargetId(const std::string &value,
       normalized == "HIGH-SCORE" || normalized == "PERSONAL-BEST") {
     return "BEST";
   }
-  if (normalized == "A" || normalized == "AA" || normalized == "AAA" ||
+  if (normalized == "GOAL" || normalized == "A" || normalized == "AA" || normalized == "AAA" ||
       normalized == "MAX" || normalized == "PERFECT") {
     return normalized == "PERFECT" ? "MAX" : normalized;
   }
@@ -640,6 +640,7 @@ void AppSettings::sanitize() {
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
   selectedPacemakerTarget =
       parsePacemakerTargetId(selectedPacemakerTarget, kDefaultPacemakerTarget);
+  selectedPacemakerGoalId = std::max<std::int64_t>(0, selectedPacemakerGoalId);
   const auto boundedSkinString = [](std::string &value,
                                     std::string_view fallback) {
     if (value.size() > kMaximumSkinPropertyStringBytes) {

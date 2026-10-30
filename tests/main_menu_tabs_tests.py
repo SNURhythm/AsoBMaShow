@@ -41,6 +41,7 @@ class MainMenuTabsTests(unittest.TestCase):
             "ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const"))
         source = r'''
 #include <algorithm>
+namespace folder_goals { struct Source {}; }
 #define TARGET_OS_ANDROID 0
 #include <array>
 #include <atomic>
@@ -183,6 +184,9 @@ struct MainMenuScene : Scene {
   void resumeGoalNavigation();
   std::optional<std::pair<ChartMetaRecord,int>> pendingGoalSelection_;
   std::string pendingGoalProfile_;
+  std::optional<std::pair<folder_goals::Source,int>> pendingFolderGoalSelection_;
+  std::string pendingFolderGoalProfile_;
+  void applyFolderGoalSelection(const folder_goals::Source &,int) {}
   int appliedGoals=0;
   void applyGoalSelection(const ChartMetaRecord &record, int) {
     assert(activeTab_==Tab::Play && !pendingTab_);
@@ -204,6 +208,7 @@ struct MainMenuScene : Scene {
   int folderReloads=0, chartReloads=0, previewRequests=0;
   bool musicPlaying=false;
   std::optional<std::filesystem::path> temporaryChartFolder;
+  bool temporaryChartFolderRecursive_=false;
   LibraryFolderItem activeFolder;
   int assignmentDayId=1;
   std::map<std::string, std::vector<std::string>> assignmentChartHashes;
@@ -615,6 +620,9 @@ int main(int argc,char **argv) {
     scene.activeFolder={.key="favorites",.type=T::Favorites};
     scene.searchText="play search";
     scene.temporaryChartFolder="/charts/remember-me";
+    scene.temporaryChartFolderRecursive_=true;
+    assert(scene.chartQueryForActiveFolder().recursiveFolder==scene.temporaryChartFolder);
+    assert(!scene.chartQueryForActiveFolder().exactFolder);
     scene.songs.selectedIndex=3;
     scene.selectedChartRecord=scene.songs.get(3);
     scene.songs.scrollOffset=175;
@@ -632,7 +640,7 @@ int main(int argc,char **argv) {
     scene.switchTabAndWait(Tab::Play);
     assert(scene.activeFolder.key=="favorites" && scene.searchText=="play search");
     assert(scene.search.editing=="play search");
-    assert(scene.temporaryChartFolder==std::filesystem::path("/charts/remember-me"));
+    assert(scene.temporaryChartFolder==std::filesystem::path("/charts/remember-me") && scene.temporaryChartFolderRecursive_);
     assert(scene.songs.selectedIndex==3 && scene.selectedChartRecord->meta.BmsPath=="song3.bms");
     assert(scene.songs.scrollOffset==175 && scene.sidebar.scrollOffset==240);
     // A leading synthetic record changes the visible index, not chart identity.

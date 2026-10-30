@@ -33,6 +33,7 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
   case skin::MusicSelectBarKind::Hash:
     query.tableId = directory.tableId;
     query.tableLevel = directory.tableLevel;
+    query.exactTableLevel = true;
     break;
   case skin::MusicSelectBarKind::SearchWord:
     if (!directory.id.value.starts_with("search:")) return {};

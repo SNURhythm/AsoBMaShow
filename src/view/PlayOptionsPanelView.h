@@ -34,6 +34,7 @@ struct PlayOptionsPanelState {
   bool playbackLocked = false;
   bool clubMode = false;
   std::string pacemakerTarget = "BEST";
+  std::string pacemakerGoalLabel = "BEST";
   std::string profileId;
   lane_cover::State laneCovers;
 };

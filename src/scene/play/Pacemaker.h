@@ -21,14 +21,15 @@ namespace pacemaker {
 
 inline constexpr const char *kTargetOff = "OFF";
 inline constexpr const char *kTargetBest = "BEST";
+inline constexpr const char *kTargetGoal = "GOAL";
 inline constexpr const char *kTargetA = "A";
 inline constexpr const char *kTargetAA = "AA";
 inline constexpr const char *kTargetAAA = "AAA";
 inline constexpr const char *kTargetMaxMinus = "MAX-";
 inline constexpr const char *kTargetMax = "MAX";
 
-inline constexpr std::array<const char *, 7> kSelectableTargets = {
-    kTargetOff, kTargetBest, kTargetA, kTargetAA,
+inline constexpr std::array<const char *, 8> kSelectableTargets = {
+    kTargetOff, kTargetBest, kTargetGoal, kTargetA, kTargetAA,
     kTargetAAA, kTargetMaxMinus, kTargetMax};
 
 // Built once when a replay target is resolved, then shared by authority and
@@ -395,14 +396,31 @@ inline Target targetFromGrade(const bms_parser::ChartMeta &meta,
   return target;
 }
 
+inline Target targetFromGoal(const bms_parser::ChartMeta &meta,
+                             const chart_goals::Target &goal) {
+  Target target;
+  target.label = kTargetGoal;
+  target.totalNotes = std::max(0, meta.TotalNotes);
+  target.maxScore = result_contract::maximumScoreForNotes(target.totalNotes).value_or(0);
+  target.enabled = target.maxScore > 0 && goal.scoreNumerator > 0 &&
+      goal.scoreDenominator > 0 && goal.scoreNumerator <= goal.scoreDenominator;
+  if (target.enabled) {
+    const auto product = static_cast<std::int64_t>(target.maxScore) * goal.scoreNumerator;
+    target.finalScore = static_cast<int>((product + goal.scoreDenominator - 1) / goal.scoreDenominator);
+  }
+  return target;
+}
+
 inline Target targetFromSelection(const bms_parser::ChartMeta &meta,
                                   const std::string &targetId,
                                   const std::optional<ScoreBestSnapshot> &best,
-                                  const ReplayData *bestReplay = nullptr) {
+                                  const ReplayData *bestReplay = nullptr,
+                                  const chart_goals::Target *goal = nullptr) {
   const std::string normalized = normalizeTargetId(targetId);
   if (normalized == kTargetOff) {
     return {};
   }
+  if (normalized == kTargetGoal && goal) return targetFromGoal(meta, *goal);
   if (targetIsGrade(normalized)) {
     return targetFromGrade(meta, normalized);
   }
@@ -415,11 +433,13 @@ inline Target targetFromSelection(const bms_parser::ChartMeta &meta,
 inline Target targetFromSelection(bms_parser::Chart &chart,
                                   const std::string &targetId,
                                   const std::optional<ScoreBestSnapshot> &best,
-                                  const ReplayData *bestReplay = nullptr) {
+                                  const ReplayData *bestReplay = nullptr,
+                                  const chart_goals::Target *goal = nullptr) {
   const std::string normalized = normalizeTargetId(targetId);
   if (normalized == kTargetOff) {
     return {};
   }
+  if (normalized == kTargetGoal && goal) return targetFromGoal(chart.Meta, *goal);
   if (targetIsGrade(normalized)) {
     return targetFromGrade(chart.Meta, normalized);
   }

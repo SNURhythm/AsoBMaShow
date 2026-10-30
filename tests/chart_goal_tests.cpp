@@ -1,6 +1,9 @@
 #include "goals/ChartGoal.h"
+#include "goals/GoalChallenge.h"
+#include "scene/play/Pacemaker.h"
 #include "goals/ChartGoalStore.h"
 #include "goals/GoalRecommendationQuery.h"
+#include "goals/GoalRecommendationIndex.h"
 #include "goals/GoalResultPresentation.h"
 #include "repositories/SqliteRAII.h"
 #include <chrono>
@@ -11,6 +14,41 @@
 using namespace chart_goals;
 template<class F> bool rejects(F f) { try { f(); return false; } catch (const std::exception &) { return true; } }
 int main() {
+  {
+    for (auto shift : {GaugeAutoShiftMode::None, GaugeAutoShiftMode::Continue,
+                      GaugeAutoShiftMode::SelectToUnder, GaugeAutoShiftMode::SurvivalToGroove}) {
+      CHECK(challengeGauge(GaugeType::Easy, shift, kClearTypeHardClearRank) == GaugeType::Hard);
+      CHECK(challengeGauge(GaugeType::ExHard, shift, kClearTypeHardClearRank) == GaugeType::ExHard);
+    }
+    CHECK(challengeGauge(GaugeType::Easy, GaugeAutoShiftMode::BestClear, kClearTypeExHardClearRank) == GaugeType::Easy);
+    CHECK(challengeGauge(GaugeType::Hard, GaugeAutoShiftMode::None, kClearTypeFullComboRank) == GaugeType::Hazard);
+    CHECK(challengeGauge(GaugeType::AssistedEasy, GaugeAutoShiftMode::None, 150) == GaugeType::AssistedEasy);
+    CHECK(challengeGauge(GaugeType::Normal, GaugeAutoShiftMode::None, -1) == GaugeType::Normal);
+    std::vector<GoalProgress> goals{
+      {.goal={.longNoteMode=1, .target={.scoreNumerator=24}, .id=1}},
+      {.goal={.longNoteMode=1, .target={.scoreNumerator=8777, .scoreDenominator=10000}, .id=2}},
+      {.goal={.longNoteMode=2, .target={.scoreNumerator=18}, .id=3}},
+      {.goal={.longNoteMode=1, .target={.lamp=400}, .id=4}},
+    };
+    CHECK(scoreTargetForGoals(goals, 1, 1)->scoreNumerator == 24);
+    CHECK(scoreTargetForGoals(goals, 1, 0)->scoreNumerator == 8777);
+    CHECK(!scoreTargetForGoals(goals, 1, 4)); // Explicit lamp-only goal falls back to BEST.
+    CHECK(scoreTargetForGoals(goals, 1, 999)->scoreNumerator == 8777);
+    CHECK(scoreTargetForGoals(goals, 2, 1)->scoreNumerator == 18);
+    goals[1].progress.scoreMet=true;
+    CHECK(scoreTargetForGoals(goals, 1, 0)->scoreNumerator == 24);
+    goals[0].progress.scoreMet=true;
+    CHECK(!scoreTargetForGoals(goals, 1, 0));
+    CHECK(scoreTargetForGoals(goals, 1, 1)->scoreNumerator == 24); // Explicit achieved goals remain usable.
+    bms_parser::ChartMeta meta; meta.TotalNotes=1000;
+    const auto target=pacemaker::targetFromGoal(meta, goals[1].goal.target);
+    CHECK(target.enabled && target.label=="GOAL" && target.finalScore==1756);
+    CHECK(pacemaker::targetScoreAtPlayedNotes(target,500)==878);
+    CHECK(pacemaker::normalizeTargetId("goal")=="GOAL");
+    ScoreBestSnapshot best; best.score=1234; best.maxScore=2000;
+    CHECK(pacemaker::targetFromSelection(meta,"GOAL",best).label=="BEST");
+    CHECK(pacemaker::targetFromSelection(meta,"GOAL",best,nullptr,&goals[0].goal.target).finalScore==1778);
+  }
   {
     sqlite3 *recommendations = nullptr;
     CHECK(sqlite3_open(":memory:", &recommendations) == SQLITE_OK);
@@ -92,6 +130,40 @@ int main() {
     CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="closest");
     CHECK(sqlite3_step(query)==SQLITE_DONE);
     query.reset();
+    // A chart below the first global page must still appear in its own recommendations.
+    for (int i=0; i<21; ++i) {
+      const auto hash = "other-" + std::to_string(i);
+      const auto setup = "INSERT INTO chart_meta VALUES('" + hash + "','other',0,0,0);"
+          "INSERT INTO score_db.score_sha256_best_score_cache VALUES('" + hash + "',0,1777,2000);"
+          "INSERT INTO score_db.goal_gauge_best VALUES('" + hash + "',0,400,10,0,-1,100,0);";
+      CHECK(sqlite3_exec(recommendations, setup.c_str(), nullptr,nullptr,nullptr)==SQLITE_OK);
+    }
+    for (const bool gauge : {false, true}) {
+      CHECK(prepareSqliteStatement(recommendations, gauge ? gaugeRecommendationPageSql(0,false,false,true)
+          : recommendationPageSql(0,false,false,true), query)==SQLITE_OK);
+      CHECK(sqlite3_bind_int(query,1,gauge ? 400 : 24)==SQLITE_OK);
+      CHECK(sqlite3_bind_int(query,2,0)==SQLITE_OK);
+      CHECK(sqlite3_bind_text(query,3,gauge ? "closest" : "farther",-1,SQLITE_STATIC)==SQLITE_OK);
+      CHECK(sqlite3_step(query)==SQLITE_ROW);
+      CHECK(sqliteColumnString(query,0)==(gauge ? "closest" : "farther"));
+      CHECK(sqlite3_step(query)==SQLITE_DONE);
+      query.reset();
+    }
+    CHECK(sqlite3_exec(recommendations,
+        "DELETE FROM chart_meta WHERE path='other';"
+        "DELETE FROM score_db.score_sha256_best_score_cache WHERE chart_sha256 LIKE 'other-%';"
+        "DELETE FROM score_db.goal_gauge_best WHERE chart_sha256 LIKE 'other-%';",nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(sqlite3_exec(recommendations,
+        "INSERT INTO chart_meta VALUES('lamp-only','lamp',0,0,0);"
+        "INSERT INTO score_db.goal_combo_best VALUES('lamp-only',0,1);", nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations, recommendationChartHashesSql(), query)==SQLITE_OK);
+    std::unordered_set<std::string> recommendedHashes;
+    while (sqlite3_step(query)==SQLITE_ROW) CHECK(recommendedHashes.insert(sqliteColumnString(query,0)).second);
+    CHECK((recommendedHashes==std::unordered_set<std::string>{"closest","smaller-percent","farther","lamp-only"}));
+    query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "DELETE FROM chart_meta WHERE sha256='lamp-only'; DELETE FROM score_db.goal_combo_best WHERE chart_sha256='lamp-only';",
+        nullptr,nullptr,nullptr)==SQLITE_OK);
     CHECK(sqlite3_exec(recommendations,"INSERT INTO score_db.score_sha256_clear_rank_cache VALUES('closest',0,400)",nullptr,nullptr,nullptr)==SQLITE_OK);
     CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationCandidatesSql()+" SELECT COUNT(*) FROM candidates",query)==SQLITE_OK);
     CHECK(sqlite3_step(query)==SQLITE_ROW && sqlite3_column_int(query,0)==1); // Reached lamps, including easier lamps, disappear.
@@ -174,6 +246,29 @@ int main() {
     query.reset();
     sqlite3_close(recommendations);
   }
+  RecommendationIndex recommendations;
+  int recommendationLoads = 0;
+  const std::string recommendedHash(64, 'a');
+  auto loadRecommendations = [&] {
+    ++recommendationLoads;
+    return std::unordered_set<std::string>{recommendedHash};
+  };
+  for (int selection=0; selection<100; ++selection) {
+    recommendations.refresh("profile", 1, 1, loadRecommendations);
+    CHECK(recommendations.contains(recommendedHash));
+  }
+  CHECK(recommendationLoads==1 && recommendations.contains(std::string(64,'A')));
+  CHECK(!recommendations.contains("") && !recommendations.contains(std::string(64,'z')));
+  recommendations.refresh("profile", 2, 1, loadRecommendations);
+  recommendations.refresh("profile", 2, 2, loadRecommendations);
+  CHECK(recommendationLoads==3);
+  recommendations.refresh("other-profile", 2, 2, [] { return std::unordered_set<std::string>{}; });
+  CHECK(!recommendations.contains(recommendedHash));
+  recommendations.refresh("profile", 2, 2, loadRecommendations);
+  CHECK(rejects([&] { recommendations.refresh("profile", 3, 2, []() -> std::unordered_set<std::string> {
+    throw std::runtime_error("unavailable");
+  }); }));
+  CHECK(!recommendations.contains(recommendedHash));
   GoalResultPresentation celebration;
   CHECK(!celebration.arm(false) && !celebration.active());
   CHECK(celebration.arm(true) && celebration.active());
@@ -220,6 +315,46 @@ int main() {
   CHECK(rejects([] { evaluate({.scoreNumerator=28}, {}, {}); }));
   CHECK(rejects([] { evaluate({.scoreNumerator=1, .scoreDenominator=0}, {}, {}); }));
 
+  // Independent targets in the same chart/mode must survive together.
+  {
+    sqlite3 *multiple = nullptr;
+    CHECK(sqlite3_open(":memory:", &multiple) == SQLITE_OK);
+    Goal first;
+    first.chart.SHA256 = std::string(64, 'e');
+    first.target.lamp = 400;
+    save(multiple, first);
+    auto second = first;
+    second.target = {.scoreNumerator=24};
+    save(multiple, second);
+    const auto goals = loadForChart(multiple, first.chart.SHA256);
+    CHECK(goals.size() == 2);
+    CHECK(goals[0].target.lamp == 400 && goals[1].target.scoreNumerator == 24);
+    CHECK(goals[0].id > 0 && goals[1].id != goals[0].id);
+    auto edited = goals[0];
+    edited.target.lamp = 500;
+    CHECK(save(multiple, edited) == edited.id);
+    CHECK(load(multiple, first.chart.SHA256, 0, goals[1].id)->target.scoreNumerator == 24);
+    CHECK(rejects([&] { remove(multiple, first.chart.SHA256, 0); }));
+    remove(multiple, first.chart.SHA256, 0, edited.id);
+    CHECK(loadForChart(multiple, first.chart.SHA256).size() == 1);
+    CHECK(rejects([&] { save(multiple, edited); })); // A stale editor cannot recreate a deleted goal.
+    // Recreate the old schema and verify IDs, dates and body bytes survive migration.
+    CHECK(sqlite3_exec(multiple,
+        "CREATE TABLE legacy(sha256 TEXT NOT NULL,ln_mode INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(sha256,ln_mode));"
+        "INSERT INTO legacy(rowid,sha256,ln_mode,body) SELECT rowid,sha256,ln_mode,body FROM chart_goals;"
+        "DROP TABLE chart_goals; ALTER TABLE legacy RENAME TO chart_goals;",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    const auto legacy = loadForChart(multiple, first.chart.SHA256).front();
+    first.setAtUnixMillis = 1730000000000;
+    first.id = save(multiple, first);
+    CHECK(first.id != legacy.id);
+    const auto migrated = load(multiple, first.chart.SHA256, 0, legacy.id);
+    CHECK(migrated && migrated->target == legacy.target && migrated->setAtUnixMillis == legacy.setAtUnixMillis);
+    for (int i = 0; i < 5; ++i) { auto extra = first; extra.id = 0; save(multiple, extra); }
+    CHECK(loadForChart(multiple, first.chart.SHA256).size() == 7);
+    CHECK(loadPage(multiple, 0).goals.size() == 7);
+    sqlite3_close(multiple);
+  }
   SqliteConnectionHandle db;
   sqlite3 *raw = nullptr;
   CHECK(sqlite3_open(":memory:", &raw) == SQLITE_OK); db.reset(raw);
@@ -231,7 +366,7 @@ int main() {
   goal.achievedAtUnixMillis = 1730000001234;
   goal.chart.Title = "Goal chart"; goal.chart.SubTitle = "Another";
   goal.chart.TotalLongNotes = 1; goal.longNoteMode = 1; goal.target = aaa;
-  save(db.get(), goal);
+  goal.id = save(db.get(), goal);
   CHECK(load(db.get(), std::string(64, 'a'), 1)->chart.Title == "Goal chart");
   CHECK(load(db.get(), goal.chart.SHA256, 1)->setAtUnixMillis == 1730000000000);
   CHECK(load(db.get(), goal.chart.SHA256, 1)->achievedAtUnixMillis == 1730000001234);
@@ -253,7 +388,7 @@ int main() {
   CHECK(rejects([&] { auto invalid = goal; invalid.target.lamp = 150; save(db.get(), invalid); }));
   goal.chart.Title = "Updated"; save(db.get(), goal);
   CHECK(loadPage(db.get(), 0).goals.size() == 1);
-  goal.longNoteMode = 2; save(db.get(), goal);
+  goal.longNoteMode = 2; goal.id = 0; goal.id = save(db.get(), goal);
   CHECK(loadPage(db.get(), 0).goals.size() == 2);
   auto index = loadIndex(db.get());
   CHECK(index.hashes() == std::vector<std::string>{std::string(64, 'a')});
@@ -275,6 +410,7 @@ int main() {
     goal.chart.Title = "Rolled back"; save(db.get(), goal); }
   CHECK(load(db.get(), goal.chart.SHA256, 2)->chart.Title == "Updated");
   for (int i = 0; i < 19; ++i) {
+    goal.id = 0;
     goal.chart.SHA256 = std::string(62, 'c') + char('a' + i / 16) + "0123456789abcdef"[i % 16];
     save(db.get(), goal);
   }
@@ -296,7 +432,7 @@ int main() {
       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
   CHECK(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK); db.reset(raw);
   CHECK(loadPage(db.get(), 0).goals.empty());
-  save(db.get(), goal); db.reset();
+  goal.id = 0; goal.id = save(db.get(), goal); db.reset();
   CHECK(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK); db.reset(raw);
   CHECK(load(db.get(), goal.chart.SHA256, 1)->chart.SubTitle == "Another");
   CHECK(sqlite3_exec(db.get(), "PRAGMA query_only=ON", nullptr, nullptr, nullptr) == SQLITE_OK);

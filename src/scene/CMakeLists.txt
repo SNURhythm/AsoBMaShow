@@ -4,6 +4,7 @@ target_sources(main PRIVATE
     ChartFilterSortPanelView.cpp
     ChartPreloadWorker.cpp
     ChartGoalsScene.cpp
+    FolderGoalsScene.cpp
     ChartRecordsScene.cpp
     ChartViewerScene.cpp
     CourseGameplaySessionBuilder.cpp

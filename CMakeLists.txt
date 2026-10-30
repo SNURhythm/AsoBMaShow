@@ -9995,7 +9995,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         if(asobmashow_target_sources)
             if("src/repositories/ScoreRepositoryQueries.cpp" IN_LIST asobmashow_target_sources)
                 foreach(goal_source src/repositories/ScoreRepositoryGoals.cpp
-                        src/goals/ChartGoal.cpp src/goals/ChartGoalStore.cpp)
+                        src/goals/ChartGoal.cpp src/goals/ChartGoalStore.cpp
+                        src/repositories/ScoreRepositoryFolderGoals.cpp
+                        src/goals/FolderGoal.cpp src/goals/FolderGoalStore.cpp)
                     if(NOT goal_source IN_LIST asobmashow_target_sources)
                         target_sources(${asobmashow_target} PRIVATE ${goal_source})
                     endif()

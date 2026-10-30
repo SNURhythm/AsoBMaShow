@@ -1,4 +1,5 @@
 #pragma once
+#include "../goals/GoalPacemaker.h"
 
 #include "MusicSelectToolbarView.h"
 #include "MainMenuPlayOptionsModal.h"
@@ -13,6 +14,8 @@
 #include "../ReplayVideoExportTypes.h"
 #include "../replay/ReplayExportJob.h"
 #include "Scene.h"
+#include "../goals/FolderGoalStatusIndex.h"
+#include "../goals/GoalRecommendationIndex.h"
 #include "../audio/SkinSystemSoundService.h"
 #include "../music_select/MusicSelectBarManager.h"
 #include "../music_select/MusicSelectFolderStatusLoader.h"
@@ -95,7 +98,15 @@ private:
   void openKomboAssignment(const std::string &id);
   void openChartGoals(std::optional<ChartMetaRecord> initial = {}, bool recommendations = false);
   void openChartGoalForSelection();
+  std::optional<folder_goals::Source> folderGoalSource(const MusicSelectBar &) const;
+  void openFolderGoals(const folder_goals::Source &);
+  void applyFolderGoalSelection(const folder_goals::Source &,int);
+  std::optional<std::pair<folder_goals::Source,int>> pendingFolderGoalSelection_;
+  std::string pendingFolderGoalProfile_;
   void resumeGoalNavigation();
+  void queueGoalSelection(const ChartMetaRecord &, int mode, const std::string &profile);
+  std::string goalPacemakerLabel() const;
+  mutable chart_goals::PacemakerCache goalPacemakerCache_;
   void applyGoalSelection(const ChartMetaRecord &, int mode);
   bool restoreGoalDirectory(const MusicSelectBar &);
   std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
@@ -175,6 +186,8 @@ private:
   void refreshToolbarAvailability();
   void refreshToolbarGoal();
   std::string toolbarGoalKey_;
+  folder_goals::StatusIndex toolbarFolderGoals_;
+  chart_goals::RecommendationIndex toolbarGoalRecommendations_;
   void openPlayOptions();
   void openIrUploads();
   void openKombo();

@@ -1,4 +1,5 @@
 #pragma once
+#include "../goals/GoalPacemaker.h"
 #include "../i18n/Localization.h"
 #include "../BmsSearchService.h"
 #include "../ChartLibraryScanner.h"
@@ -17,6 +18,8 @@
 #include "../PlatformDocumentHandoff.h"
 #include "../replay/ReplayFileActionSelection.h"
 #include "../repositories/ScoreRepository.h"
+#include "../goals/FolderGoalStatusIndex.h"
+#include "../goals/GoalRecommendationIndex.h"
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
@@ -121,9 +124,17 @@ private:
   void openKomboAssignment(const std::string &id);
   void openChartGoals(std::optional<ChartMetaRecord> initial = {}, std::optional<int> mode = {}, bool recommendations = false);
   void openChartGoal(const ChartMetaRecord &record);
+  void openFolderGoals(std::optional<folder_goals::Source> source = {});
+  void applyFolderGoalSelection(const folder_goals::Source &,int);
+  std::optional<std::pair<folder_goals::Source,int>> pendingFolderGoalSelection_;
+  std::string pendingFolderGoalProfile_;
   chart_goals::Index chartGoalIndex;
+  chart_goals::RecommendationIndex chartGoalRecommendations;
   std::vector<std::string> chartGoalHashes;
   void resumeGoalNavigation();
+  void queueGoalSelection(const ChartMetaRecord &, int mode, const std::string &profile);
+  std::string goalPacemakerLabel() const;
+  mutable chart_goals::PacemakerCache goalPacemakerCache_;
   void applyGoalSelection(const ChartMetaRecord &, int mode);
   std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
   std::string pendingGoalProfile_;
@@ -220,6 +231,7 @@ private:
     LibraryFolderItem folder;
     std::optional<ChartMetaRecord> selected;
     std::optional<std::filesystem::path> temporaryFolder;
+    bool temporaryFolderRecursive = false;
     std::string search;
     float songScroll = 0;
     float folderScroll = 0;
@@ -382,6 +394,7 @@ private:
 
   LibraryFolderItem activeFolder;
   LibraryFolderMetadataCache folderMetadataCache;
+  folder_goals::StatusIndex folderGoalStatusIndex;
   ScoreClearRankCache scoreClearRanks;
   ScoreBestCache scoreBestScores;
   main_menu_library::RandomAvailabilityCache randomAvailabilityCache;
@@ -407,6 +420,7 @@ private:
   std::optional<std::vector<MusicSelectAssignmentChart>> assignmentCharts;
   std::map<std::string, std::vector<std::string>> assignmentChartHashes;
   std::optional<std::filesystem::path> temporaryChartFolder;
+  bool temporaryChartFolderRecursive_ = false;
   std::optional<ChartMetaRecord> selectedChartRecord;
   ChartRecordFilters chartRecordFilters;
   bool chartFilterPanelVisible = false;

@@ -1,3 +1,4 @@
+#include "goals/GoalPacemaker.h"
 #include "ResultImageExporter.h"
 #include "ExportFileName.h"
 
@@ -961,8 +962,12 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   if (!replay.autoPlay) {
     bestReplay = result_presentation::replayForPreviousBestChart(
         context, chart.Meta, previousBest, target, bestReplayCancelled);
+    std::string goalError;
+    const auto goal = pacemaker::normalizeTargetId(target) == pacemaker::kTargetGoal
+        ? chart_goals::loadPacemakerTarget(context.scoreRepository, chart.Meta, replay.chartMeta.LnMode,
+            context.settings.selectedPacemakerGoalId, goalError) : std::nullopt;
     pacemaker = result_presentation::pacemakerDataForReplayResult(
-        chart, state, replay, target, previousBest, bestReplay.get());
+        chart, state, replay, target, previousBest, bestReplay.get(), goal ? &*goal : nullptr);
   }
   std::string difficultyLabel =
       result_presentation::difficultyLabelForChart(context.chartRepository,

@@ -416,6 +416,18 @@ int main() {
     def test_personal_goal_directory_restores_after_return(self):
         self.run_directory_loading_fixture("testPersonalGoalDirectoryRestores")
 
+    def test_folder_goal_opens_eager_children(self):
+        self.run_directory_loading_fixture("testFolderGoalOpensEagerChildren")
+
+    def test_folder_goal_reopen_keeps_paged_rows(self):
+        self.run_directory_loading_fixture("testFolderGoalReopenDoesNotDuplicateProvider")
+
+    def test_folder_goal_directory_restores_after_return(self):
+        self.run_directory_loading_fixture("testFolderGoalDirectoryRestores")
+
+    def test_folder_goal_reprojects_table_after_mode_change(self):
+        self.run_directory_loading_fixture("testFolderGoalChangesTableMode")
+
     def run_directory_loading_fixture(self, test_name):
         source = read_music_select_scene()
         signatures = [
@@ -426,6 +438,7 @@ int main() {
             "void MusicSelectScene::cancelDirectoryLoad()",
             "void MusicSelectScene::continueDirectoryRestore()",
             "bool MusicSelectScene::restoreGoalDirectory(",
+            "void MusicSelectScene::applyFolderGoalSelection(",
             "bool MusicSelectScene::openDirectory(",
             "void MusicSelectScene::launchSelectedDirectoryAutoplay()",
             "void MusicSelectScene::applySkinPointerResult(",

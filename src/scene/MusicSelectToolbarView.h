@@ -75,7 +75,8 @@ public:
   void setControlEnabled(MusicSelectToolbarControl control, bool enabled);
   [[nodiscard]] bool isControlEnabled(MusicSelectToolbarControl control) const;
   void setViewportSize(int width, int height);
-  void setGoalState(bool present, bool achieved, int lampRank, std::string lamp, std::string score);
+  void setGoalState(bool present, bool achieved, int lampRank, std::string lamp, std::string score,
+                    bool recommended = false, std::string coverage = {});
 
 private:
   MusicSelectToolbarView(MusicSelectToolbarState state,
@@ -100,9 +101,11 @@ private:
   std::vector<MusicSelectToolbarRenderedControl> controls_;
   std::set<MusicSelectToolbarControl> disabledControls_;
   GoalTargetBubble *goalBubble_ = nullptr;
+  View *goalRecommendationBadge_ = nullptr;
   bool goalPresent_ = false, goalAchieved_ = false;
+  bool goalRecommended_ = false;
   int goalLampRank_ = -1;
-  std::string goalLamp_, goalScore_;
+  std::string goalLamp_, goalScore_, goalCoverage_;
   int viewportWidth_ = 0;
   int viewportHeight_ = 0;
   bool mouseDragging_ = false;

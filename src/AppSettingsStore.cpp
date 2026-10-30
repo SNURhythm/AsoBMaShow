@@ -890,6 +890,7 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
+      {"selectedPacemakerGoalId", settings.selectedPacemakerGoalId},
       {"skinModeFilterName", settings.skinModeFilterName},
       {"skinSortId", settings.skinSortId},
       {"skinDifficultyFilterName", settings.skinDifficultyFilterName},
@@ -1288,6 +1289,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
+  readValue(document, "selectedPacemakerGoalId",
+            settings.selectedPacemakerGoalId, diagnostics);
   readBoundedSkinString(document, "skinModeFilterName",
                         settings.skinModeFilterName, diagnostics);
   readBoundedSkinString(document, "skinSortId", settings.skinSortId,

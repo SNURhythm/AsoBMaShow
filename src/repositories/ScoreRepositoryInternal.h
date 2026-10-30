@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ScoreRepository.h"
+#include "../goals/FolderGoalStore.h"
+#include "SqliteRAII.h"
 #include "../ResultPersistenceModel.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../sqlite3.h"
@@ -17,6 +19,14 @@ struct ScoreRepository::Impl {
   std::optional<kombo::PlayProgress> komboProgress;
   std::string chartGoalAchievementAttempt;
   std::vector<chart_goals::Goal> chartGoalAchievements;
+  std::string folderGoalAchievementAttempt;
+  std::vector<folder_goals::Goal> folderGoalAchievements;
+  SqliteConnectionHandle folderGoalCharts;
+  std::unique_ptr<folder_goals::Projector> folderGoalProjector;
+  folder_goals::Projector &folderProjector();
+  std::vector<folder_goals::GoalProgress> folderGoalsBeforePlay(std::string_view hash);
+  std::vector<folder_goals::Goal> folderGoalsAfterPlay(const std::vector<folder_goals::GoalProgress> &before, std::string_view createdAt);
+
 };
 
 struct ScoreRepository::PreparedScoreQueryDatabase::State {

@@ -20,6 +20,7 @@ struct MainMenuScene {
     Type type=Type::AllSongs;
   } activeFolder;
   std::optional<int> temporaryChartFolder=1,chartDifficultyRangeTableId=3;
+  bool temporaryChartFolderRecursive_=true;
   std::string searchText="unrelated",chartBpmMinText="200",chartBpmMaxText="220";
   int chartRecordFilters=7,reloads=0;
   bool chartKeyModeDropdownOpen=true,chartClearMarkDropdownOpen=true,chartScoreRankDropdownOpen=true;
@@ -33,7 +34,7 @@ struct MainMenuScene {
     if(activeFolder.key=="container:assignment:deleted") activeFolder={.key="all"};
   }
   void reloadChartListForFolderSelection() {
-    assert(!temporaryChartFolder && !chartDifficultyRangeTableId && searchText.empty());
+    assert(!temporaryChartFolder && !temporaryChartFolderRecursive_ && !chartDifficultyRangeTableId && searchText.empty());
     assert(chartRecordFilters==0 && search.value.empty() && root.visible);
     assert(chartBpmMinText.empty() && chartBpmMaxText.empty());
     assert(!chartKeyModeDropdownOpen && !chartClearMarkDropdownOpen && !chartScoreRankDropdownOpen);

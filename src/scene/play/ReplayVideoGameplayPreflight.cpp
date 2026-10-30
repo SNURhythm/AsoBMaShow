@@ -130,7 +130,8 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .judgementIndicatorLineThicknessPercent = settings.presentation().judgementIndicatorLineThicknessPercent,
       .judgementIndicatorEventHeightPercent = settings.presentation().judgementIndicatorEventHeightPercent,
       .judgementIndicatorEventThicknessPercent = settings.presentation().judgementIndicatorEventThicknessPercent,
-      .judgementIndicatorColorization = settings.presentation().judgementIndicatorColorization,
+      .judgementIndicatorColorization = judgement_indicator::snapshotColorization(
+          settings.presentation().judgementIndicatorColorization),
       .judgementIndicatorHudMode =
           settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,

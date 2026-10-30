@@ -8,16 +8,27 @@ goals-per-round quota when creating the routine or editing tomorrow's routine.
 Regular rounds grant 10 points up to the remaining daily target; extra rounds
 use one newly achieved goal for 1 point within Kombo's shared daily bonus limit.
 Previously achieved goals and imported records do not grant retroactive points.
-Separate LN-mode goals and newly set harder targets count as separate achievements;
+Independent goals, including those in the same LN mode, and newly set harder
+targets count as separate achievements;
 a goal containing both lamp and score targets counts once when both are met.
 
 ## Recommendations
+
+A small red dot on a chart's flag indicates available lamp or score
+recommendations when that chart has no configured goal. Both selectors use this
+badge; saving a goal removes it, including when that goal is already achieved.
+Tapping a red-dot flag opens a dedicated recommendation view for that chart.
+Selecting a recommendation opens its editor; Back from the editor returns to
+that chart-specific view. Back again opens the ordinary Recommendations tab
+with all charts. The chart-specific view has its own target navigation and does
+not show the overview tabs or table filters.
 
 The Personal goals screen offers expandable **Near E** through **Near MAX**
 groups for best scores within 2 percentage points below their next rank. Empty
 groups are hidden. Candidates are ordered by EX points remaining, nearest first, with 20 per
 page. Tapping a recommendation opens the normal goal editor with that rank
-selected; saving remains explicit. Existing lamp targets are preserved. LN/CN/HCN
+selected in a new independent goal; saving remains explicit. Existing goals
+remain unchanged. LN/CN/HCN
 evidence is combined into one chart card per target group. The editor provides
 a mode picker for selectable-mode charts, initially using the closest evidence;
 changing the mode keeps the draft targets without saving.
@@ -41,8 +52,8 @@ They are ordered by fewest breaks and show that count on the chart card.
 
 Each group hides lamps already earned and sorts by closeness: gauge points below
 the border for groove gauges, remaining chart proportion after death for survival
-gauges. Selecting a candidate prefills the lamp in the normal editor and preserves
-any score target. Background evidence is a recommendation, not an earned lamp.
+gauges. Selecting a candidate prefills the lamp in a new goal editor; existing goals
+remain unchanged. Background evidence is a recommendation, not an earned lamp.
 
 Only eligible, unmodified local chart plays with recorded evidence contribute;
 unknown historical evidence, practice/autoplay/assisted plays, altered playback,
@@ -77,14 +88,29 @@ backfill gauge evidence.
 
 ## Using goals
 
+Use the cycling button to switch between **Chart goals** and **Folder goals**.
+Chart goals has In progress, Achieved, and Recommended goals tabs; Folder goals
+has In progress and Achieved. Each section remembers its tab, page, and scroll
+position while switching. Wide screens use a vertical sidebar and centered
+content; compact screens put navigation above full-width content. Recommendation
+targets use a dropdown in compact layouts to keep the header short.
+
+Back follows the entry path: a single goal opened from a flag returns directly
+to the selector; a goal opened from a multi-goal list returns to that list.
+**All goals** explicitly opens the overview. Goal rows are fully clickable and
+show target, scope, status, and current progress; source lists put unfinished
+goals first. Empty lists offer **Browse charts/folders** or a link to achieved
+goals where available.
+
 - In PLAY, tap the small flag on a chart row in the built-in selector or the flag
   in the custom selector toolbar. The row flag is filled when that chart has a goal.
-  It opens the existing goal for the current LN mode, or another configured mode if none exists for the current
-  mode. An empty flag opens a new goal editor. When a selected chart has an
-  unfinished goal, a brief animated bubble above its flag shows the lamp
-  target with its clear-lamp color and the score target. For charts with
-  selectable long notes, the LN, CN and HCN buttons on goal details open or
-  create each mode’s separate goal.
+  With one saved goal, it opens that goal directly. With multiple goals, it opens
+  a chart-specific list showing each target, LN scope, and current status.
+  **Add goal** in that list or a goal's details creates another independent goal,
+  including within the same LN mode. An empty flag without a red dot opens a new
+  goal editor. The selected chart's bubble shows its target for a single goal,
+  or the number of goals when there are several. LN, CN and HCN buttons in the
+  editor choose the scope of the goal being added or edited.
 - The favorite star is beside the chart title in the detail panel.
 - The **Goals** folder in either selector gathers indexed charts with goals
   across LN modes with at least one unfinished goal. Normal search and filters apply.
@@ -104,17 +130,21 @@ backfill gauge evidence.
 - A newly achieved goal shows a short flag-burst celebration on the result
   screen after the score is saved. It waits for the Kombo panel to close and
   does not replay for later clears, view rebuilds, replay, practice, or autoplay.
-- **PLAY** selects the chart and its LN mode in the originating selector.
+- **Select chart** selects the chart and its LN mode in the originating selector.
   It does not start gameplay. **Practice chart** opens the existing chart viewer
   and practice tools, with a return path to the goal.
-- Edit or remove goals at any time. Removal asks for confirmation and preserves
-  all score records.
+- Editors provide **Save goal** and **Cancel**. Cancel or Back restores the
+  existing goal detail or the source of a new draft without saving. Edit or
+  remove goals at any time; removal asks for confirmation and preserves all
+  score records.
 
 ## Records, scope, and missing charts
 
-Goals are profile-specific and keyed by chart SHA-256 and effective long-note
-mode. Selectable LN/CN/HCN charts have separate goals; authored LN modes use the
-fixed scope; charts without long notes share one goal across mode selections.
+Goals are profile-specific. Each has its own stable ID and belongs to a chart
+SHA-256 and effective long-note mode. Multiple targets may coexist within the
+same scope, and editing or removing one leaves the others unchanged. Selectable
+LN/CN/HCN charts allow each scope; authored LN modes use the fixed scope; charts
+without long notes use shared scope across mode selections.
 Changing the chart content at the same path cannot transfer a goal to it.
 
 Existing eligible best records count immediately, including accepted imported
@@ -137,7 +167,9 @@ payload scan is needed for goal browsing or resolution.
 ## Implementation and verification
 
 Versioned rows in the profile score database's `chart_goals` table retain only
-identity, display and LN metadata, targets, and goal dates. They use repository locking,
+identity, display and LN metadata, targets, and goal dates. Existing single-goal
+rows migrate transactionally on write, preserving their IDs and stored metadata.
+They use repository locking,
 profile activity guards, transactional writes, and bounded page reads. Corrupt
 or future-version rows produce an error and cannot be silently overwritten.
 Switching profiles discards unsaved goal edits and queued navigation.
@@ -150,12 +182,11 @@ The goal editor shows the current best lamp and EX score before saving, includin
 
 New achievements play a short trumpet-style fanfare when the result banner appears, using the existing system sound bus and master volume.
 
-Flags are green when the goal they open is achieved. Achieved-only charts are
-excluded from the Goals folder. A
-chart remains in that folder while any LN-mode goal is unfinished. In Personal
-goals, unfinished goals appear first; achieved goals are collapsed at the bottom
-behind the same plus/hide control used by Kombo optional challenges. Each group
-pages independently. Titles and subtitles share one heading.
+Flags are green only when all saved goals for the chart are currently achieved.
+Achieved-only charts are excluded from the Goals folder. A chart remains in that
+folder while any goal is unfinished, including another goal in the same LN mode.
+In Personal goals, In progress and Achieved tabs page independently. Titles and
+subtitles share one heading.
 
 Goal lists, details, and the editor show the chart jacket (or banner), with a
 music-note placeholder while artwork is loading or unavailable. Artwork for
@@ -164,3 +195,90 @@ visible goal pages is resolved from chart metadata and loaded asynchronously.
 Target bubbles center above the flag, with the lamp bar and label centered
 together and the score centered beneath them. The native
 selector draws its bubble above the list clip; safe-area edges remain respected.
+
+## Folder goals
+
+Use a folder or difficulty-table flag to set a goal for the entire indexed
+folder subtree, table, or level. In the built-in selector, table and level rows
+have flags; **Folder goals** also opens the current physical folder when browsing
+one. In the custom selector, the toolbar flag supports folders, tables and levels.
+**Personal goals → Folder goals** lists all saved folder goals. Folder flags
+open a new editor when no goal exists, the saved goal directly when there is one
+(including an Average EX goal), or a source list when there are several.
+**Add goal** creates an independent target, including another goal of the same
+type and LN mode. New drafts retain entered values when switching LN mode or
+goal type. Editing keeps the existing source, LN mode, and goal type fixed, and
+changes only the selected goal. Each goal keeps its own dates and achievement
+history. Source lists page in groups of 20.
+
+Folder flags follow chart-goal colors: neutral when unset, accent while active,
+and lime when all goals for the selected LN mode are achieved. Selecting an
+unfinished goal shows a bubble with current/target percentages, such as
+**HARD 60.00%/80.00%**, **Avg EX 72.50%/85.00%**, and a separate EX coverage
+line. Each unfinished goal type
+has its own line; completed targets are omitted. If several unfinished goals
+share a type, the bubble shows the total unfinished goal count. Open the flag
+to view each target and its progress.
+
+Three goal types are available for each folder and selected LN mode, with multiple
+independent targets allowed for each type:
+
+- **Lamp coverage:** a percentage of charts at a chosen lamp or better.
+  **100% Failed or better** covers every available chart with an eligible play.
+- **Average EX rate:** the average of each available chart's best EX percentage,
+  with equal chart weights. Available unplayed charts count as 0%.
+- **EX rate coverage:** a percentage of charts meeting a minimum EX rate, such
+  as 80% of charts at AAA or above. Available unplayed charts do not qualify.
+  The required chart count rounds up.
+
+Both EX goal types accept E, D, C, B, A, AA, AAA, MAX−, and MAX, or a custom
+percentage. Rank thresholds use their exact fractions (AAA is 8/9), so rounded
+percentages never change the requirement. Target descriptions and selector
+bubbles retain the chosen rank label. EX rate coverage has separate
+controls for the minimum EX rate and the required percentage of charts.
+
+Missing charts are excluded from the calculations and shown separately.
+Duplicate installations count once. Membership is live, so downloading charts,
+rescanning, or updating a table can change progress. Selector search and filters
+do not change a saved goal's scope. Empty or unavailable folders cannot complete
+a goal. Goals keep their source identity if the table is reimported.
+
+Cards and details show a progress bar, the current percentage, a target marker,
+and available/missing counts. Coverage goals also show the qualifying count and the
+number needed. Edit the percentage to preview its target marker; use **Open
+folder** to return to the goal's collection. New targets must exceed current
+progress. The three goal types and LN modes have separate targets.
+
+Eligible imported records contribute to progress. Only a newly completing local
+play grants the result celebration and Kombo goal credit. Imports, membership
+changes and revisiting a completed target do not award points. First-achieved
+history remains even when live progress subsequently drops.
+
+Folder goals retain their existing SQLite table and original keys when upgrading
+from the single-goal format. New goals receive separate stable IDs. Legacy
+payloads are read without rewriting them; only saved goals use the new payload
+version. This requires no table rename or rebuild, and keeps existing dates,
+first achievements, and Kombo credit identities intact.
+
+## Challenging a chart goal
+
+**Challenge!** returns to the selector and applies the goal's LN mode. If the
+chart is already selected, the current folder, filters, and selection remain in
+place. For a lamp target, the action raises the selected gauge only when its
+mapped lamp and auto-shift range cannot reach the target. Higher gauges and
+Best Clear coverage are preserved; the auto-shift mode and lower bound stay
+unchanged. Full Combo maps to Hazard when an upgrade is needed.
+
+Challenge also selects the **GOAL** pacemaker for that exact goal. Its score
+fraction determines the target EX score, rounded up; a lamp-only goal uses
+**BEST**. Manually selecting (or reselecting) GOAL clears the explicit goal and
+uses the lowest unfinished score target for the current chart and LN mode,
+falling back to BEST when no score target remains. The brief target is shown in
+the play-option summary (for example **AAA**, **87.77%**, or **BEST**) and the
+dropdown describes it as **GOAL: AAA**. Goal edits and score changes refresh this
+label. The selected goal ID is profile-specific and survives restarting the app.
+The target used by a play is retained on its result, even if completing the
+goal changes which target would be selected next.
+Recalled results and replay exports resolve the current goal for the recorded
+LN mode. During gameplay, GOAL takes precedence over a custom skin's saved
+target choice without changing that preference.

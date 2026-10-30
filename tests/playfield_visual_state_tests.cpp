@@ -86,6 +86,9 @@ void testPresentationMetadataCacheAndSnapshotLifetime() {
   legacy.playOptionLabel = original->playOptionLabel;
   legacy.courseStageTitles = original->courseStageTitles;
   require(shared == legacy, "authority equality compares effective metadata values");
+  shared.goalPacemakerSelected = true;
+  require(!(shared == legacy), "GOAL override participates in authority equality");
+  shared.goalPacemakerSelected = false;
   PlayfieldChartVisualModel model;
   PlayfieldVisualStateStore store(model);
   store.applyAuthorityUpdate(shared);
@@ -1148,7 +1151,12 @@ void testReplayProgressionsShareAcrossAuthorityCaptureWithoutAllocations() {
     selected.scoreAfterNotes = pacemaker::ScoreProgression(std::move(scores));
     require(best.scoreAfterNotes.data() != selected.scoreAfterNotes.data(),
             "fixture has two independently allocated replay progressions");
+    judgement_indicator::Colorization colors;
+    colors.mode = judgement_indicator::ColorizationMode::PerRange;
+    colors.ranges.front().style.color = 0x123456;
+    const auto originalColors = judgement_indicator::snapshotColorization(colors);
     PlayfieldVisualStateStore store;
+    store.setConfiguration({.judgementIndicatorColorization = originalColors});
     store.applyAuthorityUpdate({.bestScoreTarget = best,
                                 .pacemakerTarget = selected});
     auto retained = store.captureForPresentation({});
@@ -1158,6 +1166,8 @@ void testReplayProgressionsShareAcrossAuthorityCaptureWithoutAllocations() {
         const PlayfieldAuthorityUpdate authority{
             .bestScoreTarget = best, .pacemakerTarget = selected};
         store.applyAuthorityUpdate(authority);
+        store.setConfiguration({.judgementIndicatorColorization =
+            judgement_indicator::snapshotColorization(colors, originalColors)});
         const auto captured = store.capture(
             {.serial = static_cast<std::uint64_t>(frame)}, false);
         const auto presented = store.captureForPresentation(captured.clock);
@@ -1173,10 +1183,21 @@ void testReplayProgressionsShareAcrossAuthorityCaptureWithoutAllocations() {
                 "aggregate, store, capture and frame copy share both payloads");
         require(copied.authority == authority,
                 "authority equality retains all target values");
+        require(copied.configuration.judgementIndicatorColorization == originalColors &&
+                    presented.configuration.judgementIndicatorColorization == originalColors,
+                "frame copies share the configured color ranges");
       }
       require(allocations.count() == 0 && allocations.totalBytes() == 0,
               "warmed authority/capture target path performs zero allocations");
     }
+
+    colors.ranges.front().style.color = 0x654321;
+    const auto changedColors = judgement_indicator::snapshotColorization(colors, originalColors);
+    store.setConfiguration({.judgementIndicatorColorization = changedColors});
+    require(changedColors != originalColors &&
+                store.capture({}).configuration.judgementIndicatorColorization == changedColors &&
+                retained.configuration.judgementIndicatorColorization->ranges.front().style.color == 0x123456,
+            "settings edits replace color ranges while retained frames keep their original values");
 
     // Simulate the next course stage replacing both targets, then an attempt
     // reset and producer destruction while the old frame remains retained.

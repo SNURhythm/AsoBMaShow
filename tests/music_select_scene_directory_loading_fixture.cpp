@@ -1,5 +1,6 @@
 #include "REPOSITORY_ROOT/src/music_select/MusicSelectDirectoryRequest.h"
 #include "REPOSITORY_ROOT/src/music_select/MusicSelectExternalActions.h"
+#include "REPOSITORY_ROOT/src/goals/FolderGoal.h"
 
 #include <algorithm>
 #include <atomic>
@@ -22,7 +23,12 @@ void expect(bool condition, const char *message) {
 void SDL_Log(const char *, ...) {}
 
 namespace long_note_mode {
-int valueFromId(const std::string &) { return 0; }
+int valueFromId(const std::string &id) { return id=="CN" ? 2 : id=="HCN" ? 3 : 1; }
+std::string idFromValue(int value) { return value==2 ? "CN" : value==3 ? "HCN" : "LN"; }
+}
+path_t utf8_to_path_t(const std::string &path) { return std::filesystem::path(path).native(); }
+namespace chart_storage_identity {
+void ToAbsolutePath(std::filesystem::path &path) { path=std::filesystem::absolute(path); }
 }
 
 namespace skin {
@@ -63,7 +69,10 @@ MusicSelectBar song() {
   return result;
 }
 
-struct MusicSelectRepositoryMetadata {};
+struct MusicSelectRepositoryMetadata {
+  struct Table { struct Info { int id; std::string sourceUrl; } info; };
+  std::vector<Table> tables;
+};
 
 struct GoalSession {
   std::vector<ChartMetaRecord> records;
@@ -80,6 +89,10 @@ struct FixtureRepository {
   int autoplayLoads = 0;
   bool emptyAutoplay = false;
   bool failNormal = false;
+  bool pagedPhysical = false;
+  std::map<std::string, std::vector<MusicSelectBar>> directoryChildren;
+  std::string songTitle = "Loaded song";
+  int loadedMode = 0;
 };
 
 struct FailedRows : MusicSelectRowProvider {
@@ -98,6 +111,21 @@ struct FailedRows : MusicSelectRowProvider {
     return {"ALL", "ALL"};
   }
   const std::string &diagnostic() const noexcept { return error; }
+};
+
+struct PagedRows : MusicSelectRowProvider {
+  MusicSelectBar row=song();
+  std::string error;
+  std::shared_ptr<MusicSelectRowProvider> clone() const override { return std::make_shared<PagedRows>(*this); }
+  std::size_t size() const noexcept override { return 1; }
+  const MusicSelectBar &at(std::size_t) const override { return row; }
+  std::optional<std::size_t> indexOf(const MusicSelectBarId &id) const override {
+    return id==row.id ? std::optional<std::size_t>{0} : std::nullopt;
+  }
+  std::pair<std::string,std::string> configure(const std::string &,const std::string &,const std::string &) override {
+    return {"ALL","ALL"};
+  }
+  const std::string &diagnostic() const noexcept override { return error; }
 };
 
 class MusicSelectDirectoryLoader {
@@ -154,11 +182,16 @@ private:
 
 MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
     FixtureRepository &repository, const MusicSelectRepositoryMetadata &,
-    const MusicSelectBar &, int, int, const std::filesystem::path &,
-    const MusicSelectBarManagerConfig &, int, std::stop_token) {
+    const MusicSelectBar &directory, int, int, const std::filesystem::path &,
+    const MusicSelectBarManagerConfig &, int mode, std::stop_token = {}) {
   ++repository.normalLoads;
+  repository.loadedMode = mode;
   if (repository.failNormal) throw std::runtime_error("retry failed");
-  return {.children = {song()}};
+  if (repository.pagedPhysical) return {.provider=std::make_shared<PagedRows>()};
+  if (const auto found=repository.directoryChildren.find(directory.id.value);
+      found!=repository.directoryChildren.end()) return {.children=found->second};
+  auto child=song(); child.title=repository.songTitle;
+  return {.children = {child}};
 }
 
 MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectoryAutoplay(
@@ -209,9 +242,11 @@ struct MusicSelectScene {
       std::string skinSortId = "TITLE";
       std::string selectedLnMode = "LN";
     } settings;
+    bool saveSettings() { return true; }
   } context;
 
   MusicSelectBarManager bars_{rootProjection()};
+  std::optional<MusicSelectProjection> reloadProjection;
   std::optional<GoalSession> chartSession_=GoalSession{};
   bool launching_ = false;
   bool failed_ = false;
@@ -274,6 +309,7 @@ struct MusicSelectScene {
   void launchSelected(bool autoplay = false, bool practice = false);
   bool openSameFolder(bool) { return false; }
   bool restoreGoalDirectory(const MusicSelectBar &);
+  void applyFolderGoalSelection(const folder_goals::Source &, int);
   void applyGoalSelection(const ChartMetaRecord &record, int mode) {
     expect(mode==0, "restoration preserves the current LN setting");
     auto directory=folder("personal-goal:"+record.meta.SHA256, "Personal goals");
@@ -282,6 +318,18 @@ struct MusicSelectScene {
     bars_.openTransient(std::move(directory),{child});
   }
   bool loadDirectoryChildren(const MusicSelectBar &directory) {
+    if (directory.kind==skin::MusicSelectBarKind::Table) {
+      auto level=folder("hash:table:7:1", "Level 1");
+      level.kind=skin::MusicSelectBarKind::Hash; level.tableId=7; level.tableLevel="1";
+      return bars_.installChildren(directory.id,{level});
+    }
+    if (directory.kind==skin::MusicSelectBarKind::Hash) {
+      auto child=song();
+      const auto mode=long_note_mode::valueFromId(context.settings.selectedLnMode);
+      child.score=ScoreBestSnapshot{.score=mode*100,.clearType=mode==1 ? 200 : 300};
+      child.replayExists[0]=mode==2;
+      return bars_.installChildren(directory.id,{child});
+    }
     return bars_.installChildren(directory.id, {song()});
   }
   void launchCourse(const MusicSelectBar &playlist, bool autoplay) {
@@ -295,7 +343,7 @@ struct MusicSelectScene {
   }
   void reloadLibrary(bool preserveDirectory) {
     RELOAD_CAPTURE
-    bars_.refresh(rootProjection());
+    bars_.refresh(reloadProjection.value_or(rootProjection()));
     RELOAD_RESTORE
   }
 };
@@ -475,6 +523,75 @@ void testPersonalGoalDirectoryRestores() {
   scene.chartSession_->records.front().unavailable=true;
   scene.reloadLibrary(true);
   expect(scene.bars_.readView().directory.empty(), "missing goal chart must not restore a playable stale record");
+}
+
+void testFolderGoalOpensEagerChildren() {
+  MusicSelectScene scene;
+  const folder_goals::Source source{.kind=folder_goals::SourceKind::Directory,.identity="/charts",.name="Charts"};
+  auto nested=folder("folder:nested", "Nested"); nested.directoryPath="/charts/nested";
+  scene.context.chartRepository.directoryChildren["folder-goal:/charts"]={nested};
+  scene.applyFolderGoalSelection(source,1);
+  const auto opened=scene.bars_.readView();
+  expect(opened.directory==std::vector<MusicSelectBarId>{{"folder-goal:/charts"}} &&
+             opened.rowCount()==1 && opened.rowAt(0).id==nested.id,
+         "opening a folder goal must install eager child IDs and enter the folder");
+}
+
+void testFolderGoalReopenDoesNotDuplicateProvider() {
+  MusicSelectScene scene;
+  scene.context.chartRepository.pagedPhysical=true;
+  const folder_goals::Source source{.kind=folder_goals::SourceKind::Directory,.identity="/charts",.name="Charts"};
+  scene.applyFolderGoalSelection(source,1);
+  expect(scene.bars_.readView().rowCount()==1, "initial folder goal uses a paged provider");
+  scene.reloadLibrary(true); // Resume restores the open folder before applying Open folder again.
+  scene.applyFolderGoalSelection(source,1);
+  const auto reopened=scene.bars_.readView();
+  expect(reopened.directory==std::vector<MusicSelectBarId>{{"folder-goal:/charts"}} && reopened.rowCount()==1,
+         "reopening a physical goal must keep one directory entry and its provider rows");
+  expect(scene.bars_.close(), "Back closes the reopened goal");
+  expect(scene.bars_.readView().directory.empty() && scene.bars_.readView().rowCount()==2,
+         "Back returns to root instead of leaving an empty ancestor sharing the provider ID");
+}
+
+void testFolderGoalDirectoryRestores() {
+  MusicSelectScene scene;
+  auto directory=folder("folder-goal:/charts", "Charts"); directory.directoryPath="/charts";
+  auto nested=folder("folder:nested", "Nested"); nested.directoryPath="/charts/nested";
+  directory.children={nested.id}; directory.childrenLoaded=true;
+  scene.context.chartRepository.directoryChildren[directory.id.value]={nested};
+  expect(scene.bars_.openTransient(directory,{nested}), "open folder goal before leaving selector");
+  scene.openSelected();
+  scene.directoryLoader_->completePending(); scene.applyDirectoryLoads();
+  scene.context.settings.selectedLnMode="CN";
+  scene.context.chartRepository.songTitle="Fresh chart";
+  scene.reloadLibrary(true);
+  expect(scene.directoryRequest_ && scene.directoryRequest_->directory.id==nested.id,
+         "resume restores the synthetic goal folder and continues restoring its nested directory");
+  scene.directoryLoader_->completePending(); scene.applyDirectoryLoads();
+  const auto restored=scene.bars_.readView();
+  expect(restored.directory==std::vector<MusicSelectBarId>{directory.id,nested.id} &&
+             restored.rowAt(restored.selectedIndex).id==song().id &&
+             restored.rowAt(restored.selectedIndex).title=="Fresh chart" &&
+             scene.context.chartRepository.loadedMode==2,
+         "folder goal resume preserves collection and selection with fresh rows in the current mode");
+}
+
+void testFolderGoalChangesTableMode() {
+  MusicSelectScene scene;
+  auto table=folder("table:7", "Table"); table.kind=skin::MusicSelectBarKind::Table; table.tableId=7;
+  scene.reloadProjection=MusicSelectProjection{.bars={table},.root={table.id}};
+  scene.repositoryMetadata_->tables.push_back({.info={.id=7,.sourceUrl="https://table"}});
+  scene.bars_.refresh(*scene.reloadProjection);
+  expect(scene.openDirectory(table), "open initial table");
+  expect(scene.openDirectory(scene.bars_.readView().rowAt(0)), "open initial LN level");
+  expect(scene.bars_.readView().rowAt(0).score->score==100, "initial level projects LN evidence");
+  scene.reloadLibrary(true); // Resume restores the previously selected mode first.
+  scene.applyFolderGoalSelection({.kind=folder_goals::SourceKind::Level,.identity="https://table",.level="1",.name="Level 1"},2);
+  const auto opened=scene.bars_.readView();
+  expect(scene.context.settings.selectedLnMode=="CN" &&
+             opened.directory==std::vector<MusicSelectBarId>{table.id,{"hash:table:7:1"}} &&
+             opened.rowAt(0).score->score==200 && opened.rowAt(0).score->clearType==300 && opened.rowAt(0).replayExists[0],
+         "opening a goal in another LN mode must rebuild cached score, lamp and replay projections");
 }
 
 void testSearchOpensAsynchronouslyAndRestores() {
@@ -666,6 +783,10 @@ int main(int argc, char **argv) {
   else if (test == "testUnzipAllConfirmation") testUnzipAllConfirmation();
   else if (test == "testFailedPageRecovery") testFailedPageRecovery();
   else if (test == "testPersonalGoalDirectoryRestores") testPersonalGoalDirectoryRestores();
+  else if (test == "testFolderGoalOpensEagerChildren") testFolderGoalOpensEagerChildren();
+  else if (test == "testFolderGoalReopenDoesNotDuplicateProvider") testFolderGoalReopenDoesNotDuplicateProvider();
+  else if (test == "testFolderGoalDirectoryRestores") testFolderGoalDirectoryRestores();
+  else if (test == "testFolderGoalChangesTableMode") testFolderGoalChangesTableMode();
   else if (test == "testSearchOpensAsynchronouslyAndRestores") testSearchOpensAsynchronouslyAndRestores();
   else if (test == "testRecommendedGoalAction") {
     MusicSelectScene scene;

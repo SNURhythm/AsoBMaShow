@@ -1,8 +1,10 @@
 #include "LibraryFolderItemView.h"
+#include "Button.h"
 #include "ClearLampColors.h"
 #include "IconText.h"
 #include "UiTheme.h"
 #include "MainMenuTheme.h"
+#include "GoalTargetBubble.h"
 #include <algorithm>
 
 namespace {
@@ -20,8 +22,8 @@ constexpr int kChevronDownIcon = 0xf0d7;
 } // namespace
 
 LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
-                                             int height)
-    : View(x, y, width, height) {
+                                             int height, bool goalBubbleInOverlay)
+    : View(x, y, width, height), goalBubbleInOverlay_(goalBubbleInOverlay) {
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
   setPadding(Edge::Bottom, kBottomGap);
@@ -79,6 +81,27 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   countView->setOverflow(TextView::TextOverflow::Hidden);
   countView->setWidth(kCountWidth);
   contentCard->addView(countView);
+  goalButton=new Button();
+  goalButton->setWidth(36)->setHeight(36)->setFlexShrink(0)->setCornerRadius(10);
+  goalButton->setName("folderGoalButton");
+  auto *goalContent = new View();
+  goalContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
+  goalIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 17);
+  goalIconView->setName("folderGoalFlag");
+  goalOutlineView = new TextView("assets/fonts/fa-regular-400.ttf", 17);
+  goalOutlineView->setName("folderGoalOutline");
+  for (auto *flag : {goalIconView, goalOutlineView}) {
+    flag->setText(ui_icons::textForCodepoint(0xf024));
+    flag->setAlign(TextView::CENTER);
+    flag->setVAlign(TextView::MIDDLE);
+    flag->setWidth(24)->setHeight(24);
+    goalContent->addView(flag);
+  }
+  goalButton->setContentView(goalContent);
+  goalBubble = new GoalTargetBubble();
+  if (!goalBubbleInOverlay_) addView(goalBubble);
+  refreshGoalButton();
+  contentCard->addView(goalButton); setGoalAction({});
 }
 
 void LibraryFolderItemView::setItem(const std::string &label, int depth,
@@ -137,6 +160,8 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
 
 void LibraryFolderItemView::onSelected() {
   if (sectionHeader) return;
+  selected = true;
+  refreshGoalButton();
   groupLabelView->setOverflow(TextView::TextOverflow::Marquee);
   contentCard->setThemedBackgroundColor(main_menu_theme::action);
   contentCard->setCornerRadius(0);
@@ -147,6 +172,8 @@ void LibraryFolderItemView::onSelected() {
 }
 
 void LibraryFolderItemView::onUnselected() {
+  selected = false;
+  refreshGoalButton();
   groupLabelView->setOverflow(TextView::TextOverflow::Hidden);
   contentCard->clearBackgroundColor();
   contentCard->setCornerRadius(0);
@@ -156,4 +183,61 @@ void LibraryFolderItemView::onUnselected() {
     (rootItem ? groupLabelView : labelView)->setThemedColor(main_menu_theme::ink);
   }
   countView->setThemedColor(main_menu_theme::muted);
+}
+
+void LibraryFolderItemView::setGoalAction(std::function<void()> action) {
+  goalButton->setVisible(bool(action));
+  goalButton->setDisplay(action ? YGDisplayFlex : YGDisplayNone);
+  goalButton->setOnClickListener(std::move(action));
+  refreshGoalButton();
+}
+
+void LibraryFolderItemView::setGoalState(bool present, bool achieved) {
+  goalPresent = present;
+  goalAchieved = present && achieved;
+  refreshGoalButton();
+}
+
+void LibraryFolderItemView::refreshGoalButton() {
+  goalBubble->showFor(selected && goalPresent && !goalAchieved && goalButton->getVisible());
+  goalButton->setSelected(goalPresent);
+  goalButton->propagateThemeChange();
+  goalIconView->setVisible(goalPresent);
+  goalIconView->setDisplay(goalPresent ? YGDisplayFlex : YGDisplayNone);
+  goalOutlineView->setVisible(!goalPresent);
+  goalOutlineView->setDisplay(goalPresent ? YGDisplayNone : YGDisplayFlex);
+  goalOutlineView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::secondary);
+  goalIconView->setThemedColor(goalPresent
+      ? (goalAchieved ? app_theme::lime : (selected ? main_menu_theme::selectedAccent : main_menu_theme::accent))
+      : (selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted));
+}
+
+LibraryFolderItemView::~LibraryFolderItemView() {
+  if (goalBubbleInOverlay_) delete goalBubble;
+}
+
+void LibraryFolderItemView::setGoalTarget(int lampRank, const std::string &lamp, const std::string &score, const std::string &coverage) {
+  goalBubble->setTarget(lampRank, lamp, score, coverage);
+  refreshGoalButton();
+}
+
+void LibraryFolderItemView::renderGoalBubble(RenderContext &context) {
+  if (!goalBubbleInOverlay_ || !selected || !getVisible()) return;
+  goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height, true);
+  goalBubble->applyYogaLayout();
+  goalBubble->render(context);
+}
+
+void LibraryFolderItemView::onLayout() {
+  View::onLayout();
+  if (goalBubble) goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height, goalBubbleInOverlay_);
+}
+
+void LibraryFolderItemView::onMove(int, int) {
+  if (goalBubble) goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height, goalBubbleInOverlay_);
+}
+
+void LibraryFolderItemView::onThemeChanged() {
+  View::onThemeChanged();
+  if (goalBubbleInOverlay_ && goalBubble) goalBubble->propagateThemeChange();
 }

@@ -293,6 +293,9 @@ PlayOptionsPanelView::PlayOptionsPanelView(
       return true;
     }, overlayPortal);
     pacemakerChoice->setName("pacemaker-choice");
+    pacemakerChoice->setReselectionPredicate([](const std::string &id) {
+      return id == pacemaker::kTargetGoal;
+    });
     addView(pacemakerChoice);
   }
 }
@@ -392,7 +395,8 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   if (pacemakerChoice) {
     std::vector<DropdownView::Option> options;
     for (const char *target : pacemaker::kSelectableTargets) {
-      options.push_back({.id = target, .label = pacemaker::displayTargetLabel(target)});
+      options.push_back({.id = target, .label = target == std::string_view(pacemaker::kTargetGoal)
+          ? "GOAL: " + state.pacemakerGoalLabel : pacemaker::displayTargetLabel(target)});
     }
     pacemakerChoice->refresh({.selectedId = pacemaker::normalizeTargetId(state.pacemakerTarget),
                                .options = std::move(options)});

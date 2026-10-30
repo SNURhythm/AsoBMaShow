@@ -72,6 +72,9 @@
 #include "SettingsScene.h"
 #include "KomboScene.h"
 #include "ChartGoalsScene.h"
+#include "FolderGoalsScene.h"
+#include "../goals/FolderGoalPresentation.h"
+#include "../repositories/ChartStorageIdentity.h"
 #include "../goals/GoalTargetPresentation.h"
 #include "MusicSelectScene.h"
 #include "MusicSelectSkinErrorScene.h"
@@ -132,9 +135,10 @@
 #include <sstream>
 namespace {
 // Paint the selected row's bubble outside the recycler clip, beneath modals.
-class SelectedChartGoalOverlay final : public View {
+template<class Row>
+class SelectedGoalOverlay final : public View {
 public:
-  explicit SelectedChartGoalOverlay(std::function<ChartListItemView *()> selected)
+  explicit SelectedGoalOverlay(std::function<Row *()> selected)
       : selected_(std::move(selected)) {
     setPositionType(YGPositionTypeAbsolute);
     for (auto edge : {Edge::Left, Edge::Top, Edge::Right, Edge::Bottom}) setPosition(edge, 0);
@@ -145,7 +149,7 @@ protected:
     if (auto *row = selected_()) row->renderGoalBubble(context);
   }
 private:
-  std::function<ChartListItemView *()> selected_;
+  std::function<Row *()> selected_;
 };
 
 using modal_view::makeModalButton;
@@ -832,6 +836,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     state.folder = activeFolder;
     state.selected = selectedChartRecord;
     state.temporaryFolder = temporaryChartFolder;
+    state.temporaryFolderRecursive = temporaryChartFolderRecursive_;
     state.search = searchText;
     state.songScroll = recyclerView->scrollOffset;
     state.folderScroll = folderRecyclerView->scrollOffset;
@@ -873,6 +878,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     auto &state = selectorStates_[tab == Tab::Course ? 1 : 0];
     activeFolder = state.folder;
     temporaryChartFolder = state.temporaryFolder;
+    temporaryChartFolderRecursive_ = state.temporaryFolderRecursive;
     searchText = state.search;
     searchBox->setEditingText(searchText);
     if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint"))
@@ -932,6 +938,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
 void MainMenuScene::openKomboAssignment(const std::string &id) {
   selectTab(Tab::Play);
   temporaryChartFolder.reset();
+  temporaryChartFolderRecursive_ = false;
   searchText.clear();
   searchBox->setEditingText("");
   if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint")) hint->setVisible(true);
@@ -1330,6 +1337,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   overlayPortal = nullptr;
   revealButton = nullptr;
   temporaryChartFolder.reset();
+  temporaryChartFolderRecursive_ = false;
   jacketView = nullptr;
   chartDetailsView_ = nullptr;
   searchBox = nullptr;
@@ -1494,9 +1502,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
             long_note_mode::valueFromId(profileSelections.longNoteMode)));
     if (goalMode) {
       std::string error;
-      const auto goal = this->context.scoreRepository.LoadChartGoal(record.meta, *goalMode, error);
-      if (goal && !goal->progress.achieved) {
-        const auto labels = chart_goals::targetLabels(goal->goal.target);
+      const auto goals = this->context.scoreRepository.LoadChartGoalsForChart(record.meta, error);
+      if (goals && goals->size() > 1) {
+        view->setGoalTarget(-1, {}, i18n::format("goals.ui.count", {{"count", std::to_string(goals->size())}}));
+      } else if (goals && goals->size() == 1 && !goals->front().progress.achieved) {
+        const auto labels = chart_goals::targetLabels(goals->front().goal.target);
         view->setGoalTarget(labels.lampRank, labels.lamp, labels.score);
       } else if (!error.empty()) SDL_Log("Cannot load chart goal: %s", error.c_str());
     }
@@ -1527,13 +1537,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
     const auto goalMode = chartGoalIndex.modeFor(item.meta.SHA256,
         scoreLongNoteModeForClearLamp(item.meta,
             long_note_mode::valueFromId(profileSelections.longNoteMode)));
-    bool goalAchieved = false;
-    if (goalMode) {
-      const auto achieved = chartGoalIndex.achievedModes.find(chart_goals::normalizedHash(item.meta.SHA256));
-      goalAchieved = achieved != chartGoalIndex.achievedModes.end() &&
-          (achieved->second & (1u << *goalMode));
-    }
-    chartListItemView->setGoalState(goalMode.has_value(), goalAchieved);
+    const bool goalAchieved = chartGoalIndex.allAchieved(item.meta.SHA256);
+    chartListItemView->setGoalState(goalMode.has_value(), goalAchieved,
+        chartGoalRecommendations.contains(item.meta.SHA256));
     if (isSelected && !goalAchieved) updateSelectedGoalBubble(chartListItemView, item);
     chartListItemView->setGoalHandler([this](const ChartMetaRecord &record) {
       openChartGoal(record);
@@ -1664,7 +1670,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   static constexpr int kFolderListItemHeight = 50;
   folderRecyclerView->onCreateView = [](const LibraryFolderItem &item) {
     return new LibraryFolderItemView(0, 0, kLibraryControlWidth,
-                                     kFolderListItemHeight);
+                                     kFolderListItemHeight, true);
   };
   folderRecyclerView->itemHeight = kFolderListItemHeight;
   folderRecyclerView->onBind = [this](View *view, const LibraryFolderItem &item,
@@ -1701,6 +1707,26 @@ void MainMenuScene::initView(ApplicationContext &context) {
       default:
         break;
       }
+      const bool supportsGoal=!item.sectionHeader && (item.type==LibraryFolderItem::Type::DifficultyTable ||
+          item.type==LibraryFolderItem::Type::DifficultyLevel);
+      std::optional<folder_goals::Source> goalSource;
+      if (supportsGoal) {
+        for (const auto &table : folderMetadataCache.tables) if (table.id == item.tableId) {
+          goalSource = folder_goals::Source{
+              .kind=item.type==LibraryFolderItem::Type::DifficultyTable ? folder_goals::SourceKind::Table : folder_goals::SourceKind::Level,
+              .identity=table.sourceUrl,.level=item.tableLevel,.name=item.label};
+          break;
+        }
+      }
+      const auto goalStatus = goalSource ? folderGoalStatusIndex.status(*goalSource,
+          long_note_mode::valueFromId(this->context.settings.selectedLnMode)) : folder_goals::Status{};
+      folderView->setGoalState(goalStatus.present, goalStatus.achieved);
+      const auto goalLabels = folder_goals::bubbleLabels(goalStatus);
+      folderView->setGoalTarget(goalLabels.lampRank, goalLabels.lamp, goalLabels.score, goalLabels.coverage);
+      folderView->setGoalAction(goalSource ? std::function<void()>([this,source=*goalSource] {
+          const auto profile=this->context.profileManager.activeProfile().id;
+          defer([this,source,profile] { if (profile==this->context.profileManager.activeProfile().id) openFolderGoals(source); return true; },0,true);
+      }) : std::function<void()>{});
       if (item.sectionHeader) label = i18n::tr("menu.selector.difficulty_tables.label");
       folderView->setItem(label, item.depth, item.count, isSelected,
                           item.clearMarkFolder ? item.clearMarkRank
@@ -2086,6 +2112,18 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   });
   libraryActions->addView(addFolderButton);
+  TextView *folderGoalText=nullptr;
+  auto *folderGoalButton=makeSelectorButton(i18n::message("folder_goals.ui.title"),18,&folderGoalText,0xf024);
+  styleMenuButton(folderGoalButton,folderGoalText);
+  folderGoalButton->setOnClickListener([this] {
+    std::optional<folder_goals::Source> source;
+    if (temporaryChartFolder) source=folder_goals::Source{.kind=folder_goals::SourceKind::Directory,
+        .identity=chart_storage_identity::StoredFolderPathText(*temporaryChartFolder),.name=temporaryChartFolder->filename().string()};
+    const auto profile=this->context.profileManager.activeProfile().id;
+    defer([this,source,profile]{if(profile==this->context.profileManager.activeProfile().id) openFolderGoals(source); return true;},0,true);
+  });
+  libraryActions->addView(folderGoalButton);
+
 
   folderRecyclerView->setFlex(1);
   folderRecyclerView->clearBackgroundColor();
@@ -2582,9 +2620,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   buildFindBmsModal();
   buildUnzipProgressModal();
-  rootLayout->addView(new SelectedChartGoalOverlay([this]() -> ChartListItemView * {
+  rootLayout->addView(new SelectedGoalOverlay<ChartListItemView>([this]() -> ChartListItemView * {
     return activeTab_ == Tab::Play && !pendingTab_ && recyclerView && recyclerView->getVisible()
         ? dynamic_cast<ChartListItemView *>(recyclerView->getViewByIndex(recyclerView->selectedIndex)) : nullptr;
+  }));
+  rootLayout->addView(new SelectedGoalOverlay<LibraryFolderItemView>([this]() -> LibraryFolderItemView * {
+    return activeTab_ == Tab::Play && !pendingTab_ && folderRecyclerView && folderRecyclerView->getVisible()
+        ? dynamic_cast<LibraryFolderItemView *>(folderRecyclerView->getViewByIndex(folderRecyclerView->selectedIndex)) : nullptr;
   }));
   rootLayout->addView(overlayPortal);
   reloadProfileSelectionsFromSettings();
@@ -2899,10 +2941,22 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
     folderMetadataCache.valid = true;
   }
   std::string goalError;
+  if (!folderGoalStatusIndex.refresh(context.profileManager.activeProfile().id,
+          context.scoreRepository.GetRevision(), currentLibraryRevision,
+          [this, &goalError] { return context.scoreRepository.LoadFolderGoals(goalError); })) {
+    SDL_Log("Unable to load folder goal status: %s", goalError.c_str());
+  }
   const auto goals = context.scoreRepository.LoadChartGoalIndex(goalError);
   chartGoalIndex = goals.value_or(chart_goals::Index{});
   chartGoalHashes = chartGoalIndex.activeHashes();
   if (!goals) SDL_Log("Unable to load goal folders: %s", goalError.c_str());
+  try {
+    chartGoalRecommendations.refresh(context.profileManager.activeProfile().id,
+        context.scoreRepository.GetRevision(), currentLibraryRevision,
+        [this] { return chartSession->GoalRecommendationHashes(); });
+  } catch (const std::exception &failure) {
+    SDL_Log("Unable to load chart goal recommendations: %s", failure.what());
+  }
   assignmentDayId = kombo::today();
   assignmentDay = {};
   assignmentCharts.reset();
@@ -3308,9 +3362,13 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   const int selectedLongNoteMode =
       long_note_mode::valueFromId(profileSelections.longNoteMode);
   if (temporaryChartFolder.has_value()) {
-    return main_menu_library::chartQueryForSameFolder(
+    auto query = main_menu_library::chartQueryForSameFolder(
         *temporaryChartFolder, searchText, chartRecordFilters,
         selectedLongNoteMode);
+    if (temporaryChartFolderRecursive_) {
+      query.exactFolder.reset(); query.recursiveFolder = *temporaryChartFolder;
+    }
+    return query;
   }
 
   ChartMetaQuery query;
@@ -3339,6 +3397,7 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   case LibraryFolderItem::Type::DifficultyLevel:
     query.tableId = activeFolder.tableId;
     query.tableLevel = activeFolder.tableLevel;
+    query.exactTableLevel = true;
     break;
   case LibraryFolderItem::Type::DifficultyClearMark:
     query.tableId = activeFolder.tableId;
@@ -4613,6 +4672,7 @@ void MainMenuScene::refreshAssistOptionButtons() {
 
 void MainMenuScene::setPacemakerTargetSelection(const std::string &target) {
   profileSelections.pacemakerTarget = pacemaker::normalizeTargetId(target);
+  context.settings.selectedPacemakerGoalId = 0;
   profileSelections.applyTo(context.settings);
   context.settings.sanitize();
   if (!context.saveSettings()) {
@@ -4691,6 +4751,7 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .playbackLocked = playbackLocked,
        .clubMode = context.settings.gameplayClubModeEnabled,
        .pacemakerTarget = profileSelections.pacemakerTarget,
+       .pacemakerGoalLabel = goalPacemakerLabel(),
        .profileId = context.profileManager.activeProfile().id,
        .laneCovers = context.settings.presentation().laneCoverState()});
 }
@@ -4775,7 +4836,8 @@ void MainMenuScene::refreshReadySettingsSummary() {
   }
   if (readyPacemakerText != nullptr) {
     readyPacemakerText->setText(
-        pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
+        profileSelections.pacemakerTarget == pacemaker::kTargetGoal ? goalPacemakerLabel()
+            : pacemaker::displayTargetLabel(profileSelections.pacemakerTarget));
   }
 }
 
@@ -5326,6 +5388,16 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 }
 
 void MainMenuScene::resumeGoalNavigation() {
+  if (pendingFolderGoalSelection_) {
+    if (pendingFolderGoalProfile_!=context.profileManager.activeProfile().id) {
+      pendingFolderGoalSelection_.reset(); pendingFolderGoalProfile_.clear();
+    } else {
+      if (activeTab_!=Tab::Play) {selectTab(Tab::Play);return;}
+      if (pendingTab_) return;
+      auto goal=std::exchange(pendingFolderGoalSelection_,{});
+      applyFolderGoalSelection(goal->first,goal->second); pendingFolderGoalProfile_.clear();
+    }
+  }
   if (!pendingGoalSelection_) return;
   if (pendingGoalProfile_ != context.profileManager.activeProfile().id) {
     pendingGoalSelection_.reset(); pendingGoalProfile_.clear(); return;
@@ -5346,8 +5418,9 @@ void MainMenuScene::openChartGoal(const ChartMetaRecord &record) {
       scoreLongNoteModeForClearLamp(record.meta,
           long_note_mode::valueFromId(profileSelections.longNoteMode)));
   const auto profile = context.profileManager.activeProfile().id;
-  defer([this, record, mode, profile] {
-    if (profile == context.profileManager.activeProfile().id) openChartGoals(record, mode);
+  const bool recommendations = !mode && chartGoalRecommendations.contains(record.meta.SHA256);
+  defer([this, record, mode, profile, recommendations] {
+    if (profile == context.profileManager.activeProfile().id) openChartGoals(record, mode, recommendations);
     return true;
   }, 0, true);
 }
@@ -5359,8 +5432,40 @@ void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::
   context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
-        pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
-      }, mode, recommendations), true);
+        queueGoalSelection(record, mode, profile);
+      }, mode, recommendations, [this,profile](const folder_goals::Source &source,int mode) {
+        pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
+      }, std::shared_ptr<goal_navigation::State>{}, [this,profile] {
+        defer([this,profile] {
+          if (profile==context.profileManager.activeProfile().id) selectTab(Tab::Play);
+          return true;
+        },0,true);
+      }),true);
+}
+
+std::string MainMenuScene::goalPacemakerLabel() const {
+  const auto selected = selectedRecordSnapshot();
+  if (!selected || selected->courseStart) return "BEST";
+  return goalPacemakerCache_.label(context.scoreRepository, selected->meta,
+      long_note_mode::valueFromId(context.settings.selectedLnMode),
+      context.settings.selectedPacemakerGoalId, context.profileManager.activeProfile().id);
+}
+
+void MainMenuScene::queueGoalSelection(const ChartMetaRecord &record, int mode, const std::string &profile) {
+  if (profile != context.profileManager.activeProfile().id) return;
+  // Check before resume reloads the selector, which may restore folders asynchronously.
+  const auto selected = selectedRecordSnapshot();
+  if (activeTab_ == Tab::Play && selected && !record.meta.SHA256.empty() &&
+      selected->meta.SHA256 == record.meta.SHA256) {
+    // Resume refreshes mode-dependent scores and lamps while retaining the folder.
+    if (mode > 0 && context.settings.selectedLnMode != long_note_mode::idFromValue(mode)) {
+      context.settings.selectedLnMode = long_note_mode::idFromValue(mode);
+      (void)context.saveSettings();
+    }
+    return;
+  }
+  pendingGoalSelection_ = std::pair{record, mode};
+  pendingGoalProfile_ = profile;
 }
 
 void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
@@ -5376,6 +5481,7 @@ void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) 
   chartKeyModeDropdownOpen = chartClearMarkDropdownOpen = chartScoreRankDropdownOpen = false;
   chartDifficultyMinDropdownOpen = chartDifficultyMaxDropdownOpen = false;
   temporaryChartFolder = main_menu_library::sameFolderForChart(record);
+  temporaryChartFolderRecursive_ = false;
   activeFolder = {.key="all", .label=i18n::tr("menu.all_songs.label"), .type=LibraryFolderItem::Type::AllSongs};
   reloadFolderItems(); reloadChartList();
   selectChartByPathAfterReload(record.meta.BmsPath, AutoSelectionPreview::Load);
@@ -5479,6 +5585,7 @@ void MainMenuScene::showSelectedChartFolder() {
   }
 
   temporaryChartFolder = *folder;
+  temporaryChartFolderRecursive_ = false;
   searchText.clear();
   if (searchBox != nullptr) {
     searchBox->setEditingText("");
@@ -5522,6 +5629,7 @@ bool MainMenuScene::clearSameFolderScope() {
     return false;
   }
   temporaryChartFolder.reset();
+  temporaryChartFolderRecursive_ = false;
   return true;
 }
 
@@ -8838,6 +8946,7 @@ void MainMenuScene::cleanupScene() {
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
   temporaryChartFolder.reset();
+  temporaryChartFolderRecursive_ = false;
   rootLayout = nullptr;
   if (tabLoadingOverlay_ != nullptr) {
     overlayPortal->dismiss(tabLoadingOverlay_);
@@ -9125,4 +9234,47 @@ void MainMenuScene::FindNewBmsFiles(
     FindFilesIOS(currentDir, diffs, oldFilesWs, directoriesToVisit, stop_token);
 #endif
   }
+}
+
+void MainMenuScene::openFolderGoals(std::optional<folder_goals::Source> source) {
+  if (context.storageMaintenanceActive || willStart.load() || replayExportJob_.inProgress()) return;
+  const auto profile=this->context.profileManager.activeProfile().id;
+  context.sceneManager->changeScene(std::make_unique<FolderGoalsScene>(context,SceneReturnTarget::Retained(this),std::move(source),
+      [this,profile](const folder_goals::Source &source,int mode) {
+        pendingFolderGoalSelection_=std::pair{source,mode}; pendingFolderGoalProfile_=profile;
+      },[this,profile](const ChartMetaRecord &record,int mode) {
+        queueGoalSelection(record,mode,profile);
+      }, std::shared_ptr<goal_navigation::State>{}, [this,profile] {
+        defer([this,profile] {
+          if (profile==context.profileManager.activeProfile().id) selectTab(Tab::Play);
+          return true;
+        },0,true);
+      }),true);
+}
+void MainMenuScene::applyFolderGoalSelection(const folder_goals::Source &source,int mode) {
+  if (!chartSession) return;
+  std::optional<LibraryFolderItem> tableFolder;
+  if (source.kind!=folder_goals::SourceKind::Directory) {
+    for (const auto &table:chartSession->SelectDifficultyTables()) if (table.sourceUrl==source.identity) {
+      const bool level=source.kind==folder_goals::SourceKind::Level;
+      tableFolder=LibraryFolderItem{.key=level ? folderKeyForLevel(table.id,source.level) : folderKeyForTable(table.id),
+          .label=source.name,.type=level ? LibraryFolderItem::Type::DifficultyLevel : LibraryFolderItem::Type::DifficultyTable,
+          .tableId=table.id,.tableLevel=source.level};
+      break;
+    }
+    if (!tableFolder) return;
+  }
+  context.settings.selectedLnMode=long_note_mode::idFromValue(mode); (void)context.saveSettings(); reloadProfileSelectionsFromSettings();
+  searchText.clear(); if (searchBox) searchBox->setEditingText(""); chartRecordFilters={};
+  chartBpmMinText.clear(); chartBpmMaxText.clear(); chartDifficultyRangeTableId.reset();
+  temporaryChartFolder.reset(); temporaryChartFolderRecursive_=false;
+  if (source.kind==folder_goals::SourceKind::Directory) {
+    auto path=std::filesystem::path(utf8_to_path_t(source.identity)); chart_storage_identity::ToAbsolutePath(path);
+    temporaryChartFolder=path; temporaryChartFolderRecursive_=true;
+    activeFolder={.key="all",.label=i18n::tr("menu.all_songs.label"),.type=LibraryFolderItem::Type::AllSongs};
+  } else {
+    activeFolder=*tableFolder;
+    expandedLibraryFolders.insert(folderKeyForTable(activeFolder.tableId));
+  }
+  reloadFolderItems(); reloadChartList();
 }

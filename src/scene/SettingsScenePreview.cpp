@@ -32,9 +32,12 @@ namespace {
 PlayfieldPresentationConfig
 previewPresentationConfiguration(const AppSettings &settings,
                                  const bms_parser::Chart &chart, int keyMode,
-                                 built_in_notes::SharedModeStyles &noteStyles) {
+                                 built_in_notes::SharedModeStyles &noteStyles,
+                                 judgement_indicator::SharedColorization &indicatorColors) {
   noteStyles = built_in_notes::snapshotModeStyles(
       settings.builtInNotesForKeyMode(keyMode), noteStyles);
+  indicatorColors = judgement_indicator::snapshotColorization(
+      settings.presentation().judgementIndicatorColorization, indicatorColors);
   const gameplay_hispeed::State hispeed(
       {.mode = gameplay_hispeed::fixModeFromEncoded(
            static_cast<int>(settings.hispeedFixMode)),
@@ -75,7 +78,7 @@ previewPresentationConfiguration(const AppSettings &settings,
       .judgementIndicatorLineThicknessPercent = settings.presentation().judgementIndicatorLineThicknessPercent,
       .judgementIndicatorEventHeightPercent = settings.presentation().judgementIndicatorEventHeightPercent,
       .judgementIndicatorEventThicknessPercent = settings.presentation().judgementIndicatorEventThicknessPercent,
-      .judgementIndicatorColorization = settings.presentation().judgementIndicatorColorization,
+      .judgementIndicatorColorization = indicatorColors,
       .judgementIndicatorHudMode =
           settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
@@ -285,7 +288,7 @@ void SettingsScene::syncPreviewPresentationConfiguration() {
     return;
   }
   auto configuration =
-      previewPresentationConfiguration(context.settings, *previewChart, previewKeyMode, previewNoteStyles);
+      previewPresentationConfiguration(context.settings, *previewChart, previewKeyMode, previewNoteStyles, previewIndicatorColors);
   if (calibrationActive && calibrationLogicalJudgementLine)
     configuration.logicalJudgementScrollDelta = calibrationLogicalJudgementScrollDelta(
         calibrationVisualOffsetMs, context.settings.notesDisplayTimingMilliseconds,

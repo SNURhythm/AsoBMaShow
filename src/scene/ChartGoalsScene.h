@@ -2,6 +2,8 @@
 #include "Scene.h"
 #include "SceneReturnTarget.h"
 #include "../goals/ChartGoal.h"
+#include "FolderGoalsScene.h"
+#include "../goals/GoalNavigation.h"
 
 class ScrollView;
 class OverlayPortal;
@@ -10,7 +12,8 @@ public:
   using SelectChart = std::function<void(const ChartMetaRecord &, int)>;
   ChartGoalsScene(ApplicationContext &, SceneReturnTarget,
                   std::optional<ChartMetaRecord> initial = {}, SelectChart = {},
-                  std::optional<int> initialMode = {}, bool initialRecommendations = false);
+                  std::optional<int> initialMode = {}, bool initialRecommendations = false, FolderGoalsScene::SelectFolder = {},
+                  std::shared_ptr<goal_navigation::State> = {}, std::function<void()> onBrowse = {});
   void init() override;
   void onPause() override;
   void onResume() override;
@@ -26,6 +29,7 @@ private:
   bool checkProfile();
   void later(std::function<void()>);
   void reload();
+  void switchGoalKind();
   void loadRecommendations(int rank, int offset);
   void recommendGoal(const ChartMetaRecord &, int mode, int rank);
   void changeDraftMode(int mode);
@@ -38,7 +42,8 @@ private:
   std::vector<DifficultyTableInfo> recommendationTables_;
   int recommendationTable_ = 0;
   bool recommendationSortTable_ = false;
-  enum class OverviewTab { Ongoing, Recommendations, Achieved };
+  std::shared_ptr<goal_navigation::State> navigationState_;
+  using OverviewTab = goal_navigation::ChartTab;
   OverviewTab overviewTab_ = OverviewTab::Ongoing;
   std::optional<int> recommendationRank_;
   ScrollView *navigationScroll_ = nullptr;
@@ -46,6 +51,7 @@ private:
   std::map<std::string, float> scrollOffsets_;
   std::string renderedScrollKey_;
   std::string scrollKey() const;
+  void showChartGoals(const ChartMetaRecord &, int mode);
   void showGoal(chart_goals::Goal);
   void saveGoal();
   void removeGoal();
@@ -54,18 +60,26 @@ private:
   void build();
   void layout();
   void back();
+  void allGoals();
+  void browseCharts();
+  void rememberNavigation();
   SceneReturnTarget returnTarget_;
+  std::function<void()> onBrowse_;
   SelectChart onSelectChart_;
-  std::optional<ChartMetaRecord> initial_, resolved_;
+  FolderGoalsScene::SelectFolder onSelectFolder_;
+  std::optional<ChartMetaRecord> initial_, resolved_, recommendationChart_, pickerChart_;
   std::optional<int> initialMode_;
   bool initialRecommendations_ = false;
+  bool sourcePicker_ = false;
+  std::optional<chart_goals::Goal> editorReturnGoal_;
   std::string profileId_, message_, customRate_;
   chart_goals::ProgressPage page_;
   std::optional<chart_goals::GoalProgress> selected_;
   chart_goals::Goal draft_;
   bool editing_ = false, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
-  int offset_ = 0, achievedOffset_ = 0;
+  int offset_ = 0, achievedOffset_ = 0, pickerOffset_ = 0;
   View *root_ = nullptr;
+  View *content_ = nullptr;
   ScrollView *scroll_ = nullptr;
   OverlayPortal *portal_ = nullptr;
 };

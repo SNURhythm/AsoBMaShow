@@ -3287,6 +3287,7 @@ struct SettingsScene {
   RhythmInputHandler *previewInputHandler = nullptr;
   PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
   built_in_notes::SharedModeStyles previewNoteStyles;
+  judgement_indicator::SharedColorization previewIndicatorColors;
   std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
   std::function<void(std::uint32_t)> appearanceColorApply;
   std::unique_ptr<ColorPickerPopup> appearanceColorPopup;
@@ -3780,8 +3781,9 @@ void verifyPreviewLaneCoverHandleDrag(const RenderTarget &target) {
     scene.context.settings.presentation().laneCoverEnabled = true;
     scene.context.settings.presentation().noteStartPositionPercent = 30;
     built_in_notes::SharedModeStyles styles;
+    judgement_indicator::SharedColorization colors;
     scene.previewRenderer->configure(previewPresentationConfiguration(
-        scene.context.settings, *chart, 7, styles));
+        scene.context.settings, *chart, 7, styles, colors));
     Recorder recorder;
     scene.previewRenderer->setCharacterizationRecorder(&recorder);
     RenderContext context;
@@ -3849,7 +3851,8 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
     auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
     AppSettings settings;
     built_in_notes::SharedModeStyles styles;
-    auto config = previewPresentationConfiguration(settings, *chart, mode, styles);
+    judgement_indicator::SharedColorization colors;
+    auto config = previewPresentationConfiguration(settings, *chart, mode, styles, colors);
     renderer->configure(config);
     PreviewRecordingControl control;
     RhythmInputHandler handler(&control, chart->Meta, registry, profile,

@@ -1,3 +1,4 @@
+#include "goals/GoalPacemaker.h"
 #include "view/AppTheme.h"
 #include "ScratchlessGameplayPolicy.h"
 #include "GameplayKeyMode.h"
@@ -3264,10 +3265,14 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   const auto bestScoreAuthority =
       result_presentation::gameplayBestScoreAuthorityForReplay(
           chart, replay, previousBest, bestScoreReplay.get());
+  std::string goalError;
+  const auto goalTarget = pacemaker::normalizeTargetId(selectedPacemakerTarget) == pacemaker::kTargetGoal
+      ? chart_goals::loadPacemakerTarget(context.scoreRepository, chart.Meta, replay.chartMeta.LnMode,
+          settings.selectedPacemakerGoalId, goalError) : std::nullopt;
   const pacemaker::Target activePacemakerTarget =
       result_presentation::pacemakerTargetForReplay(
           chart, replay, selectedPacemakerTarget, previousBest,
-          bestScoreReplay.get());
+          bestScoreReplay.get(), goalTarget ? &*goalTarget : nullptr);
   RhythmState pacemakerState(
       &chart, false, gameplayRulesetFromId(replay.provenance.ruleset.id)
                          .value_or(GameplayRuleset::Beatoraja));
@@ -3322,7 +3327,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultSkinData.pacemaker =
         result_presentation::pacemakerDataForReplayResult(
             chart, replayResultState, replay, selectedPacemakerTarget,
-            previousBest, bestScoreReplay.get());
+            previousBest, bestScoreReplay.get(), goalTarget ? &*goalTarget : nullptr);
     resultSkinData.chartHasDocument = chartMetadataAuthority.chartHasDocument;
     resultSkinData.stageFileAvailable = chartMetadataAuthority.stageFileAvailable;
     resultSkinData.backBmpAvailable = chartMetadataAuthority.backBmpAvailable;
@@ -3644,6 +3649,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .pacemakerTarget = activePacemakerTarget,
         .pacemakerStatus =
             pacemaker::snapshotForState(activePacemakerTarget, pacemakerState),
+        .goalPacemakerSelected = pacemaker::normalizeTargetId(selectedPacemakerTarget) == pacemaker::kTargetGoal,
         .player1RandomOption = replay::projectedBeatorajaReplayOptionIndex(
                                    replay.playOption.value_or("NORMAL"))
                                    .value_or(0),
@@ -4387,10 +4393,14 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         resolvedOptions.pacemakerTarget.empty()
             ? settings.selectedPacemakerTarget
             : resolvedOptions.pacemakerTarget;
+    std::string goalError;
+    const auto goalTarget = pacemaker::normalizeTargetId(selectedPacemakerTarget) == pacemaker::kTargetGoal
+        ? chart_goals::loadPacemakerTarget(context.scoreRepository, chart.Meta, stageReplay.chartMeta.LnMode,
+            settings.selectedPacemakerGoalId, goalError) : std::nullopt;
     const pacemaker::Target activePacemakerTarget =
         result_presentation::pacemakerTargetForReplay(
             chart, stageReplay, selectedPacemakerTarget, previousBest,
-            bestScoreReplay.get());
+            bestScoreReplay.get(), goalTarget ? &*goalTarget : nullptr);
     RhythmState pacemakerState(
         &chart, false, gameplayRulesetFromId(stageReplay.provenance.ruleset.id)
                            .value_or(GameplayRuleset::Beatoraja));
@@ -4547,6 +4557,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .pacemakerStatus =
               pacemaker::snapshotForState(activePacemakerTarget,
                                           pacemakerState),
+          .goalPacemakerSelected = pacemaker::normalizeTargetId(selectedPacemakerTarget) == pacemaker::kTargetGoal,
           .player1RandomOption = replay::projectedBeatorajaReplayOptionIndex(
                                      stageReplay.playOption.value_or("NORMAL"))
                                      .value_or(0),

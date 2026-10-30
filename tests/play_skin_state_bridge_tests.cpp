@@ -2827,10 +2827,39 @@ void testTargetScoreStringsFollowPinnedTargetSource() {
          "unavailable IR target never borrows the unrelated built-in pacemaker");
   bridge.discardFrame();
 
-  state = stateAt(239);
+  state = stateAt(240);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Play;
+  state.authority.skinTargetId = "IR_NEXT_1";
+  state.authority.goalPacemakerSelected = true;
+  state.authority.pacemakerTarget = {.enabled = true, .label = "GOAL", .finalScore = 1778};
+  state.authority.pacemakerStatus.targetScore = 889;
+  state.score = 900;
+  bridge.beginFrame(state, projectionAt(240));
+  expect(bridge.stringProperty({"target"}).value == "GOAL" &&
+             bridge.integerProperty({151}).value == 1778 &&
+             bridge.integerProperty({153}).value == 11,
+         "GOAL owns the skin target name, score and running difference despite a saved IR target");
+  bridge.discardFrame();
+  state.authority.pacemakerTarget.label = "BEST";
+  state.authority.pacemakerTarget.finalScore = 1500;
+  state.clock.serial = 241;
+  bridge.beginFrame(state, projectionAt(241));
+  expect(bridge.stringProperty({"target"}).value == "BEST" &&
+             bridge.integerProperty({151}).value == 1500,
+         "a lamp-only GOAL's BEST fallback also takes precedence over the saved IR target");
+  bridge.discardFrame();
+  state.authority.skinTargetId = "MAX";
+  state.authority.pacemakerTarget.label = "GOAL";
+  state.clock.serial = 242;
+  bridge.beginFrame(state, projectionAt(242));
+  expect(bridge.stringProperty({"target"}).value == "GOAL",
+         "a static skin target cannot mislabel the GOAL pacemaker");
+  bridge.discardFrame();
+
+  state = stateAt(243);
   state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
   state.authority.skinTargetId = "MAX";
-  bridge.beginFrame(state, projectionAt(239));
+  bridge.beginFrame(state, projectionAt(243));
   expect(bridge.stringProperty({1}).value.empty() &&
              bridge.stringProperty({3}).value.empty(),
          "practice keeps BMSPlayer's absent target-score strings empty");

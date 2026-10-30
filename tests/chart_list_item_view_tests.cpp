@@ -2,6 +2,7 @@
 #include "view/ChartListItemView.h"
 #include "view/GoalTargetBubble.h"
 #include "view/GoalLampTabAccent.h"
+#include "view/GoalProgressBar.h"
 #include "view/Button.h"
 #include "view/LibraryFolderItemView.h"
 #include "view/ImageView.h"
@@ -41,7 +42,8 @@ void require(bool condition, const char *message) {
   }
 }
 
-bool sameColor(const Color &actual, const Color &expected) {
+template<class T>
+bool sameColor(const T &actual, const Color &expected) {
   return actual.r == expected.r && actual.g == expected.g &&
          actual.b == expected.b && actual.a == expected.a;
 }
@@ -75,6 +77,26 @@ void testGoalLampAccentDrawsAfterParentLayoutAndScroll() {
     require(clip && clip->x == accent->getX() && clip->y == accent->getY() &&
                 clip->width == 7 && clip->height == 52,
             "lamp clip follows the tab's current position and height");
+  }
+}
+
+void testFolderGoalProgressGeometry() {
+  for (int width : {220, 720}) for (double current : {0.0, 37.5, 100.0}) {
+    View root(20, 30, width, 100);
+    auto *bar = new GoalProgressBar(current, 100, 200, current == 100);
+    bar->setWidthPercent(100);
+    root.addView(bar); root.applyYogaLayout();
+    const auto &children = bar->getChildren();
+    require(children.size() == 2, "progress has a track and a distinct target marker");
+    auto *track = children[0], *marker = children[1];
+    const auto *fill = track->getChildren().front();
+    require(track->getWidth() == width && track->getHeight() > 0,
+            "progress track stays visible at zero on compact and desktop layouts");
+    require(std::abs(fill->getWidth() - width * current / 100) <= 1,
+            "progress fill displays the actual metric instead of target-relative completion");
+    require(marker->getX() >= track->getX() && marker->getX() + marker->getWidth() <= track->getX() + track->getWidth(),
+            "100 percent target marker remains inside the visible track");
+    require(marker->getHeight() > track->getHeight(), "the target remains distinguishable from the fill");
   }
 }
 
@@ -117,6 +139,61 @@ void testFolderBindingOnlyMaterializesVisibleLabel() {
     require(displayedLabels == 1, "recycling root, leaf and section rows binds exactly one current label");
   }
 }
+
+void testFolderGoalFlagStates() {
+  LibraryFolderItemView row(0, 0, 350, 50);
+  row.setGoalAction([] {});
+  auto *button = dynamic_cast<Button *>(row.findViewByName("folderGoalButton"));
+  auto *flag = dynamic_cast<TextView *>(button->getContentView()->findViewByName("folderGoalFlag"));
+  auto *outline = dynamic_cast<TextView *>(button->getContentView()->findViewByName("folderGoalOutline"));
+  require(flag && outline, "folder goals have filled and outline flags");
+  auto *bubble = row.findViewByName("chartGoalBubble");
+  auto *lamp = dynamic_cast<TextView *>(row.findViewByName("chartGoalBubbleLamp"));
+  auto *score = dynamic_cast<TextView *>(row.findViewByName("chartGoalBubbleScore"));
+  for (auto theme : {ui_theme::ThemeMode::Dark, ui_theme::ThemeMode::Light}) {
+    ui_theme::setActiveMode(theme);
+    row.propagateThemeChange();
+    for (bool selected : {false, true}) {
+      row.setItem("Goal folder", 1, 4, selected, kNoClearTypeRank, false, false, false);
+      row.setGoalState(true);
+      row.setGoalTarget(400, "HARD 60%/80%", "Avg EX 72.5%/85%");
+      require(bubble->getVisible() == selected && lamp->getText() == "HARD 60%/80%" &&
+                  score->getText() == "Avg EX 72.5%/85%", "selected unfinished folder goals show current and target percentages");
+      require(button->isSelected() && flag->getVisible() && !outline->getVisible() &&
+                  sameColor(flag->currentColor(), selected ? main_menu_theme::selectedAccent() : main_menu_theme::accent()),
+              "active folder flags follow chart goal colors in both themes and selection states");
+      row.setGoalState(true, true);
+      require(!bubble->getVisible(), "achieved folder goals hide their progress bubble");
+      require(sameColor(flag->currentColor(), app_theme::lime()), "achieved folder flags use chart goal lime");
+      row.setGoalState(false);
+      require(!bubble->getVisible(), "removing a folder goal hides its progress bubble");
+      require(!button->isSelected() && !flag->getVisible() && outline->getVisible() &&
+                  sameColor(outline->currentColor(), selected ? main_menu_theme::onSelected() : main_menu_theme::secondary()),
+              "removing a folder goal restores the neutral outline on a recycled row");
+    }
+    row.setGoalState(true);
+    row.onUnselected();
+    require(!bubble->getVisible(), "unselecting hides the folder progress bubble");
+    require(sameColor(flag->currentColor(), main_menu_theme::accent()), "unselecting refreshes the folder flag color");
+    row.onSelected();
+    require(bubble->getVisible(), "selecting restores the folder progress bubble");
+    require(sameColor(flag->currentColor(), main_menu_theme::selectedAccent()), "selecting refreshes the folder flag color");
+    row.setGoalTarget(50, "LIGHT ASSIST EASY 99.99%/100.00%", "Avg EX 72.50%/85.00%");
+    row.applyYogaLayout();
+    require(bubble->getWidth() > 150 && bubble->getWidth() <= 280,
+            "folder progress bubbles widen for long lamp names and precise percentages");
+    row.setGoalTarget(400, "HARD 60%/80%", "Avg EX 72%/85%", "AAA coverage 50%/80%");
+    row.applyYogaLayout();
+    auto *coverage = bubble->findViewByName("chartGoalBubbleCoverage");
+    require(coverage && coverage->getVisible() && bubble->getHeight()==67,
+            "three independent folder target types each have a visible row");
+    require(coverage->getY()+coverage->getHeight()<=bubble->getY()+bubble->getHeight(),
+            "third row fits inside the expanded bubble");
+    row.setGoalTarget(400, "HARD 60%/80%", "Avg EX 72%/85%");
+    row.applyYogaLayout();
+    require(!coverage->getVisible() && bubble->getHeight()==48, "removing coverage restores two-row geometry");
+  }
+}
 } // namespace
 
 int main() {
@@ -126,9 +203,11 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart list row");
 
+  for (int bubbleHeight : {48, 67})
+  for (int bubbleWidth : {150, 280})
   for (const auto [x, y] : {std::pair{0, 0}, std::pair{310, 0}, std::pair{0, 190}, std::pair{310, 190}}) {
     const auto p = placeGoalBubble(x, y, 36, 48, 320, 200,
-                                   {.top=12, .right=14, .bottom=10, .left=16});
+                                   {.top=12, .right=14, .bottom=10, .left=16}, bubbleWidth, bubbleHeight);
     require(p.x >= 20 && p.y >= 16 && p.x + p.width <= 302 && p.y + p.height <= 186,
             "goal bubble stays inside every safe-area edge");
   }
@@ -136,7 +215,9 @@ int main() {
   require(aboveFlag.x + aboveFlag.width / 2 == 180 && aboveFlag.y + aboveFlag.height == 96,
           "goal bubble is centered above the flag with a four-pixel gap");
   testFolderBindingOnlyMaterializesVisibleLabel();
+  testFolderGoalFlagStates();
   testGoalLampAccentDrawsAfterParentLayoutAndScroll();
+  testFolderGoalProgressGeometry();
 
   {
     ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
@@ -302,6 +383,23 @@ int main() {
     const int wideDifficultyWidth = difficulty->getWidth();
     auto *goal = row.findViewByName("chartListGoal");
     require(goal && goal->getVisible(), "playable rows retain their goal action");
+    auto *recommendationBadge = dynamic_cast<Button *>(goal)->getContentView()->findViewByName("goalRecommendationBadge");
+    require(recommendationBadge && !recommendationBadge->getVisible(),
+            "a chart flag has a hidden recommendation badge until recommendations are available");
+    row.setGoalState(false, false, true);
+    row.applyYogaLayout();
+    require(recommendationBadge->getVisible() && recommendationBadge->getWidth() == 8 &&
+                recommendationBadge->getHeight() == 8 &&
+                recommendationBadge->getX() >= goal->getX() &&
+                recommendationBadge->getX() + 8 <= goal->getX() + goal->getWidth(),
+            "recommended charts show a small notification dot inside the flag button");
+    row.setGoalState(true, false, true);
+    require(!recommendationBadge->getVisible(), "a configured goal suppresses the recommendation badge");
+    row.setGoalState(true, true, true);
+    require(!recommendationBadge->getVisible(), "an achieved configured goal suppresses the recommendation badge");
+    row.setGoalState(false, false, true);
+    row.setMeta(record);
+    require(!recommendationBadge->getVisible(), "recycled rows discard the previous chart's recommendation badge");
     std::string openedPath;
     row.setGoalHandler([&](const ChartMetaRecord &clicked) { openedPath = clicked.meta.BmsPath; });
     row.setGoalState(true);

@@ -451,7 +451,6 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
   const std::string bestTable = detail::bestScoreSummaryTable(schema);
   const std::string trigger =
       detail::qualifiedName(schema, "score_sha256_summary_after_insert");
-  const std::string scores = detail::qualifiedName(schema, "scores");
   const bool sourceAware = detail::scoreTableHasSource(db, schema);
 
   const std::string createClearTable =
@@ -542,8 +541,11 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
     return error;
   }
 
+  // Qualify the trigger's schema, but keep its table name relative to that
+  // schema. Persisting "ON score_db.scores" breaks ALTER TABLE on another
+  // connection where the same database is opened as main (e.g. goal migration).
   const std::string createTrigger =
-      "CREATE TRIGGER " + trigger + " AFTER INSERT ON " + scores + " BEGIN " +
+      "CREATE TRIGGER " + trigger + " AFTER INSERT ON scores BEGIN " +
       detail::clearRankUpsertSql(sourceAware) +
       detail::bestScoreUpsertSql(sourceAware) + " END";
   if (const auto error = executeSqlite(db, createTrigger.c_str())) {
