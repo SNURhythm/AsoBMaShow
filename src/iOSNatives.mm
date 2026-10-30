@@ -2,6 +2,7 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
+#include "BuildIdentity.h"
 #include "bms_search/DownloadRetryWait.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/IOSMusicStream.h"
@@ -5885,6 +5886,95 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
 
     preferredWidth = bestWidth;
     preferredHeight = bestHeight;
+    return true;
+  }
+}
+
+namespace {
+// No layer contents, labels, identifiers, or addresses: only presentation
+// metadata. Bounded even if a native sheet has a large private layer tree.
+void AppendMetalDiagnosticLayer(NSMutableString *report, CALayer *layer,
+                               unsigned depth, unsigned &remaining) {
+  if (remaining == 0 || depth > 16) return;
+  --remaining;
+  const CATransform3D t = layer.transform;
+  [report appendFormat:
+      @"depth=%u class=%@ bounds=%@ position=%@ anchor=%@ scale=%.4f "
+       "opaque=%d opacity=%.3f hidden=%d masksToBounds=%d mask=%d corner=%.3f "
+       "animations=%lu\n"
+       " transform=[%.4f %.4f %.4f %.4f; %.4f %.4f %.4f %.4f; "
+       "%.4f %.4f %.4f %.4f; %.4f %.4f %.4f %.4f]\n",
+      depth, NSStringFromClass(layer.class), NSStringFromCGRect(layer.bounds),
+      NSStringFromCGPoint(layer.position), NSStringFromCGPoint(layer.anchorPoint),
+      layer.contentsScale, layer.opaque, layer.opacity, layer.hidden,
+      layer.masksToBounds, layer.mask != nil, layer.cornerRadius,
+      (unsigned long)layer.animationKeys.count,
+      t.m11, t.m12, t.m13, t.m14, t.m21, t.m22, t.m23, t.m24,
+      t.m31, t.m32, t.m33, t.m34, t.m41, t.m42, t.m43, t.m44];
+  [report appendFormat:
+      @" contentsRect=%@ gravity=%@ sublayerTransformIdentity=%d "
+       "geometryFlipped=%d rasterize=%d rasterizationScale=%.4f\n",
+      NSStringFromCGRect(layer.contentsRect), layer.contentsGravity,
+      CATransform3DIsIdentity(layer.sublayerTransform), layer.geometryFlipped,
+      layer.shouldRasterize, layer.rasterizationScale];
+  if ([layer isKindOfClass:CAMetalLayer.class]) {
+    CAMetalLayer *metal = (CAMetalLayer *)layer;
+    [report appendFormat:
+        @" METAL drawable=%@ pixelFormat=%lu framebufferOnly=%d "
+         "presentsWithTransaction=%d drawableCount=%lu timeout=%d colorspace=%@\n",
+        NSStringFromCGSize(metal.drawableSize), (unsigned long)metal.pixelFormat,
+        metal.framebufferOnly, metal.presentsWithTransaction,
+        (unsigned long)metal.maximumDrawableCount, metal.allowsNextDrawableTimeout,
+        metal.colorspace ? (__bridge NSString *)CGColorSpaceGetName(metal.colorspace)
+                         : @"nil"];
+  }
+  if (depth == 16) {
+    if (layer.sublayers.count != 0) [report appendString:@"[depth limit]\n"];
+    return;
+  }
+  for (CALayer *child in layer.sublayers) {
+    if (remaining == 0) break;
+    AppendMetalDiagnosticLayer(report, child, depth + 1, remaining);
+  }
+}
+} // namespace
+
+bool CopyIOSMetalPresentationDiagnostics() {
+  if (!platform::isMainThread())
+    return platform::onMain([] { return CopyIOSMetalPresentationDiagnostics(); });
+  @autoreleasepool {
+    UIWindow *active = FindActiveWindow();
+    if (active == nil) return false;
+    UIScreen *screen = active.screen;
+    const auto build = skin::compiledSkinBuildIdentity();
+    NSMutableString *report = [NSMutableString stringWithFormat:
+        @"AsoBMaShow Metal presentation snapshot v1\ncommit=%s configuration=%s\n"
+         "iOS=%@ orientation=%ld\n"
+         "screen=%@ nativeBounds=%@ scale=%.4f nativeScale=%.4f mode=%@\n"
+         "HUD Direct/Composited: record manually; not queried by this report.\n"
+         "App layers only; system compositor overlays are not visible here.\n",
+        build.commit.c_str(), build.configuration.c_str(),
+        UIDevice.currentDevice.systemVersion, (long)active.windowScene.interfaceOrientation,
+        NSStringFromCGRect(screen.bounds), NSStringFromCGRect(screen.nativeBounds),
+        screen.scale, screen.nativeScale, NSStringFromCGSize(screen.currentMode.size)];
+    unsigned remaining = 128;
+    unsigned windowCount = 0;
+    for (UIWindow *window in active.windowScene.windows ?: @[active]) {
+      if (windowCount++ == 8 || remaining == 0) break;
+      UIViewController *controller = window.rootViewController;
+      [report appendFormat:
+          @"WINDOW key=%d hidden=%d alpha=%.3f level=%.3f bounds=%@ safeInsets=%@ "
+           "statusBarHidden=%d prefersHomeIndicatorHidden=%d\n",
+          window.isKeyWindow, window.hidden, window.alpha, window.windowLevel,
+          NSStringFromCGRect(window.bounds), NSStringFromUIEdgeInsets(window.safeAreaInsets),
+          window.windowScene.statusBarManager.statusBarHidden,
+          controller.prefersHomeIndicatorAutoHidden];
+      AppendMetalDiagnosticLayer(report, window.layer, 0, remaining);
+    }
+    [report appendString:@"End (limits: 8 windows, 128 layers, depth 16).\n"];
+    // Capture before touching the clipboard; no native alert, layout forcing,
+    // drawable acquisition, or recurring work perturbs the measured layer tree.
+    UIPasteboard.generalPasteboard.string = report;
     return true;
   }
 }

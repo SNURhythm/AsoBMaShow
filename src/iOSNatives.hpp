@@ -17,6 +17,9 @@ void ShowIOSReplayExportProgress(std::function<void()> cancel);
 void SetIOSReplayExportProgress(double fraction, const std::string &message);
 void HideIOSReplayExportProgress();
 
+// Diagnostic branch only: on-demand, metadata-only snapshot to the clipboard.
+bool CopyIOSMetalPresentationDiagnostics();
+
 // UIKit main thread only. Recovery has no user cancellation path.
 void ShowIOSStorageRecoveryProgress();
 void SetIOSStorageRecoveryProgress(const std::string &message);

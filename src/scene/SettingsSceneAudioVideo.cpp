@@ -640,6 +640,20 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
       makeWrappedText("", metrics.bodyTextSize, app_theme::textSecondary());
   controls->addView(displayStatusText);
 
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  auto *copyMetalDiagnostics = makeControlButton(
+      kFitContentWidth, metrics.actionButtonHeight,
+      makeText("Copy Metal diagnostics", metrics.bodyTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  copyMetalDiagnostics->setOnClickListener([this]() {
+    const bool copied = CopyIOSMetalPresentationDiagnostics();
+    setDisplayStatus(copied ? "Metal diagnostics copied. Paste with the HUD mode."
+                            : "No active iOS window; diagnostics not copied.",
+                     app_theme::sdl(copied ? app_theme::lime() : app_theme::coral()));
+  });
+  controls->addView(copyMetalDiagnostics);
+#endif
+
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.display.display.label"), i18n::message("settings.display.changes_preview_15_seconds.message"),
       controls, metrics.modeCardHeight, metrics.cardsWidth));
