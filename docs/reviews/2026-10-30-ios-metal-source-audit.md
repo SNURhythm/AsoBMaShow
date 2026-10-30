@@ -313,6 +313,100 @@ before attaching the link: the macOS backend also rewrites maximumDrawableCount
 on resize, which QuartzCore forbids while a link is attached. That macOS-only
 setter is not on the iOS resize path and is not an explanation of this iPad issue.
 
+## Second source pass: lifecycle, queue ordering and drawable storage
+
+This pass audits application `4bf2c04b` with the same pinned SDL/bgfx revisions
+listed above, including the generated-source patches. It adds a real-callback
+storage experiment. It does not introduce another rendering workaround.
+
+### Link recreation does not recreate the Metal surface
+
+The manual action in `src/video/MetalDisplayLink.mm:205` eventually calls
+`invalidate` at line 69 and constructs another link against the **same** incoming
+layer at line 146. Clearing `state.layer` releases that owner's reference; it
+does not destroy the UIView's backing layer. `src/main.cpp:685` keeps the native
+layer used for subsequent frames. bgfx retains that layer in
+`SwapChainMtl::init`; it does not replace it on an ordinary reset.
+
+Apple's installed iOS 27.1 `CAMetalLayer.h` explicitly assigns the texture pool
+to the layer. The `CAMetalDisplayLink.invalidate` contract removes the link's
+run-loop associations; it does not promise replacement of layer-owned storage.
+
+The new [storage experiment](evidence/metal-pool/README.md) tests this with actual
+Simulator callbacks through the production link/provider. Forty frames before
+and forty after the manual recreation used exactly the same three IOSurfaces,
+while the link serial increased from 1 to 2. Swapping drawable dimensions and
+then restoring them produced different surface sets. All 160 frames completed,
+without begin-frame retries or drawable rejection in the retained final run.
+Retained IOSurface references prevent ID recycling from faking identity;
+textures and drawables are not retained by the collector across frames.
+
+**Implication:** the failed manual recreation experiment only tested replacement
+of the scheduler attachment, not replacement of the Metal surface or its pool.
+Identical CALayer property snapshots also do not show IOSurface allocation or
+system presentation state. Layer-owned state remains an untested boundary on
+the physical iPad. However, this experiment **does not establish stale storage
+as the cause**: resizing replaced buffers locally, and no physical-device pool
+trace establishes what backgrounding changed. Do not promote this finding into
+an automatic layer-recreation, size-toggle or device-reset workaround.
+
+### SDL has no ordinary foreground swap-chain rebuild
+
+The pinned scene callbacks in `SDL_uikitappdelegate.m:518–549` forward lifecycle
+events. `SDL/src/video/SDL_video.c:6223–6256` sends minimized/restored and app
+events and changes keyboard focus. These functions do not construct another
+Metal view, reassign its device, rotate a drawable, or rebuild a bgfx swap chain.
+The exceptional scene-replacement path at `SDL_uikitappdelegate.m:418–438`
+reattaches the existing window to a new scene; it is not the normal
+background/foreground callback path.
+
+`SDL_uikitview.m:181–235` swaps a controller's root view when a Metal view is
+created/destroyed; that path is distinct from rotation. Rotation's Metal work is
+`SDL_uikitmetalview.m:62–79`: layout calculates bounds × contentsScale, updates
+the drawable extent if different, and emits the Metal-view resize event. It
+contains no portrait-specific pixel copy or presentation mode. UIKit owns the
+orientation transform outside this method. This supports investigating the
+system's lifecycle/presentation state, but does not prove an operating-system bug.
+
+### bgfx's separate presentation buffer does not imply an extra frame
+
+`renderer_mtl.cpp:7135–7141` commits the rendering command buffer;
+`flip` at lines 2039–2076 then allocates a presentation command buffer from the
+same `CommandQueueMtl`. `alloc` at line 5246 and `kick` at line 5269 use the same
+`m_commandQueue`; `kick(false, false)` commits without a CPU completion wait.
+`bgfx.cpp:2967–2975` calls this flip after submission when
+`BGFX_RESET_FLIP_AFTER_RENDER` is enabled, as this app enables it on iOS.
+The generated provider patch gates the drawable but preserves this ordering.
+
+There is no portrait-specific queue, offscreen compositor surface, or extra
+application frame in this path. MSAA resolve textures are GPU render attachments,
+not additional Core Animation layers. This does not claim zero scheduling cost:
+the separate present buffer still has to be scheduled before the Metal link's
+deadline. The minimal no-bgfx probe already shows that this bgfx buffer split is
+not necessary for the reported portrait symptom.
+
+### Fresh guidance checked, with platform boundaries retained
+
+Apple's current [drawable presentation guidance](https://github.com/apple/game-porting-toolkit/blob/main/game-porting-skills/skills/presenting-metal-drawables/references/frame-pacing.md)
+emphasizes that the link pre-acquires a drawable and later layer changes apply
+to subsequent drawables. That supports the existing resize-compatibility guard;
+it does not mean the current supplied texture changes size when the layer does.
+The old geometry race was real, but its fix has already failed to cure steady
+portrait composition on the device.
+
+The same repository's direct-display discussion is explicitly macOS-oriented.
+The installed iOS header marks `displaySyncEnabled` unavailable on iOS, so
+macOS advice to toggle it is not an available public iPad fix. Metal 4
+`waitForDrawable`/`signalDrawable` guidance also cannot be pasted into bgfx's
+existing `MTLCommandBuffer` presentation path. Apple's guide explicitly
+distinguishes those queue-level APIs from command-buffer presentation.
+
+The remaining evidence gap is now more precise: scheduler attachment, drawable
+storage, and system presentation state are different things. The existing
+physical results and new local source/identity checks still do not identify
+which state changes when portrait becomes Direct after backgrounding. No new
+source-backed cure is established, and no further manual test is requested.
+
 ## Primary references
 
 - [Apple CAMetalDisplayLink sample and download](https://developer.apple.com/documentation/metal/achieving-smooth-frame-rates-with-a-metal-display-link)

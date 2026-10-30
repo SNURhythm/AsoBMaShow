@@ -81,3 +81,11 @@ or additional speculative deployment is requested as part of this handoff.
 
 The detailed source references, sample provenance, native reproducer and
 Simulator harnesses are in the [source audit](2026-10-30-ios-metal-source-audit.md).
+
+The second source pass adds a narrower experimental result: real Simulator
+callbacks through the production link reuse the same IOSurface storage after
+manual link recreation, while changing the drawable dimensions replaces that
+storage. Thus the failed device recreation test did not test replacement of the
+layer's storage or system presentation state. This does not prove stale storage
+on the iPad or explain why backgrounding helped; see the
+[experiment and limitations](evidence/metal-pool/README.md).
