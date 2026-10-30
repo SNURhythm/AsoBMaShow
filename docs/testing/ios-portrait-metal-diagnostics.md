@@ -14,7 +14,7 @@ was Direct in both orientations on a build predating this branch. The original
 source already used CAMetalDisplayLink. This makes the failing iPad's device
 and presentation configuration a key distinction; 120 FPS or the reported OS
 version alone cannot explain the difference. It does not establish an iPadOS
-bug or replace the pending plain UIKit/Metal-link comparison on the iPad.
+bug; the plain UIKit/Metal-link result is recorded below.
 
 ## Current candidate: native scene sizing on iPadOS 27
 
@@ -42,6 +42,40 @@ Normal application startup is restored. The native triangle remains available
 only when explicitly armed in Settings. Snapshot v5 reports the installed
 bundle's full-screen keys and scene bounds. Check the normal app in fullscreen
 portrait and landscape, keeping More Space unchanged for this comparison.
+
+## Native pixels and orientation follow-up
+
+Build `202610301207` (`e3e77e9d`) remained Composited. The user explicitly
+requested retaining the native scene policy, and reported that the screen
+orientation control no longer worked. Snapshot v5 confirms the opt-out is active
+and `screenIsMain=1`. With More Space still enabled, nativeBounds now reports
+**1668×2420**, nativeScale **1.7196**, while currentMode and the Metal drawable
+remain **1940×2816** at scale 2. The older sizing helper deliberately picked the
+largest candidate, overriding the physical panel dimensions.
+
+The follow-up uses oriented nativeBounds for an actual fullscreen window,
+including downsizing and correcting one-pixel nativeScale rounding. Logical UI
+points are preserved; partial windows and stale resize events retain SDL sizing.
+Focused tests cover the recorded portrait/landscape geometry, normal phone
+geometry, fractional rounding, partial windows, invalid aspect and stale events.
+This corrects the reported sizing discrepancy; it does not explain every earlier
+portrait failure or guarantee Direct mode.
+
+For orientation, the SDL controller now supplies iOS 26's
+[`prefersInterfaceOrientationLocked`](https://developer.apple.com/documentation/uikit/uiviewcontroller/prefersinterfaceorientationlocked)
+when its hint restricts orientation to one axis (or a single gameplay orientation).
+The application invalidates this preference before its existing geometry request.
+Auto restores both axes and clears the preference. Apple only honors the scene
+lock when fullscreen, centered and unoccluded; windowed iPad orientation remains
+under system control. Snapshot v6 records the orientation hint, requested lock
+and effective scene lock to distinguish the two.
+
+A local smoke app using the rebuilt SDL framework and the production
+`screen_orientation::apply` function passed Auto → Landscape → Portrait → Auto
+and gameplay lock/unlock, asserting the effective scene state. The installed
+27.1 Simulator runtime supports only iPhone Duo, so this is API/integration
+coverage, not verification of the reported iPad behavior. The physical iPad
+orientation and Direct/Composited result remain pending.
 
 ## Completed control: UIKit with CAMetalDisplayLink
 

@@ -127,3 +127,15 @@ for the compatibility flag in the 27 SDK. This is a remaining app-level policy
 to isolate, not an established cause or proof of an OS bug. The automatic probe
 is removed; normal startup resumes. See the
 [candidate and test scope](../testing/ios-portrait-metal-diagnostics.md#current-candidate-native-scene-sizing-on-ipados-27).
+
+
+The scene-policy build `202610301207` also remained Composited. The user wants
+the policy retained and reported a screen-orientation regression. Its v5 report
+exposes physical nativeBounds 1668×2420 / nativeScale 1.7196, while the current
+mode and drawable remain 1940×2816. The next change replaces largest-mode sizing
+with oriented nativeBounds for fullscreen windows, and adds SDL's modern scene
+orientation-lock preference plus notification in the app's orientation function.
+The real SDL/production-function Simulator smoke passes explicit modes and
+gameplay lock/unlock; this runtime has no compatible iPad device. See the
+[native-pixel and orientation follow-up](../testing/ios-portrait-metal-diagnostics.md#native-pixels-and-orientation-follow-up).
+Neither iPad orientation recovery nor portrait Direct mode is yet confirmed.
