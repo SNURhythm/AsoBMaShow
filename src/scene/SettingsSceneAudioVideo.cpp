@@ -667,6 +667,19 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   });
   controls->addView(nativeProbe);
 
+  auto *sdlProbe = makeControlButton(
+      kFitContentWidth, metrics.actionButtonHeight,
+      makeText("SDL surface on next launch", metrics.bodyTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  sdlProbe->setOnClickListener([this]() {
+    const bool armed = ArmIOSNativeMetalProbe(true);
+    setDisplayStatus(
+        armed ? "SDL surface test armed. Close and reopen the app. Rotate and read the HUD; double-tap to copy diagnostics and return."
+              : "Could not save the SDL surface test request.",
+        app_theme::sdl(armed ? app_theme::lime() : app_theme::coral()));
+  });
+  controls->addView(sdlProbe);
+
 #endif
 
   cardsColumn->addView(makeCard(

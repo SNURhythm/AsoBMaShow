@@ -669,6 +669,10 @@ int main(int argv, char **args) {
     return EXIT_FAILURE;
   }
 #if TARGET_OS_IPHONE
+  if (RunIOSSDLMetalProbeIfRequested(pd.nwh)) {
+    // The test may finish in a different orientation than startup.
+    SDL_GetWindowSize(win, &windowLogicalWidth, &windowLogicalHeight);
+  }
   if (!InstallIOSGameplayTouchInput(metalView.get())) {
     SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                 "Could not install direct UIKit gameplay touch input; retaining SDL raw input");

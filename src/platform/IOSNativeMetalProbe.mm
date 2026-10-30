@@ -6,9 +6,12 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <UIKit/UIKit.h>
 #include <cmath>
+#include <algorithm>
+#include <SDL3/SDL_uikit_rawtouch.h>
 
 namespace {
 NSString *const kProbeRequest = @"AsoBMaShowNativeMetalProbeOnce";
+bool sSDLProbeRequested = false; // Main-thread startup only.
 }
 
 // Named subclass makes the probe distinguishable in copied layer snapshots.
@@ -28,17 +31,21 @@ NSString *const kProbeRequest = @"AsoBMaShowNativeMetalProbeOnce";
 @property(nonatomic, strong) id<MTLCommandQueue> queue;
 @property(nonatomic, strong) id<MTLRenderPipelineState> pipeline;
 @property(nonatomic, strong) CADisplayLink *displayLink;
+@property(nonatomic, strong) UIView *externalSurface;
+@property(nonatomic, strong) id<MTLCommandBuffer> lastCommand;
 @property(nonatomic) BOOL finished;
 @property(nonatomic) NSUInteger frameCount;
 @property(nonatomic) CFTimeInterval lastTimestamp;
 @property(nonatomic) CFTimeInterval lastInterval;
 - (BOOL)prepare:(NSString **)failure;
+- (UIView *)surface;
 - (void)start;
 - (void)tick:(CADisplayLink *)link;
 - (void)finish;
 @end
 
 @implementation AsoNativeProbeController
+- (UIView *)surface { return self.externalSurface ?: self.view; }
 - (void)loadView {
   self.view = [[AsoNativeProbeView alloc] initWithFrame:CGRectZero];
   self.view.opaque = YES;
@@ -62,9 +69,9 @@ NSString *const kProbeRequest = @"AsoBMaShowNativeMetalProbeOnce";
     return NO;
   }
   NSString *source = @"#include <metal_stdlib>\nusing namespace metal;\n"
-      "vertex float4 probeVertex(uint id [[vertex_id]], constant float &phase [[buffer(0)]]) {\n"
+      "vertex float4 probeVertex(uint id [[vertex_id]], constant float4 &params [[buffer(0)]]) {\n"
       "  float2 p[3] = {float2(-0.25,-0.25), float2(0.25,-0.25), float2(0,0.25)};\n"
-      "  return float4(p[id] + float2(sin(phase)*0.5,0), 0, 1);\n}\n"
+      "  return float4((p[id] + float2(sin(params.x)*0.5,0)) * params.yz, 0, 1);\n}\n"
       "fragment float4 probeFragment() { return float4(0.2,0.9,0.6,1); }\n";
   NSError *error = nil;
   id<MTLLibrary> library = [self.device newLibraryWithSource:source options:nil error:&error];
@@ -81,7 +88,7 @@ NSString *const kProbeRequest = @"AsoBMaShowNativeMetalProbeOnce";
     *failure = error.localizedDescription ?: @"Metal pipeline unavailable";
     return NO;
   }
-  CAMetalLayer *layer = (CAMetalLayer *)self.view.layer;
+  CAMetalLayer *layer = (CAMetalLayer *)self.surface.layer;
   layer.device = self.device;
   layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
   layer.opaque = YES;
@@ -107,15 +114,15 @@ NSString *const kProbeRequest = @"AsoBMaShowNativeMetalProbeOnce";
 }
 - (void)start {
   self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
-  const float rate = self.view.window.screen.maximumFramesPerSecond;
+  const float rate = self.surface.window.screen.maximumFramesPerSecond;
   self.displayLink.preferredFrameRateRange = CAFrameRateRangeMake(rate, rate, rate);
   [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 - (void)tick:(CADisplayLink *)link {
   @autoreleasepool {
     if (self.finished || UIApplication.sharedApplication.applicationState != UIApplicationStateActive ||
-        self.view.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
-    CAMetalLayer *layer = (CAMetalLayer *)self.view.layer;
+        self.surface.window.windowScene.activationState != UISceneActivationStateForegroundActive) return;
+    CAMetalLayer *layer = (CAMetalLayer *)self.surface.layer;
     if (layer.drawableSize.width <= 0 || layer.drawableSize.height <= 0) return;
     id<CAMetalDrawable> drawable = [layer nextDrawable];
     if (drawable == nil) return;
@@ -129,13 +136,18 @@ NSString *const kProbeRequest = @"AsoBMaShowNativeMetalProbeOnce";
     pass.colorAttachments[0].clearColor = MTLClearColorMake(0.02, 0.06, 0.16, 1);
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) return;
-    float phase = static_cast<float>(std::fmod(link.timestamp, 6.283185307));
+    const float width = drawable.texture.width;
+    const float height = drawable.texture.height;
+    const float shortSide = std::min(width, height);
+    const float params[4] = {static_cast<float>(std::fmod(link.timestamp, 6.283185307)),
+                             shortSide / width, shortSide / height, 0};
     [encoder setRenderPipelineState:self.pipeline];
-    [encoder setVertexBytes:&phase length:sizeof(phase) atIndex:0];
+    [encoder setVertexBytes:params length:sizeof(params) atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder endEncoding];
     [command presentDrawable:drawable];
     [command commit];
+    self.lastCommand = command;
     if (self.lastTimestamp != 0) self.lastInterval = link.timestamp - self.lastTimestamp;
     self.lastTimestamp = link.timestamp;
     ++self.frameCount;
@@ -145,20 +157,25 @@ NSString *const kProbeRequest = @"AsoBMaShowNativeMetalProbeOnce";
   // Snapshot before removing the native window. No UIKit overlay is added.
   if (CopyIOSMetalPresentationDiagnostics()) {
     UIPasteboard.generalPasteboard.string = [NSString stringWithFormat:
-        @"Native Metal cold-launch probe; SDL window/bgfx not initialized.\n"
+        @"Native Metal probe: %@; bgfx not initialized.\n"
          "submittedFrames=%lu lastCallbackIntervalMs=%.3f (not presentation latency)\n%@",
+        self.externalSurface ? @"SDL-created surface" : @"native window (SDL not initialized)",
         (unsigned long)self.frameCount, self.lastInterval * 1000,
         UIPasteboard.generalPasteboard.string];
   }
   [self.displayLink invalidate];
   self.displayLink = nil;
+  // Teardown only: the application may initialize bgfx on this same layer next.
+  // Never wait for GPU completion in the measured per-frame path.
+  [self.lastCommand waitUntilCompleted];
+  self.lastCommand = nil;
   self.finished = YES;
 }
 @end
 
-bool ArmIOSNativeMetalProbe() {
-  return platform::onMain([] {
-    [NSUserDefaults.standardUserDefaults setBool:YES forKey:kProbeRequest];
+bool ArmIOSNativeMetalProbe(bool useSDLSurface) {
+  return platform::onMain([useSDLSurface] {
+    [NSUserDefaults.standardUserDefaults setInteger:useSDLSurface ? 2 : 1 forKey:kProbeRequest];
     // Persist before the tester explicitly terminates the app for a cold start.
     return static_cast<bool>([NSUserDefaults.standardUserDefaults synchronize]);
   });
@@ -168,9 +185,14 @@ void RunIOSNativeMetalProbeIfRequested() {
   NSCAssert(NSThread.isMainThread, @"Native probe must run before application startup on main");
   @autoreleasepool {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    if (![defaults boolForKey:kProbeRequest]) return;
+    const NSInteger mode = [defaults integerForKey:kProbeRequest];
+    if (mode == 0) return;
     [defaults removeObjectForKey:kProbeRequest];
     [defaults synchronize]; // Consume first: force-quit/crash cannot trap the next launch.
+    if (mode == 2) {
+      sSDLProbeRequested = true;
+      return; // Run only after normal startup creates its SDL Metal view.
+    }
     UIWindowScene *scene = nil;
     for (UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
       if ([candidate isKindOfClass:UIWindowScene.class] &&
@@ -206,6 +228,52 @@ void RunIOSNativeMetalProbeIfRequested() {
     probeWindow.rootViewController = nil;
     // Do not resurrect a launch window that the bootstrap retired while the
     // run loop was serviced. Normal startup creates its own SDL window next.
+  }
+}
+
+bool RunIOSSDLMetalProbeIfRequested(void *metalLayer) {
+  NSCAssert(NSThread.isMainThread, @"SDL surface probe must run before bgfx on main");
+  if (!sSDLProbeRequested) return false;
+  sSDLProbeRequested = false;
+  @autoreleasepool {
+    CAMetalLayer *layer = (__bridge CAMetalLayer *)metalLayer;
+    UIView *surface = [layer.delegate isKindOfClass:UIView.class] ? (UIView *)layer.delegate : nil;
+    if (![layer isKindOfClass:CAMetalLayer.class] || surface.window == nil) {
+      UIPasteboard.generalPasteboard.string = @"SDL Metal probe could not find its attached surface.";
+      return false;
+    }
+    AsoNativeProbeController *renderer = [AsoNativeProbeController new];
+    // Do not replace the SDL view, root controller, window, or its layout code.
+    renderer.externalSurface = surface;
+    NSString *failure = nil;
+    if (![renderer prepare:&failure]) {
+      UIPasteboard.generalPasteboard.string = [@"SDL Metal probe could not start: "
+          stringByAppendingString:failure ?: @"unknown Metal setup failure"];
+      return false;
+    }
+    UITapGestureRecognizer *exit = [[UITapGestureRecognizer alloc]
+        initWithTarget:renderer action:@selector(finish)];
+    exit.numberOfTapsRequired = 2;
+    [surface addGestureRecognizer:exit];
+    [renderer start];
+    while (!renderer.finished) {
+      @autoreleasepool {
+        SDL_PumpEvents();
+        // Preserve lifecycle, quit, device and file-open events for startup.
+        SDL_FlushEvents(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_WHEEL);
+        SDL_FlushEvents(SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_CANCELED);
+        SDL_FlushEvents(SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP);
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+      }
+    }
+    [surface removeGestureRecognizer:exit];
+    // Discard probe touches before the normal application input owner starts.
+    SDL_FlushEvents(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_WHEEL);
+    SDL_FlushEvents(SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_CANCELED);
+    SDL_FlushEvents(SDL_EVENT_KEY_DOWN, SDL_EVENT_KEY_UP);
+    IOSRawTouchEvent touches[64];
+    while (IOSPopRawTouchEvents(touches, 64) != 0) {}
+    return true;
   }
 }
 #endif

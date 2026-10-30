@@ -15,6 +15,37 @@ app-layer explanation, but does not exclude system overlays or compositor policy
 
 ## Native Metal cold-launch test
 
+Device result (`d73728b52f41290c700d2abdba87a55168224ae6`): the native test was
+Direct in both orientations. Portrait remained native 1668×2420 with a reported
+8.333 ms callback interval. This disproves an unavoidable portrait restriction
+on this device. The level-10 window also remained present, so its mere presence
+does not explain the original app's behavior. The triangle's changing proportions
+were a probe shader issue (uncorrected normalized coordinates), now corrected
+using the drawable aspect ratio; the surface itself was not incorrectly sized.
+
+## Next test: native rendering on the SDL surface
+
+Choose **SDL surface on next launch**, close the app from the app switcher,
+and reopen. Record the triangle screen's HUD in both orientations, then
+double-tap in portrait to copy the report and continue startup. The report starts
+with `Native Metal probe: SDL-created surface; bgfx not initialized.`
+
+This uses the same native triangle renderer and CADisplayLink as the successful
+native-window test, but runs on the actual SDL-created CAMetalLayer. It keeps
+SDL's window, root controller, view hierarchy and rotation/layout handling.
+It runs before gameplay touch installation and bgfx initialization. SDL pumps
+events; probe pointer/key input is discarded while lifecycle/file-open events
+are retained. On exit, the native queue drains once before bgfx can use the layer,
+the temporary exit gesture is removed, and startup re-reads the window dimensions.
+
+Direct in portrait would move the investigation beyond SDL window setup toward
+the later rendering/workload/presentation path. Composited would implicate
+differences in SDL window/view setup or surrounding UI, not establish a specific
+cause. The host controller's system-UI preferences remain SDL's own, unlike the
+native probe controller. Neither test changes the app's normal rendering path.
+
+## Native-window baseline instructions
+
 1. Install the latest Firebase build and open Settings → Display.
 2. Tap **Native Metal on next launch**. After the armed message appears, close
    the app from the app switcher and reopen it (backgrounding alone is not enough).
