@@ -90,6 +90,10 @@ flush is justified yet.
 The user supplied commit `24e4e601` on iPadOS 27.2 and confirmed the HUD sequence
 for all three attachment sessions. This is now a mode-labelled comparison,
 although submitted-frame counts differ and the first session is mostly idle.
+HUD labels describe the user's session observations, not a timestamped mode for
+every frame. The last report was copied 1.98 seconds after attachment and its
+sampled callbacks cover the initial second; it has no later sparse sample yet.
+The exact promotion instant within that return therefore remains unknown.
 
 The first 120 callbacks in each session show:
 
