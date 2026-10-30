@@ -475,3 +475,10 @@ Native Simulator integration tests cover actual rotation/relock, Auto/gameplay,
 unlock timeout, cancellation and a synthetic refusal. This repairs the verified
 lock-order defect, but does not establish that iPadOS will accept the geometry
 request or change the Metal HUD mode. CAMetalDisplayLink remains enabled.
+
+The physical v7 result confirms unlocking works, but UIKit explicitly denies
+rotation with code 101 because the current windowing mode disallows it. The user
+confirmed **Windowed Apps** is selected. Further lock-order changes are not a
+remedy for that policy. Full Screen Apps is the relevant existing-build check;
+its effect on orientation and compositing is not yet verified. See the
+[confirmed refusal](../reviews/2026-10-30-ios-ipados-presentation-differences.md#confirmed-windowing-mode-refusal).

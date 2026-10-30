@@ -154,3 +154,32 @@ This verifies source behavior, not the exact installed osu!lazer binary.
 - [Pinned backend](https://github.com/ppy/osu-framework/blob/f05a31a9d82972e9b752060370ec17df17bdabda/osu.Framework/osu.Framework.csproj#L29)
 - [Drawable acquisition](https://github.com/ppy/veldrid/blob/a405fe8484/src/Veldrid/MTL/MTLSwapchain.cs#L144-L150)
 - [Presentation](https://github.com/ppy/veldrid/blob/a405fe8484/src/Veldrid/MTL/MTLGraphicsDevice.cs#L553-L557)
+
+## Confirmed windowing-mode refusal
+
+The subsequent v7 report from `151e5ee3` confirms the corrected transition
+releases the lock (`prefersLocked=0`, `effectiveLocked=0`) before the request.
+With Landscape requested (`mask=24`), the effective scene remains portrait
+(`effective=1`, `matches=0`). UIKit returns `UISceneErrorDomain` code 101:
+
+> The current windowing mode does not allow for programmatic changes to interface orientation.
+
+The user then confirmed **Windowed Apps** is selected in Settings → Multitasking
+& Gestures. This establishes a system-policy refusal for orientation, beyond
+the earlier wrong-lock defect. Changing lock timing again will not override
+that refusal. A window occupying the whole screen is not proof that the system
+is in Full Screen Apps mode.
+
+The relevant next check uses the existing build after choosing **Full Screen
+Apps** and reopening the app. This is a device-wide setting; success in that
+mode has not yet been observed. Keeping Windowed Apps while offering forced
+portrait/landscape would require an application-owned content-orientation
+implementation, including rendering and input coordinates. It is not achieved
+by another call to requestGeometryUpdate.
+
+Apple documents the three system modes and how to select them in
+[Change Multitasking & Gestures settings](https://support.apple.com/guide/ipad/change-multitasking-gestures-settings-ipad-ipad2q9j404h2/ipados).
+This setting recommendation targets the observed orientation denial. It does
+not establish the cause of portrait Composited presentation: native 1668×2420
+drawables, CAMetalDisplayLink at requested 120 FPS/latency one, and the reported
+HUD state remain unchanged. The osu!lazer CADisplayLink control remains relevant.
