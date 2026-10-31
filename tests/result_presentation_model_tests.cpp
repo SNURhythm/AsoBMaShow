@@ -917,6 +917,10 @@ void testDefaultSkinLocalPresentationContract() {
              textView(root.get(), "difficulty") &&
              textView(root.get(), "artist"),
          "authoritative local presentation keeps existing header descendants");
+  expect(root->findViewByName("resultJacket") &&
+             root->findViewByName("resultArtworkPlaceholder") &&
+             root->findViewByName("resultArtworkFrame")->getHeight() == 98,
+         "result artwork spans the title and artist rows with a placeholder");
   expect(root->findViewByName("resultSummary") &&
              root->findViewByName("resultSummaryCard:grade") &&
              root->findViewByName("resultSummaryCard:score") &&
