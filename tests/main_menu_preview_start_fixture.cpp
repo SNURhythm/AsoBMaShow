@@ -99,6 +99,7 @@ struct Scene {
       Result loadChart(bms_parser::Chart &, bool, std::atomic_bool &) { ++loads; return {!failLoad, "injected"}; }
       void stop() {}
     } jukebox;
+    void refreshAudioTimingProfile(bool = false) {}
   } context;
   LibraryFolderItem activeFolder;
   struct { std::vector<DifficultyTableInfo> tables; } folderMetadataCache;
