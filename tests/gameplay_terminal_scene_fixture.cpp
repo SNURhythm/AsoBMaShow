@@ -15,6 +15,7 @@
 #include "scene/play/JudgementTimingSample.h"
 #include "scene/play/PlayfieldVisualState.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
+#include "scene/play/QuickRetry.h"
 #include "scene/play/RhythmLaneInputController.h"
 #include "scene/play/StartSelectControl.h"
 #include "replay/ReplayInputRecorder.h"
@@ -489,7 +490,9 @@ public:
   long long lastHellChargeGaugeUpdateMicros = 0;
   RhythmLaneInputController *laneInputController = nullptr;
   bool quickRetryPending = false;
-  quick_retry::Projection realtimeQuickRetryProjection;
+  std::optional<quick_retry::Projection> realtimeQuickRetryProjection;
+  std::int64_t quickRetryRemainingHellChargeTicks = 0;
+  quick_retry::Projection currentQuickRetryProjection() const;
   bool retryIfTargetsUnreachable() { return false; }
   void updateQuickRetryHellCharge(const bms_parser::LongNote *, long long) {}
   bool finishIfGaugeFailed();
@@ -1426,6 +1429,7 @@ void testReplayDeferredLongHeadScoreProjection() {
       GamePlayScene scene;
       auto *head = addTimingLongNote(scene, bms_parser::LongNoteType::LongNote);
       scene.options.replayData = std::make_shared<ReplayData>();
+      scene.rulesetPolicyBuild = gameplay::buildGameplayRulesetPolicy(scene.chart->Meta, {});
       scene.useProductionJudging = true;
       RhythmLaneInputController controller(scene.chart, nullptr,
                                            scene.lanePressed, scene.judge);
@@ -1457,6 +1461,53 @@ void testReplayDeferredLongHeadScoreProjection() {
               "repeated replay resolution does not remove deferred score loss twice");
     }
   }
+}
+
+void testPmsReplayNonvanishingBadKeepsLongHeadScorePotential() {
+  GamePlayScene scene;
+  auto *head = addTimingLongNote(scene, bms_parser::LongNoteType::LongNote);
+  scene.chart->Meta.KeyMode = 9;
+  scene.rulesetPolicyBuild = gameplay::buildGameplayRulesetPolicy(scene.chart->Meta,
+      {.ruleset = GameplayRuleset::Beatoraja});
+  require(!scene.rulesetPolicyBuild.policy->judge.rules().vanishBad,
+          "PMS BAD leaves the head available for another judgement");
+  scene.options.replayData = std::make_shared<ReplayData>();
+  scene.useProductionJudging = true;
+  RhythmLaneInputController controller(scene.chart, nullptr, scene.lanePressed,
+                                       scene.rulesetPolicyBuild.policy->judge);
+  scene.laneInputController = &controller;
+  scene.buildReplayNoteLookup();
+  ReplayEvent event{.action = ReplayEventAction::Press, .lane = head->Lane,
+                    .noteTimeMicros = head->Timeline->Timing,
+                    .songTimeMicros = 800'000, .judgeTimeMicros = 800'000,
+                    .judgement = Bad, .gauge = 80};
+  const pacemaker::Target target{.enabled = true, .finalScore = 2, .maxScore = 2, .totalNotes = 1};
+  for (const auto judgement : {Bad, PGreat}) {
+    event.judgement = judgement;
+    scene.applyReplayEvent(event, event.songTimeMicros);
+    const auto snapshot = pacemaker::snapshotForState(target, *scene.state, controller.quickRetryProjection());
+    require(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScoreMinus) == 0,
+            "PMS nonvanishing BAD and its later recovery preserve the attainable EX score");
+    event.songTimeMicros = event.judgeTimeMicros = head->Timeline->Timing;
+  }
+}
+
+void testStoppedRealtimeRetryProjectionRemainsAuthoritative() {
+  GamePlayScene scene;
+  scene.quickRetryRemainingHellChargeTicks = 100; // Untouched legacy startup budget.
+  scene.realtimeQuickRetryProjection = quick_retry::Projection{};
+  scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  scene.state->stagePassedNotes = scene.chart->Meta.TotalNotes;
+  scene.state->currentGauge = scene.state->gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 79;
+  const quick_retry::Targets targets{.requireGaugeClear = true};
+  require(quick_retry::shouldRetry(*scene.state, scene.chart->Meta.TotalNotes, targets,
+                                   scene.currentQuickRetryProjection()),
+          "final worker snapshot correctly reports the failed clear");
+  scene.realtimeGameplaySession.reset(); // stopRealtimeGameplayAuthority destroys the session.
+  require(quick_retry::shouldRetry(*scene.state, scene.chart->Meta.TotalNotes, targets,
+                                   scene.currentQuickRetryProjection()),
+          "post-shutdown retry check must retain the final worker recovery projection");
 }
 
 void testRealtimeTimingSamplesFollowInputEvents() {
@@ -2650,6 +2701,8 @@ int main(int argc, char **argv) {
   testLegacyMineKeysoundOnlyOnDetonation();
   testLegacyLongNoteTimingSamples();
   testReplayDeferredLongHeadScoreProjection();
+  testPmsReplayNonvanishingBadKeepsLongHeadScorePotential();
+  testStoppedRealtimeRetryProjectionRemainsAuthoritative();
   testRealtimeTimingSamplesFollowInputEvents();
   for (const bool ios : {false, true}) {
     fixtureIos = ios;

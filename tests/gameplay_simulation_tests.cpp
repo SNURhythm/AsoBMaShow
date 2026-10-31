@@ -7,6 +7,7 @@
 #include "scene/play/GameplayNoteJudgeRole.h"
 #include "scene/play/GameplaySimulation.h"
 #include "scene/play/Judge.h"
+#include "scene/play/QuickRetry.h"
 #include "scene/play/ManualKeysoundSelection.h"
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/PlayfieldPresentation.h"
@@ -1324,6 +1325,85 @@ void testReferenceLongNoteReleaseFairness() {
   }
 }
 
+void testQuickRetryAllowsHellChargeBalanceReset() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 100;
+  chart.Meta.HasTotal = true;
+  chart.Meta.Total = 99.5;
+  auto *measure = new bms_parser::Measure();
+  for (int i = 0; i < 20; ++i)
+    addTimeline(*measure, 10'000 * i)->SetNote(1, new bms_parser::Note(1));
+  addLongNote(*measure, 1'000'000, 1'410'000, 0, bms_parser::LongNoteType::HellChargeNote);
+  for (int i = 0; i < 78; ++i)
+    addTimeline(*measure, 2'000'000 + 100'000 * i)->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {
+      .judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 3)),
+      .trackQuickRetry = true});
+  const auto targets = quick_retry::armReachableTargets(simulation.scoreState(), 100,
+      {.requireGaugeClear = true}, simulation.quickRetryProjection());
+  require(targets.requireGaugeClear, "HCN recovery target is reachable at startup");
+  simulation.applyPressAt(0, 0, {.songTimeMicros = 1'000'000});
+  simulation.applyReleaseAt(0, {.songTimeMicros = 1'000'000});
+  simulation.advanceTo(1'190'000, 1'190'000);
+  require(simulation.scoreState().stagePassedNotes == 22 &&
+              simulation.scoreState().currentGauge == 2 &&
+              simulation.hellChargeBalances()[definition.hellChargeHeads()[0]] == -190'000,
+          "early failed HCN tail leaves negative balance at groove floor");
+  const bool retries = quick_retry::shouldRetry(simulation.scoreState(), 100, targets,
+                                               simulation.quickRetryProjection());
+  simulation.advanceTo(1'200'001, 1'200'001); // BAD resets the balance at the floor.
+  simulation.applyPressAt(0, 0, {.songTimeMicros = 1'200'001});
+  simulation.advanceTo(1'400'003, 1'400'003); // Reholding still earns one GREAT tick.
+  for (int i = 0; i < 78; ++i) {
+    const auto time = 2'000'000 + 100'000LL * i;
+    simulation.applyPressAt(1, 1, {.songTimeMicros = time});
+    simulation.applyReleaseAt(1, {.songTimeMicros = time});
+  }
+  require(simulation.scoreState().getClearTypeRank() == kClearTypeNormalClearRank,
+          "BAD reset followed by rehold and perfect remaining notes really clears");
+  require(!retries, "Quick Retry must keep the attainable clear through a negative HCN balance");
+}
+
+void testQuickRetryBudgetsLr2EarlyHellChargeCredit() {
+  for (const int lane : {0, 7}) {
+    for (const bool extended : {false, true}) {
+      for (const std::int64_t start : {-1'000'000LL, 0LL, 1'000'000LL}) {
+        bms_parser::Chart chart;
+        chart.Meta.KeyMode = 7;
+        chart.Meta.TotalNotes = 3;
+        auto *measure = new bms_parser::Measure();
+        addLongNote(*measure, start, start + 400'000, lane, bms_parser::LongNoteType::HellChargeNote);
+        addTimeline(*measure, 2'000'000)->SetNote(1, new bms_parser::Note(1));
+        chart.Measures.push_back(measure);
+        const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+        auto rules = gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 3);
+        if (extended) {
+          // Resolved judge snapshots can carry enlarged, context-specific windows.
+          auto &windows = rules.contexts[static_cast<std::size_t>(lane == 7
+              ? gameplay::JudgeWindowContext::Scratch : gameplay::JudgeWindowContext::Normal)].windows;
+          for (auto &window : windows) window.earlyMicros -= 600'000;
+        }
+        gameplay::GameplaySimulation simulation(definition, {
+            .judge = gameplay::CompiledGameplayJudge::from(rules), .trackQuickRetry = true});
+        const auto initialTicks = simulation.quickRetryProjection().hellChargeTicks;
+        simulation.applyPressAt(lane, lane, {.songTimeMicros = start - (extended ? 599'999 : 5'000)});
+        const auto acceptedTicks = simulation.quickRetryProjection().hellChargeTicks;
+        for (const auto elapsed : {0, 0, 0, 200'001, 399'999})
+          simulation.advanceTo(start + elapsed, start + elapsed);
+        const auto actualTicks = std::ranges::count_if(simulation.replayEvents(), [](const auto &event) {
+          return event.action == gameplay::GameplayReplayAction::Gauge && event.judgement == Great;
+        });
+        require(actualTicks >= (extended ? 4 : 2), "LR2 credits pre-head time on admission");
+        require(initialTicks >= actualTicks && acceptedTicks >= actualTicks,
+                "startup and accepted-head HCN bounds cover realizable pre-head recovery");
+      }
+    }
+  }
+}
+
 void testQuickRetryCacheTracksUnpassedZeroTimeHellCharge() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -1378,7 +1458,10 @@ void testQuickRetryCacheMatchesLongNoteTransitions() {
         const auto &state = simulation.noteState(head.pairId);
         if (tail.timingMicros <= time ||
             (state.dead && !(state.played && state.playedTimeMicros < tail.timingMicros))) continue;
-        const auto balance = time < head.timingMicros ? 0 : simulation.hellChargeBalances()[id];
+        const auto balance = time < head.timingMicros
+            ? quick_retry::hellChargeEarlyAllowance(
+                gameplay::compileGameplayJudgeRules(ruleset, 3), gameplay::judgeRoleFor(head))
+            : std::max<std::int64_t>(0, simulation.hellChargeBalances()[id]);
         expected += std::max<std::int64_t>(0,
             (tail.timingMicros - std::max<std::int64_t>(head.timingMicros, time) + balance - 1) / 200'000);
       }
@@ -3670,7 +3753,9 @@ void testLr2SkippedInitialMineStillAllowsCompletion() {
 int main(int argc, char **argv) {
   if (argc > 1) {
     const std::string name = argv[1];
-    if (name == "scratch-hcn-audio") testScratchHcnAudioUsesAggregateHeldState();
+    if (name == "quick-retry-hcn-reset") testQuickRetryAllowsHellChargeBalanceReset();
+    else if (name == "quick-retry-hcn-early") testQuickRetryBudgetsLr2EarlyHellChargeCredit();
+    else if (name == "scratch-hcn-audio") testScratchHcnAudioUsesAggregateHeldState();
     else if (name == "keyboard-wheel-release") testKeyboardWheelChargeTailsReleaseWithoutReversal();
     else if (name == "initial-mine-completion") testLr2SkippedInitialMineStillAllowsCompletion();
     else if (name == "atomic-charge-miss") testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
@@ -3695,6 +3780,8 @@ int main(int argc, char **argv) {
     else return 2;
     return 0;
   }
+  testQuickRetryAllowsHellChargeBalanceReset();
+  testQuickRetryBudgetsLr2EarlyHellChargeCredit();
   testQuickRetryCacheTracksUnpassedZeroTimeHellCharge();
   testQuickRetryCacheResolvesManualClassicRelease();
   testQuickRetryCacheMatchesLongNoteTransitions();

@@ -455,8 +455,8 @@ void testQuickRetryDeferredBadGaugeFloor() {
 void testQuickRetryReachability() {
   require(quick_retry::remainingHellChargeTicks(1'000'000, 1'200'000, 0, 0) == 0,
           "exactly 200ms future HCN cannot earn a strict recovery tick");
-  require(quick_retry::remainingHellChargeTicks(1'000'000, 2'000'000, 1'500'000, -100'000) == 1,
-          "negative carried HCN balance reduces remaining recovery");
+  require(quick_retry::remainingHellChargeTicks(1'000'000, 2'000'000, 1'500'000, -100'000) == 2,
+          "negative HCN debt can be discharged before future recovery");
   const std::array mixed{quick_retry::Condition{.score = 199},
                          quick_retry::Condition{.score = 198},
                          quick_retry::Condition{.lamp = 400},

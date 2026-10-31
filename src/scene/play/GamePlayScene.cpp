@@ -5399,7 +5399,10 @@ void GamePlayScene::configureQuickRetry() {
           if (!head->IsTail() && head->Tail && head->Timeline && head->Tail->Timeline &&
               effectiveLongNoteIsHellCharge(head, chart, options.longNoteMode)) {
             const auto ticks = quick_retry::remainingHellChargeTicks(
-                head->Timeline->Timing, head->Tail->Timeline->Timing, 0, 0);
+                head->Timeline->Timing, head->Tail->Timeline->Timing,
+                std::numeric_limits<std::int64_t>::min(), 0,
+                quick_retry::hellChargeEarlyAllowance(rulesetPolicyBuild.policy->judge.rules(),
+                    gameplay::judgeRoleFor(head, chart->Meta, options.longNoteMode)));
             quickRetryHellChargeTicks.emplace(head, ticks);
             quickRetryRemainingHellChargeTicks += ticks;
           }
@@ -5413,8 +5416,10 @@ void GamePlayScene::configureQuickRetry() {
 
 quick_retry::Projection GamePlayScene::currentQuickRetryProjection() const {
   // The worker publishes projection and score atomically. Never combine an
-  // older gauge with a newer presentation clock at an HCN tail boundary.
-  if (realtimeGameplayAuthorityActive()) return realtimeQuickRetryProjection;
+  // older gauge with a newer presentation clock at an HCN tail boundary. Keep
+  // the final projection after worker shutdown, until configureQuickRetry resets
+  // the attempt: the fallback controller never consumed those worker judgements.
+  if (realtimeQuickRetryProjection) return *realtimeQuickRetryProjection;
   auto result = laneInputController != nullptr ? laneInputController->quickRetryProjection()
                                                : quick_retry::Projection{};
   result.hellChargeTicks = quickRetryRemainingHellChargeTicks;
@@ -5429,7 +5434,9 @@ void GamePlayScene::updateQuickRetryHellCharge(const bms_parser::LongNote *head,
   const auto balance = hellChargeGaugeBalanceMicros.find(const_cast<bms_parser::LongNote *>(head));
   const auto ticks = dead ? 0 : quick_retry::remainingHellChargeTicks(
       head->Timeline->Timing, end, timeMicros,
-      balance == hellChargeGaugeBalanceMicros.end() ? 0 : balance->second);
+      balance == hellChargeGaugeBalanceMicros.end() ? 0 : balance->second,
+      quick_retry::hellChargeEarlyAllowance(rulesetPolicyBuild.policy->judge.rules(),
+          gameplay::judgeRoleFor(head, chart->Meta, options.longNoteMode)));
   quickRetryRemainingHellChargeTicks += ticks - found->second;
   found->second = ticks;
 }
@@ -9072,7 +9079,8 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
         if (const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             !longNote->IsTail()) {
           longNote->Press(pressedTime);
-          if (laneInputController != nullptr) {
+          if (laneInputController != nullptr &&
+              (judgeResult.judgement != Bad || rulesetPolicyBuild.policy->judge.rules().vanishBad)) {
             laneInputController->rememberAcceptedLongHeadJudge(longNote, judgeResult);
           }
           const bool chargeLongNote =

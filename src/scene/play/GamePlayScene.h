@@ -197,7 +197,7 @@ private:
   void adjustLaneCoverFromInput(float deltaPercent);
   void configureQuickRetry();
   quick_retry::Projection currentQuickRetryProjection() const;
-  quick_retry::Projection realtimeQuickRetryProjection;
+  std::optional<quick_retry::Projection> realtimeQuickRetryProjection;
   bool retryIfTargetsUnreachable();
   quick_retry::Targets quickRetryTargets;
   std::unordered_map<const bms_parser::LongNote *, std::int64_t> quickRetryHellChargeTicks;

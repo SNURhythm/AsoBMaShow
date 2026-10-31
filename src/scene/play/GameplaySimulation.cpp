@@ -131,7 +131,9 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
       hellChargeBalanceMicros_(definition.noteCount()) {
   if (config_.trackQuickRetry) {
     quickRetryCache_.reset(definition.noteCount());
-    for (const NoteId id : definition.hellChargeHeads()) updateQuickRetryHellCharge(id, 0);
+    // No clock update has run yet; zero-time and preroll heads can also be hit early.
+    for (const NoteId id : definition.hellChargeHeads())
+      updateQuickRetryHellCharge(id, std::numeric_limits<std::int64_t>::min());
   }
   eligibleHellChargeHeads_.reserve(definition.hellChargeHeads().size());
   mutedHeadVoices_.resize(definition.noteCount());
@@ -307,7 +309,8 @@ void GameplaySimulation::updateQuickRetryHellCharge(NoteId id, std::int64_t time
   const auto &tailState = noteStates_[head.pairId];
   const bool dead = tailState.dead && !(tailState.played && tailState.playedTimeMicros < tail.timingMicros);
   quickRetryCache_.setHellCharge(headId, dead ? 0 : quick_retry::remainingHellChargeTicks(
-      head.timingMicros, tail.timingMicros, time, hellChargeBalanceMicros_[headId]));
+      head.timingMicros, tail.timingMicros, time, hellChargeBalanceMicros_[headId],
+      quick_retry::hellChargeEarlyAllowance(config_.judge.rules(), judgeRoleFor(head))));
 }
 
 GameplayTerminalReason GameplaySimulation::terminalReason() const noexcept {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Judgement.h"
+#include "GameplayJudgeRules.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -49,10 +49,32 @@ private:
   Projection projection_;
 };
 
+// LR2 credits the entire update interval that admits an already-judged head,
+// including time before its authored timestamp. Use the resolved head windows
+// so scratch and enlarged/custom windows retain their full recovery potential.
+inline std::int64_t hellChargeEarlyAllowance(const gameplay::GameplayJudgeRules &rules,
+                                            gameplay::NoteJudgeRole role) {
+  if (rules.ruleset != GameplayRuleset::LR2) return 0;
+  const auto &windows = rules.contexts[static_cast<std::size_t>(
+      gameplay::windowContextForRole(role))].windows;
+  std::int64_t earliest = 0;
+  for (const auto &window : windows) {
+    if (window.earlyMicros > window.lateMicros ||
+        (window.judgement != PGreat && window.judgement != Great &&
+         window.judgement != Good && !(window.judgement == Bad && rules.vanishBad))) continue;
+    earliest = std::min(earliest, window.earlyMicros);
+  }
+  return -earliest;
+}
+
 inline std::int64_t remainingHellChargeTicks(std::int64_t start, std::int64_t end,
-                                            std::int64_t time, std::int64_t balance) {
+                                            std::int64_t time, std::int64_t balance,
+                                            std::int64_t earlyAllowance = 0) {
   if (end <= time || end <= start) return 0;
-  if (time < start) balance = 0;
+  if (time < start) balance = earlyAllowance;
+  // A player can discharge a negative balance through BAD ticks at the groove
+  // floor, then rehold. Charging that debt against future recovery is pessimistic.
+  balance = std::max<std::int64_t>(0, balance);
   // HCN recovery triggers strictly above 200 ms, not at equality.
   return std::max<std::int64_t>(0, (end - std::max(start, time) + balance - 1) / 200'000);
 }
