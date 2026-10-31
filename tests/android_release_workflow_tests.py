@@ -266,7 +266,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         )[1].split("std::string GetAndroidCacheDir()", 1)[0]
         self.assertNotIn("GetAndroidExternalFilesDir()", internal_files)
 
-    def test_android_credentials_are_excluded_from_backup_and_transfer(self):
+    def test_android_credentials_and_reminders_are_excluded_from_backup_and_transfer(self):
         android_namespace = "http://schemas.android.com/apk/res/android"
         application = ET.fromstring(self.manifest).find("application")
         self.assertIsNotNone(application)
@@ -286,13 +286,17 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             ".AsoBMaShowBackupAgent",
         )
 
+        expected_exclusions = {
+            ("file", "profiles"),
+            ("sharedpref", "kombo_notifications.xml"),
+        }
         legacy_rules = ET.parse(
             ROOT / "android/app/src/main/res/xml/backup_rules.xml"
         ).getroot()
         self.assertEqual(legacy_rules.tag, "full-backup-content")
         self.assertEqual(
             {(node.get("domain"), node.get("path")) for node in legacy_rules},
-            {("file", "profiles")},
+            expected_exclusions,
         )
 
         extraction_rules = ET.parse(
@@ -307,7 +311,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
                     (node.get("domain"), node.get("path"))
                     for node in section.findall("exclude")
                 },
-                {("file", "profiles")},
+                expected_exclusions,
             )
 
     def test_android_download_redirects_cannot_downgrade_https_to_http(self):
