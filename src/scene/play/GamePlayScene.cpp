@@ -5487,7 +5487,7 @@ void GamePlayScene::playQuickRetryFeedback() {
 void GamePlayScene::renderQuickRetryFeedback(RenderContext &renderContext) {
   auto &started = context.quickRetryFeedback.startedMicros;
   if (!started) return;
-  constexpr float durationMicros = 320'000.0F;
+  constexpr float durationMicros = 450'000.0F;
   const float progress = std::clamp(float(nowMicros() - *started) / durationMicros, 0.0F, 1.0F);
   if (progress >= 1.0F) {
     started.reset();

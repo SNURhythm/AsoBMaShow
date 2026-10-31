@@ -1,4 +1,5 @@
 #include "AssistOptionUtils.h"
+#include "i18n/Localization.h"
 #include "scene/play/GameplayScoreState.h"
 #include "scene/play/RhythmState.h"
 #include "scene/play/QuickRetry.h"
@@ -59,6 +60,27 @@ void testQuickRetryReason() {
   require(quick_retry::failureReason(state, 100, {.requireGaugeClear = true}) ==
               "NORMAL CLEAR UNREACHABLE",
           "survival-to-groove reason names the final fallback gauge");
+  i18n::setLanguage(i18n::Language::Korean);
+  require(quick_retry::failureReason(state, 100, {.requireGaugeClear = true}) ==
+              "NORMAL 클리어 불가",
+          "gauge retry reason follows the selected language");
+  require(quick_retry::failureReason(state, 100, {.pacemakerScore = 3}, {}, "BEST") ==
+              "최고 기록 달성 불가",
+          "personal-best target is translated along with the reason");
+  i18n::setLanguage(i18n::Language::Japanese);
+  require(quick_retry::failureReason(state, 100, {.lamp = kClearTypeFullComboRank}) ==
+              "フルコンボ不可",
+          "lamp-only retry reason is localized");
+  i18n::setLanguage(i18n::Language::SimplifiedChinese);
+  require(quick_retry::failureReason(state, 100, {.pacemakerScore = 3}, {}, "AAA") ==
+              "AAA已无法达成",
+          "rank names remain stable inside the translated reason");
+  i18n::setLanguage(i18n::Language::TraditionalChinese);
+  targets.allConditionsFail = true;
+  require(quick_retry::failureReason(state, 100, targets, {}, "AAA") ==
+              "所有目標皆已無法達成",
+          "combined retry reason is localized");
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void requireSame(const GameplayScoreState &left,
