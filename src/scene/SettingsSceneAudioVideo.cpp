@@ -489,6 +489,24 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
       i18n::message("settings.display.orientation_help.message"),
       orientationControls, metrics.modeCardHeight, metrics.cardsWidth));
 #endif
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  const auto applyMetalDisplayLink = [this](bool enabled) {
+    context.settings.iosMetalDisplayLink = enabled;
+    persistSettings();
+  };
+  auto *metalDisplayLinkControl = makeGameplaySkinChoiceRow(
+      metrics, overlayPortal, "", true,
+      {{.label = i18n::message("settings.audio_video.off.label"),
+        .selected = !context.settings.iosMetalDisplayLink,
+        .action = [applyMetalDisplayLink] { applyMetalDisplayLink(false); }},
+       {.label = i18n::message("settings.audio_video.on.label"),
+        .selected = context.settings.iosMetalDisplayLink,
+        .action = [applyMetalDisplayLink] { applyMetalDisplayLink(true); }}}, true);
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.display.metal_display_link.label"),
+      i18n::message("settings.display.metal_display_link.description"),
+      metalDisplayLinkControl, metrics.modeCardHeight, metrics.cardsWidth));
+#endif
   if (audioVideoSession == nullptr ||
       context.displaySettingsManager == nullptr) {
     cardsColumn->addView(makeCard(

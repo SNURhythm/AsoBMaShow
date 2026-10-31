@@ -497,6 +497,7 @@ asobmashow_label_tests(area_skin_runtime
 
 asobmashow_label_tests(area_rendering
     camera_inverse_cache_tests
+    ios_drawable_size_tests
     ios_metal_export_pacing_tests
     metal_drawable_provider_tests
     android_display_refresh_rate_tests

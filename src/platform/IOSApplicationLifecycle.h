@@ -12,6 +12,24 @@ struct IOSPresentationState {
   std::uint64_t generation = 0;
 };
 
+// Render-owner policy for one uninterrupted, orientation-locked gameplay span.
+// An inactive pulse retires eligibility until gameplay is left and reentered.
+class IOSGameplayMetalPolicy {
+public:
+  void setGameplayActive(bool active, IOSPresentationState state) {
+    if (active == gameplayActive) return;
+    gameplayActive = active;
+    entryState = state;
+  }
+  bool allows(IOSPresentationState state) const {
+    return gameplayActive && entryState.active && state.active &&
+           entryState.generation == state.generation;
+  }
+private:
+  bool gameplayActive = false;
+  IOSPresentationState entryState;
+};
+
 // SDL maps UIKit resignActive (including permission alerts) to WILL_BACKGROUND.
 // Only DID_BACKGROUND and termination cancel owner work. Presentation stops at
 // the earlier notification and resumes only after UIKit becomes active again.

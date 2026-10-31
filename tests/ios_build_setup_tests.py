@@ -686,6 +686,9 @@ int main() { return 0; }
             self.assertIn("m_metalLayer->setDevice", blocks[0])
             self.assertIn("m_metalLayer->setPixelFormat", blocks[0])
             self.assertIn('sel_registerName("setMagnificationFilter:")', blocks[0])
+            self.assertIn('nsstr("linear")', blocks[0],
+                          "iOS layer magnification must permit the normal scaled display path")
+            self.assertNotIn('nsstr("nearest")', blocks[0])
             self.assertIn("m_metalLayer->setDrawableSize", blocks[1])
             self.assertIn("m_metalLayer->setPixelFormat", blocks[1])
             self.assertIn("m_metalLayer->setMaximumDrawableCount(3);", blocks[0])

@@ -110,6 +110,29 @@ void testChartPreviewSettings() {
          "invalid preview modes fall back to highlight");
 }
 
+void testMetalDisplayLinkDefaultPersistence() {
+  TempDirectory temp;
+  const auto path = temp.path() / "metal-display-link.json";
+  std::string error;
+  expect(AppSettingsStore::Save(path, AppSettings{}, error), "new settings save");
+  expect(nlohmann::json::parse(readFile(path)).value("iosMetalDisplayLink", false),
+         "new profiles default Metal display link on");
+  for (const auto value : {"", ",\"iosMetalDisplayLink\":true",
+                           ",\"iosMetalDisplayLink\":false", ",\"iosMetalDisplayLink\":\"true\""}) {
+    writeFile(path, std::string("{\"schemaVersion\":8") + value + "}");
+    const auto loaded = AppSettingsStore::Load(path);
+    expect(AppSettingsStore::Save(path, loaded.settings, error), "Metal preference saves");
+    const auto saved = nlohmann::json::parse(readFile(path));
+    const bool enabled = std::string_view(value) != ",\"iosMetalDisplayLink\":false";
+    expect(saved.contains("iosMetalDisplayLink") && saved["iosMetalDisplayLink"] == enabled,
+           "missing preference defaults on while an explicit Off override survives restart");
+    if (std::string_view(value).ends_with("\"true\"")) {
+      expect(hasDiagnostic(loaded.diagnostics, "iosMetalDisplayLink", "expected boolean"),
+             "invalid preference is rejected with a diagnostic");
+    }
+  }
+}
+
 void testAntiAliasingPersistenceAndMigration() {
   TempDirectory temp;
   const auto path = temp.path() / "anti-aliasing.json";
@@ -3028,6 +3051,7 @@ int main() {
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testChartPreviewSettings();
   testAntiAliasingPersistenceAndMigration();
+  testMetalDisplayLinkDefaultPersistence();
   testPrepMetronomeDurationPersistence();
   testIpadGestureReminderRoundTrip();
   testScreenOrientationRoundTripAndDefaults();

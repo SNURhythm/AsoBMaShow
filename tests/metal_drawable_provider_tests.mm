@@ -5,6 +5,7 @@
 #include <bgfx/bgfx.h>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 @interface AsoDrawableProbeLayer : CAMetalLayer
 @property(nonatomic) NSUInteger acquisitions;
@@ -14,6 +15,16 @@
   ++_acquisitions;
   return [super nextDrawable];
 }
+@end
+
+@interface AsoPresentedProbe : NSObject
+@property(nonatomic, strong) id<MTLTexture> texture;
+@property(nonatomic, strong) CAMetalLayer *layer;
+@property(nonatomic) CFTimeInterval presentedTime;
+@property(nonatomic, copy) void (^handler)(id<MTLDrawable>);
+@end
+@implementation AsoPresentedProbe
+- (void)addPresentedHandler:(void (^)(id<MTLDrawable>))handler { self.handler = handler; }
 @end
 
 namespace {
@@ -81,17 +92,61 @@ int main() {
     require(layer.acquisitions == acquired + 1,
             "removing provider restores native drawable acquisition");
     if (@available(macOS 14.0, iOS 17.0, *)) {
-      video::MetalDisplayLink link;
+      std::vector<bool> attachmentChanges;
+      video::MetalDisplayLink link([&](bool attached) { attachmentChanges.push_back(attached); });
+      require(attachmentChanges.empty(), "inactive link leaves the fallback refresh clock alone");
       // White-box native fixture: use a real attached CAMetalDisplayLink and
       // real drawable, but seed the lease deterministically. No claim of native
       // callback delivery: a headless layer need not receive display updates.
       id<CAMetalDrawable> leased = [layer nextDrawable];
       require(leased != nil, "native drawable available before attaching link");
       auto &state = *video::current;
-      state.layer = layer;
-      state.link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
-      require(state.link != nil, "native link attaches for deterministic ownership checks");
-      ((CAMetalDisplayLink *)state.link).paused = YES;
+      bool active = true;
+      auto *owner = &state;
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 7, [&] { return active; }) &&
+                  state.link == nil && attachmentChanges.empty() && link.needsOrdinaryFrame(),
+              "startup must present an ordinary frame before attaching the Metal link");
+      auto *probe = [AsoPresentedProbe new];
+      probe.layer = layer;
+      probe.texture = leased.texture;
+      require(video::shouldPresent((__bridge void *)layer, (__bridge void *)probe) &&
+                  probe.handler != nil && !link.needsOrdinaryFrame(),
+              "ordinary present installs one display observer without attaching a link");
+      auto abandonedHandler = probe.handler;
+      state.warmup->requestedAt = CACurrentMediaTime() - 2.0;
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 7, [&] { return active; }) &&
+                  link.needsOrdinaryFrame(),
+              "missing display callback must request a fresh ordinary frame without attaching");
+      probe.presentedTime = 1.0;
+      abandonedHandler((id<MTLDrawable>)probe);
+      require(link.needsOrdinaryFrame(), "timed-out callback cannot unlock its replacement");
+      probe.presentedTime = 0;
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      probe.handler((id<MTLDrawable>)probe);
+      require(link.needsOrdinaryFrame(), "dropped frame cannot finish the display handoff");
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      auto staleHandler = probe.handler;
+      link.pause();
+      link.beginFrame((__bridge void *)layer, 120, 0, 8, [&] { return active; });
+      probe.presentedTime = 1.0;
+      staleHandler((id<MTLDrawable>)probe);
+      require(link.needsOrdinaryFrame(), "old completion cannot unlock a new surface epoch");
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      require(state.link == nil, "submission alone does not attach the link");
+      probe.handler((id<MTLDrawable>)probe);
+      require(!link.needsOrdinaryFrame(), "displayed ordinary frame completes handoff");
+      CFRunLoopTimerRef wake = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
+          CFAbsoluteTimeGetCurrent(), 0, 0, 0, ^(CFRunLoopTimerRef) {
+        const double now = CACurrentMediaTime();
+        if (owner->frame.receive(now, now + 1.0)) owner->drawable = leased;
+      });
+      CFRunLoopAddTimer(CFRunLoopGetCurrent(), wake, kCFRunLoopDefaultMode);
+      const bool attached = link.beginFrame((__bridge void *)layer, 120, 0, 8,
+                                            [&] { return active; });
+      CFRunLoopTimerInvalidate(wake);
+      CFRelease(wake);
+      require(attached && attachmentChanges == std::vector<bool>{true},
+              "displayed ordinary frame permits native link attachment");
       const auto attachedAcquisitions = layer.acquisitions;
       const auto render = [] { bgfx::touch(0); bgfx::frame(); };
       // A link attached between iterations still owns acquisition.
@@ -99,7 +154,6 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "attached idle lease must return handled nil without nextDrawable");
-      bool active = true;
       state.generation = 7;
       state.isCurrent = [&] { return active; };
       state.frame.begin(7);
@@ -112,6 +166,8 @@ int main() {
       require(layer.acquisitions == attachedAcquisitions,
               "consumed lease remains managed nil on repeated acquisition");
       link.endFrame();
+      require(attachmentChanges == std::vector<bool>{true},
+              "ending a frame retains Metal refresh ownership");
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "endFrame must preserve attached layer ownership");
@@ -124,10 +180,32 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "lifecycle rejection must not fall through to nextDrawable");
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 8,
+                               [] { return true; }, 1, true) && state.link == nil,
+              "rotation detaches the link and keeps ordinary acquisition available");
+      require(attachmentChanges == std::vector<bool>({true, false}),
+              "detaching restores fallback refresh ownership");
       link.pause();
+      require(attachmentChanges == std::vector<bool>({true, false}),
+              "repeated pause does not rebuild the fallback clock");
       render();
       require(layer.acquisitions == attachedAcquisitions + 1,
               "pause detaches and restores ordinary acquisition");
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 8,
+                               [] { return true; }, 2, false) && link.needsOrdinaryFrame(),
+              "completed rotation requires a newly displayed ordinary frame");
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      staleHandler = probe.handler;
+      layer.drawableSize = CGSizeMake(8, 16);
+      require(!link.beginFrame((__bridge void *)layer, 120, 0, 8,
+                               [] { return true; }, 2, false),
+              "new drawable extent starts another ordinary handoff");
+      staleHandler((id<MTLDrawable>)probe);
+      probe.handler = nil;
+      video::shouldPresent((__bridge void *)layer, (__bridge void *)probe);
+      require(link.needsOrdinaryFrame() && probe.handler == nil,
+              "old geometry cannot complete or register the new surface handoff");
+      layer.drawableSize = CGSizeMake(16, 16);
       require(!link.beginFrame((__bridge void *)layer, 120, 75, 9, [] { return true; }),
               "unsupported cap selects timer fallback");
       render();
@@ -137,6 +215,73 @@ int main() {
     } else {
       std::puts("native attachment checks unavailable before macOS 14/iOS 17; provider checks passed");
     }
+    // Layout can publish a new layer extent before its resize event reaches
+    // the renderer. Both a supplied new drawable and handled-nil must remain
+    // safe with old depth/MSAA attachments. The next reconciled frame presents.
+    asobmashowMetalSetDrawableProvider(&provider);
+    allowPresentation = true;
+    for (const auto options : {uint32_t(0), uint32_t(BGFX_RESET_MSAA_X2),
+                              uint32_t(BGFX_RESET_MSAA_X2 | BGFX_RESET_SRGB_BACKBUFFER)}) {
+      const auto flags = BGFX_RESET_FLIP_AFTER_RENDER | options;
+      bgfx::reset(16, 16, flags);
+      bgfx::frame();
+      bgfx::setViewRect(0, 0, 0, 16, 16);
+      bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x123456ff);
+      layer.drawableSize = CGSizeMake(32, 8);
+      id<CAMetalDrawable> resized = [layer nextDrawable];
+      require(resized != nil, "resized layer supplies a drawable");
+      supplied = (__bridge void *)resized;
+      const auto beforePresent = presentationCalls;
+      const auto beforeAcquire = layer.acquisitions;
+      bgfx::touch(0);
+      bgfx::frame();
+      require(presentationCalls == beforePresent && layer.acquisitions == beforeAcquire,
+              "new layer extent cannot present against stale renderer attachments");
+      supplied = nullptr;
+      bgfx::touch(0);
+      bgfx::frame();
+      require(presentationCalls == beforePresent && layer.acquisitions == beforeAcquire,
+              "handled-nil uses compatible fallback attachments without reacquiring");
+
+      asobmashowMetalSetDrawableProvider(nullptr);
+      bgfx::touch(0);
+      bgfx::frame();
+      require(layer.acquisitions == beforeAcquire + 1,
+              "ordinary acquisition also rejects resized drawables before attachment reconciliation");
+      asobmashowMetalSetDrawableProvider(&provider);
+
+      bgfx::reset(32, 8, flags);
+      bgfx::setViewRect(0, 0, 0, 32, 8);
+      bgfx::setViewClear(0, BGFX_CLEAR_COLOR, 0x123456ff);
+      supplied = (__bridge void *)resized;
+      bgfx::touch(0);
+      bgfx::frame();
+      require(presentationCalls == beforePresent + 1 && layer.acquisitions == beforeAcquire + 1,
+              "reconciling renderer attachments resumes the supplied drawable");
+      supplied = nullptr;
+      resized = nil;
+    }
+    // Secondary swap chains must use their own extent, not the main window's.
+    auto *secondaryLayer = [AsoDrawableProbeLayer new];
+    const auto secondary = bgfx::createFrameBuffer((__bridge void *)secondaryLayer, 12, 24);
+    require(bgfx::isValid(secondary), "secondary Metal swap chain created");
+    bgfx::frame();
+    id<CAMetalDrawable> secondaryDrawable = [secondaryLayer nextDrawable];
+    require(secondaryDrawable != nil, "secondary layer supplies a drawable");
+    supplied = (__bridge void *)secondaryDrawable;
+    const auto beforeSecondaryPresent = presentationCalls;
+    bgfx::setViewFrameBuffer(1, secondary);
+    bgfx::setViewRect(1, 0, 0, 12, 24);
+    bgfx::setViewClear(1, BGFX_CLEAR_COLOR, 0x123456ff);
+    bgfx::touch(1);
+    bgfx::frame();
+    require(presentationCalls == beforeSecondaryPresent + 1 && secondaryLayer.acquisitions == 1,
+            "secondary drawable presents using its own attachments");
+    supplied = nullptr;
+    secondaryDrawable = nil;
+    bgfx::destroy(secondary);
+    bgfx::frame();
+    asobmashowMetalSetDrawableProvider(nullptr);
     bgfx::shutdown();
     layer = nil;
   }

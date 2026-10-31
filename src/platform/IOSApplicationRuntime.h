@@ -24,6 +24,8 @@ struct IOSWindowSnapshot {
   int pixelWidth = 0, pixelHeight = 0;
   float refreshRate = 0;
   std::uint64_t generation = 0;
+  std::uint64_t geometryGeneration = 0;
+  bool geometryChanging = false;
 };
 
 // Main owns the native window throughout this call. It services UIKit and SDL

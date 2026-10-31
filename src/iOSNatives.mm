@@ -8,6 +8,7 @@
 #include "ir/IrHttpClientIOS.h"
 #include "platform/PhotoAuthorizationPolicy.h"
 #include "platform/ScreenOrientation.h"
+#include "platform/IOSDrawableSize.h"
 #include "platform/IOSApplicationRuntime.h"
 #include "platform/GenerationMailbox.h"
 #include "replay/ReplayNativeExportOperation.h"
@@ -245,42 +246,6 @@ void RestoreIOSViewportAfterKeyboardFocusOnce() {
 
 int RoundedCGFloat(CGFloat value) {
   return static_cast<int>(std::lround(static_cast<double>(value)));
-}
-
-void OrientSizeToMatch(int &width, int &height, int referenceWidth,
-                       int referenceHeight) {
-  const bool candidateLandscape = width >= height;
-  const bool referenceLandscape = referenceWidth >= referenceHeight;
-  if (candidateLandscape != referenceLandscape) {
-    std::swap(width, height);
-  }
-}
-
-bool SimilarAspect(int width, int height, int referenceWidth,
-                   int referenceHeight) {
-  if (width <= 0 || height <= 0 || referenceWidth <= 0 || referenceHeight <= 0) {
-    return false;
-  }
-  const double aspect = static_cast<double>(width) / static_cast<double>(height);
-  const double referenceAspect =
-      static_cast<double>(referenceWidth) / static_cast<double>(referenceHeight);
-  return std::abs(aspect - referenceAspect) <= referenceAspect * 0.02;
-}
-
-void ConsiderDrawableCandidate(int candidateWidth, int candidateHeight,
-                               int referenceWidth, int referenceHeight,
-                               int &bestWidth, int &bestHeight) {
-  OrientSizeToMatch(candidateWidth, candidateHeight, referenceWidth,
-                    referenceHeight);
-  if (!SimilarAspect(candidateWidth, candidateHeight, referenceWidth,
-                     referenceHeight)) {
-    return;
-  }
-  if (candidateWidth <= bestWidth + 8 || candidateHeight <= bestHeight + 8) {
-    return;
-  }
-  bestWidth = candidateWidth;
-  bestHeight = candidateHeight;
 }
 
 UIViewController *TopViewController(UIViewController *viewController) {
@@ -4550,14 +4515,67 @@ std::string GetIOSApplicationSupportPath() {
   }
 }
 
+// iOS scene orientation transition. All state and callbacks belong to main.
+namespace {
+NSUInteger sOrientationRequestGeneration = 0;
+
+UIInterfaceOrientation CurrentIOSSceneOrientation(UIWindow *window) {
+  if (@available(iOS 16.0, *)) {
+    if (window.windowScene != nil)
+      return window.windowScene.effectiveGeometry.interfaceOrientation;
+  }
+  return window.windowScene != nil ? window.windowScene.interfaceOrientation
+                                  : window.rootViewController.interfaceOrientation;
+}
+
+void RequestIOSOrientationAfterUnlock(UIWindow *window,
+                                     UIInterfaceOrientationMask mask,
+                                     NSUInteger generation,
+                                     CFTimeInterval deadline) {
+  if (generation != sOrientationRequestGeneration) return;
+  if (@available(iOS 16.0, *)) {
+    UIWindowScene *scene = window.windowScene;
+    if (scene == nil || scene.activationState != UISceneActivationStateForegroundActive) {
+      return;
+    }
+    if (mask & (1UL << CurrentIOSSceneOrientation(window))) {
+      if (@available(iOS 26.0, *))
+        [window.rootViewController setNeedsUpdateOfPrefersInterfaceOrientationLocked];
+      return;
+    }
+    if (@available(iOS 26.0, *)) {
+      if (scene.effectiveGeometry.isInterfaceOrientationLocked) {
+        if (CACurrentMediaTime() >= deadline) {
+          return;
+        }
+        // UIKit applies lock preferences asynchronously. This bounded wait runs
+        // only for an explicit mode change, never in the per-frame render path.
+        __weak UIWindow *weakWindow = window;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 16 * NSEC_PER_MSEC),
+            dispatch_get_main_queue(), ^{
+              RequestIOSOrientationAfterUnlock(weakWindow, mask, generation, deadline);
+            });
+        return;
+      }
+    }
+    UIWindowSceneGeometryPreferencesIOS *preferences =
+        [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
+    [scene requestGeometryUpdateWithPreferences:preferences errorHandler:^(NSError *error) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (generation != sOrientationRequestGeneration) return;
+        NSLog(@"Could not apply screen orientation: %@", error);
+      });
+    }];
+  }
+}
+} // namespace
+
 void screen_orientation::apply(Mode mode, bool lockCurrent) {
   const auto update = ^{
     UIWindow *window = FindActiveWindow();
     if (window == nil) return;
     static UIInterfaceOrientation lockedOrientation = UIInterfaceOrientationUnknown;
-    const UIInterfaceOrientation current = window.windowScene != nil
-        ? window.windowScene.interfaceOrientation
-        : window.rootViewController.interfaceOrientation;
+    const UIInterfaceOrientation current = CurrentIOSSceneOrientation(window);
     if (lockCurrent && lockedOrientation == UIInterfaceOrientationUnknown) {
       lockedOrientation = current;
     } else if (!lockCurrent) {
@@ -4592,19 +4610,20 @@ void screen_orientation::apply(Mode mode, bool lockCurrent) {
       mask = UIInterfaceOrientationMaskPortrait;
       hint = "Portrait";
     }
+    const NSUInteger generation = ++sOrientationRequestGeneration;
     SDL_SetHint(SDL_HINT_ORIENTATIONS, hint);
+    if (@available(iOS 26.0, *)) {
+      // SDL releases the lock while the current orientation is outside the
+      // requested mask, then reacquires it on effective-geometry confirmation.
+      [window.rootViewController setNeedsUpdateOfPrefersInterfaceOrientationLocked];
+    }
     if (@available(iOS 16.0, *)) {
       [window.rootViewController setNeedsUpdateOfSupportedInterfaceOrientations];
       // Only force geometry for an explicit mode. Auto leaves the choice to
       // UIKit, including the user's system rotation lock.
       if (window.windowScene != nil && !lockCurrent && mode != Mode::Auto &&
           !(mask & (1UL << current))) {
-        UIWindowSceneGeometryPreferencesIOS *preferences =
-            [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask];
-        [window.windowScene requestGeometryUpdateWithPreferences:preferences
-            errorHandler:^(NSError *error) {
-              NSLog(@"Could not apply screen orientation: %@", error);
-            }];
+        RequestIOSOrientationAfterUnlock(window, mask, generation, CACurrentMediaTime() + 1.0);
       } else if (window.windowScene == nil) {
         // SDL2 also supports the pre-UIScene application lifecycle.
         [UIViewController attemptRotationToDeviceOrientation];
@@ -5831,60 +5850,24 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
 
     const CGRect windowBounds = window.bounds;
     const CGRect screenBounds = screen.bounds;
-    const int windowPointW = RoundedCGFloat(windowBounds.size.width);
-    const int windowPointH = RoundedCGFloat(windowBounds.size.height);
-    int screenPointW = RoundedCGFloat(screenBounds.size.width);
-    int screenPointH = RoundedCGFloat(screenBounds.size.height);
-    OrientSizeToMatch(screenPointW, screenPointH, windowPointW, windowPointH);
-    if (std::abs(windowPointW - screenPointW) > 4 ||
-        std::abs(windowPointH - screenPointH) > 4) {
+    const CGRect windowOnScreen =
+        [window convertRect:windowBounds toCoordinateSpace:screen.coordinateSpace];
+    const bool fullscreen =
+        std::abs(CGRectGetMinX(windowOnScreen) - CGRectGetMinX(screenBounds)) <= 1 &&
+        std::abs(CGRectGetMinY(windowOnScreen) - CGRectGetMinY(screenBounds)) <= 1 &&
+        std::abs(windowOnScreen.size.width - screenBounds.size.width) <= 1 &&
+        std::abs(windowOnScreen.size.height - screenBounds.size.height) <= 1;
+    const CGSize nativeSize = screen.nativeBounds.size;
+    const auto preferred = ios_drawable::fullscreenNativeSize(
+        {currentWidth, currentHeight}, {logicalWidth, logicalHeight},
+        {RoundedCGFloat(windowBounds.size.width), RoundedCGFloat(windowBounds.size.height)},
+        {RoundedCGFloat(nativeSize.width), RoundedCGFloat(nativeSize.height)}, fullscreen);
+    if (preferred.width <= 0 || preferred.height <= 0 ||
+        (preferred.width == currentWidth && preferred.height == currentHeight)) {
       return false;
     }
-    if (!SimilarAspect(windowPointW, windowPointH, screenPointW, screenPointH)) {
-      return false;
-    }
-
-    int referenceWidth = currentWidth > 0 ? currentWidth : logicalWidth;
-    int referenceHeight = currentHeight > 0 ? currentHeight : logicalHeight;
-    if (referenceWidth <= 0 || referenceHeight <= 0) {
-      return false;
-    }
-
-    int bestWidth = currentWidth;
-    int bestHeight = currentHeight;
-    if (bestWidth <= 0 || bestHeight <= 0) {
-      bestWidth = logicalWidth;
-      bestHeight = logicalHeight;
-    }
-
-    if (screen.currentMode != nil) {
-      const CGSize modeSize = screen.currentMode.size;
-      ConsiderDrawableCandidate(RoundedCGFloat(modeSize.width),
-                                RoundedCGFloat(modeSize.height),
-                                referenceWidth, referenceHeight, bestWidth,
-                                bestHeight);
-    }
-
-    const CGRect nativeBounds = screen.nativeBounds;
-    ConsiderDrawableCandidate(RoundedCGFloat(nativeBounds.size.width),
-                              RoundedCGFloat(nativeBounds.size.height),
-                              referenceWidth, referenceHeight, bestWidth,
-                              bestHeight);
-    ConsiderDrawableCandidate(
-        RoundedCGFloat(screenBounds.size.width * screen.scale),
-        RoundedCGFloat(screenBounds.size.height * screen.scale), referenceWidth,
-        referenceHeight, bestWidth, bestHeight);
-    ConsiderDrawableCandidate(
-        RoundedCGFloat(screenBounds.size.width * screen.nativeScale),
-        RoundedCGFloat(screenBounds.size.height * screen.nativeScale),
-        referenceWidth, referenceHeight, bestWidth, bestHeight);
-
-    if (bestWidth <= currentWidth + 8 || bestHeight <= currentHeight + 8) {
-      return false;
-    }
-
-    preferredWidth = bestWidth;
-    preferredHeight = bestHeight;
+    preferredWidth = preferred.width;
+    preferredHeight = preferred.height;
     return true;
   }
 }
@@ -5902,17 +5885,11 @@ bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height) {
     }
 
     CAMetalLayer *layer = (CAMetalLayer *)layerObject;
-    const CGSize boundsSize = layer.bounds.size;
-    if (boundsSize.width > 0.0 && boundsSize.height > 0.0) {
-      const CGFloat scaleX = static_cast<CGFloat>(width) / boundsSize.width;
-      const CGFloat scaleY = static_cast<CGFloat>(height) / boundsSize.height;
-      const CGFloat maxScale = std::max(scaleX, scaleY);
-      if (maxScale > 0.0 &&
-          std::abs(scaleX - scaleY) <= maxScale * static_cast<CGFloat>(0.02)) {
-        layer.contentsScale = (scaleX + scaleY) * static_cast<CGFloat>(0.5);
-      }
-    }
-    layer.drawableSize = CGSizeMake(width, height);
+    // SDL/UIKit own the view's native point scale. An exact pixel extent can
+    // differ slightly from bounds * scale in Display Zoom; do not average its
+    // two axes back into contentsScale and provoke another layout resize.
+    const CGSize size = CGSizeMake(width, height);
+    if (!CGSizeEqualToSize(layer.drawableSize, size)) layer.drawableSize = size;
     return true;
   }
 }

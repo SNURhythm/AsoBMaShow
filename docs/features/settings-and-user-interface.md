@@ -109,8 +109,37 @@ throughput. Buffer count is not a user setting.
   sample rate/buffer settings, and test sound/status. Mono audio in Audio Output
   defaults to Off; turning it On immediately averages the left and right channels
   into both ears for gameplay, chart previews, and interface sounds.
-  The choice is saved with the profile. Display retains orientation
-  and platform display controls.
+  The choice is saved with the profile.
+- Display retains orientation and platform display controls.
+  iOS keeps `UIRequiresFullScreen` enabled to preserve explicit orientation
+  control in iPad Windowed Apps mode. On iOS/iPadOS 27, this compatibility mode
+  requests discrete resizing that honors supported orientations; it does not
+  prevent window resizing. The deprecated flag remains a compatibility
+  workaround, and Direct Metal presentation must be verified separately.
+  See [Apple's migration guidance](https://developer.apple.com/documentation/technotes/tn3192-migrating-your-app-from-the-deprecated-uirequiresfullscreen-key).
+  On iOS, it also offers a saved **Improved frame pacing** On/Off control,
+  which uses CAMetalDisplayLink internally.
+  It defaults to On for new profiles and profiles without a saved preference.
+  An explicit saved Off remains an override.
+  Off uses ordinary Metal drawable acquisition, SDL's high-refresh request and
+  the existing frame cap. On enables Metal display-link scheduling only in the
+  orientation-locked gameplay scene, including preparation and in-game pauses.
+  Menus and results always use ordinary rendering. The link detaches before
+  leaving gameplay releases the orientation lock.
+  Gameplay entry and geometry reattachment first present an ordinary frame and
+  wait for its displayed callback. UIKit rotation suspends the link until the
+  transition ends. Unsupported frame caps and interrupted callbacks still use
+  the normal fallback.
+  If gameplay loses application activity, ordinary rendering resumes immediately
+  on return and remains in use until gameplay is left and entered again. There
+  is no timed foreground reattachment. A new gameplay scene entered while the
+  application is inactive also stays on ordinary rendering.
+  A missing ordinary-frame display callback is retried after one second, with
+  obsolete callbacks ignored.
+  The Simulator uses the ordinary path because it lacks that display callback.
+  Some iPads use Composited presentation with this option enabled. The game cannot
+  query Direct/Composited through a documented public API; the Metal HUD remains
+  the check for that status.
 - BMS Library groups folders, chart preview mode, archive preview/extraction
   preferences, and cache cleanup. Chart Preview offers Highlight (default),
   Beginning, and Preview File in both selectors. Preview File reveals a

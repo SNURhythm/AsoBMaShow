@@ -373,6 +373,7 @@ public:
   bool hispeedAutoAdjust = false;
   UiThemeMode uiThemeMode = UiThemeMode::Dark;
   screen_orientation::Mode screenOrientation = screen_orientation::Mode::Landscape;
+  bool iosMetalDisplayLink = true;
   bool systemPlaybackShowJacket = true;
   bool systemPlaybackShowTitle = true;
   bool systemPlaybackShowArtist = true;

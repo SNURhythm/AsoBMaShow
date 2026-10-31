@@ -28,6 +28,7 @@ struct Runtime {
   std::atomic_uint64_t completedPumpLifecycleGeneration{0};
   std::mutex viewportMutex;
   IOSWindowSnapshot viewport;
+  unsigned geometryTransitions = 0; // UIKit main only; transitions may overlap.
   std::mutex wakeMutex;
   std::condition_variable wake;
   // Work is posted and consumed only by the application owner.
@@ -64,6 +65,8 @@ void updateViewport(Runtime &state, SDL_Window *window) {
   }
   const std::lock_guard lock(state.viewportMutex);
   next.generation = state.viewport.generation + 1;
+  next.geometryGeneration = state.viewport.geometryGeneration;
+  next.geometryChanging = state.viewport.geometryChanging;
   state.viewport = next;
 }
 }
@@ -90,6 +93,24 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
   InitializeIOSNativeMusicControls();
   auto state = std::make_shared<Runtime>();
   updateViewport(*state, window);
+  auto *center = [NSNotificationCenter defaultCenter];
+  auto *nativeWindow = (__bridge UIWindow *)SDL_GetPointerProperty(
+      SDL_GetWindowProperties(window), SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, nullptr);
+  const auto geometryChanged = [state](bool starting) {
+    if (starting) ++state->geometryTransitions;
+    else if (state->geometryTransitions) --state->geometryTransitions;
+    const std::lock_guard lock(state->viewportMutex);
+    ++state->viewport.geometryGeneration;
+    state->viewport.geometryChanging = state->geometryTransitions != 0;
+  };
+  id willTransition = [center addObserverForName:@"SDLUIKitWindowWillTransition"
+      object:nativeWindow queue:nil usingBlock:^(NSNotification *) { geometryChanged(true); }];
+  id didTransition = [center addObserverForName:@"SDLUIKitWindowDidTransition"
+      object:nativeWindow queue:nil usingBlock:^(NSNotification *) { geometryChanged(false); }];
+  auto removeGeometryObservers = makeScopeExit([&] {
+    [center removeObserver:willTransition];
+    [center removeObserver:didTransition];
+  });
   if (!SDL_AddEventWatch(lifecycleWatch, state.get())) return EXIT_FAILURE;
   publishRuntime(state);
   auto cleanup = makeScopeExit([&] {

@@ -68,6 +68,7 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
+#include "platform/IOSSDLRefreshClock.h"
 #include "video/IOSPresentationPacing.h"
 #include "video/MetalDisplayLink.h"
 #include "input/IOSTouchInput.h"
@@ -283,19 +284,22 @@ void getIOSMetalDrawableSize(SDL_Window *window, int logicalW, int logicalH,
     return;
   }
 
-  // iPad Display Zoom can expose a larger fullscreen display mode than SDL's
-  // native-scale Metal drawable. Render at that mode to avoid compositor
-  // upscaling during screenshots and app-focus transitions.
+  // Display Zoom may expose a supersampled mode. Match the physical panel
+  // exactly in fullscreen, preserving the logical UI dimensions.
   int preferredW = 0;
   int preferredH = 0;
   if (s_iosMetalLayer != nullptr &&
       GetIOSPreferredFullscreenDrawableSize(renderW, renderH, logicalW,
                                             logicalH, preferredW, preferredH) &&
       SetIOSMetalLayerDrawableSize(s_iosMetalLayer, preferredW, preferredH)) {
-    APP_DEBUG_LOG("iOS display-mode drawable size: %d x %d (SDL: %d x %d)",
+    APP_DEBUG_LOG("iOS native fullscreen drawable size: %d x %d (SDL: %d x %d)",
                   preferredW, preferredH, renderW, renderH);
     renderW = preferredW;
     renderH = preferredH;
+  } else if (s_iosMetalLayer != nullptr) {
+    // A Metal-view-only layout event may change the layer without changing
+    // SDL's reported pixel size. Reconcile it even if bgfx needs no reset.
+    SetIOSMetalLayerDrawableSize(s_iosMetalLayer, renderW, renderH);
   }
 }
 #endif
@@ -784,11 +788,22 @@ static void reportResultRecoveryWarning(
 
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+#if TARGET_OS_IPHONE
+  platform::IOSGameplayMetalPolicy iosGameplayMetal;
+#endif
   player_settings::PresentationOrientationState presentationOrientation;
   presentationOrientation.updateViewport(rendering::render_width, rendering::render_height);
   bool orientationLocked = false;
   auto appliedOrientation = context.settings.screenOrientation;
   context.setGameplayOrientationLocked = [&](bool locked) {
+#if TARGET_OS_IPHONE
+    if (locked != orientationLocked) {
+      // Gameplay owns this lock. Release the link before unlocking can rotate
+      // the layer; a new gameplay span starts its own displayed-frame handoff.
+      video::MetalDisplayLink::pauseCurrent();
+      iosGameplayMetal.setGameplayActive(locked, GetIOSPresentationState());
+    }
+#endif
     if (locked && !orientationLocked) {
       int logicalWidth = 0;
       int logicalHeight = 0;
@@ -986,7 +1001,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.replayVideoExportActive.load(std::memory_order_acquire);
 #if TARGET_OS_IPHONE
   FramePacer iosPresentationPacer;
-  video::MetalDisplayLink iosDisplayLink;
+  video::MetalDisplayLink iosDisplayLink([](bool attached) {
+    SetIOSSDLRefreshClockEnabled(s_window, !attached);
+  });
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
   bool iosViewportRestorePending = false;
@@ -1120,20 +1137,26 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const auto displayLinkState = GetIOSPresentationState();
     const auto displayLinkViewport = GetIOSWindowSnapshot(s_window);
     bool iosDisplayLinkFrame = false;
-    if (!iosPreparedFrame.pending() && displayLinkState.active &&
+    if (context.settings.iosMetalDisplayLink &&
+        !iosPreparedFrame.pending() && iosGameplayMetal.allows(displayLinkState) &&
         !context.replayVideoExportActive.load(std::memory_order_acquire) &&
         !context.rendererAccess.exportRequested()) {
       iosDisplayLinkFrame = iosDisplayLink.beginFrame(
           s_iosMetalLayer, displayLinkViewport ? displayLinkViewport->refreshRate : 0.0F,
           context.framePacer.currentFrameCap(), displayLinkState.generation,
-          [&, generation = displayLinkState.generation] {
+          [&, generation = displayLinkState.generation,
+              geometryGeneration = displayLinkViewport ? displayLinkViewport->geometryGeneration : 0] {
             const auto state = GetIOSPresentationState();
-            return state.active && state.generation == generation &&
+            const auto viewport = GetIOSWindowSnapshot(s_window);
+            return iosGameplayMetal.allows(state) && state.generation == generation &&
+                viewport && !viewport->geometryChanging &&
+                viewport->geometryGeneration == geometryGeneration &&
                 !context.appInBackground.load(std::memory_order_acquire) &&
                 !context.quitFlag.load(std::memory_order_acquire) &&
                 !context.replayVideoExportActive.load(std::memory_order_acquire) &&
                 !context.rendererAccess.exportRequested();
-          });
+          }, displayLinkViewport ? displayLinkViewport->geometryGeneration : 0,
+          displayLinkViewport && displayLinkViewport->geometryChanging);
     } else {
       iosDisplayLink.pause();
     }
@@ -1408,7 +1431,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       // on window resize
       if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
           (event.type == SDL_EVENT_WINDOW_RESIZED ||
-           event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
+           event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+           event.type == SDL_EVENT_WINDOW_METAL_VIEW_RESIZED)) {
         int logicalW = 0, logicalH = 0;
         platform::windowSize(s_window, &logicalW, &logicalH);
         if (!applyWindowResize(logicalW, logicalH)) {
@@ -1474,7 +1498,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       // Apply earlier viewport changes before either input dispatch path.
       const bool resizeEvent = (e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) &&
           (e.type == SDL_EVENT_WINDOW_RESIZED ||
-           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED);
+           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+           e.type == SDL_EVENT_WINDOW_METAL_VIEW_RESIZED);
       if (!resizeEvent) flushPendingResize();
       context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
 
@@ -1501,7 +1526,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
       if ((e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) &&
           (e.type == SDL_EVENT_WINDOW_RESIZED ||
-           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
+           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+           e.type == SDL_EVENT_WINDOW_METAL_VIEW_RESIZED)) {
         pendingResizeEvent = e;
         hasPendingResize = true;
 
@@ -1748,6 +1774,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           s_fullscreenBgaCache.invalidate();
           uiPresentationSchedule.invalidate();
         }
+        if (iosDisplayLink.needsOrdinaryFrame()) uiPresentationSchedule.invalidate();
 #endif
         const auto uiNow = SDL_GetTicks();
         const bool continuousPresentation = sceneManager.currentScene &&

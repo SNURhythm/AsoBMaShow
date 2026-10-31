@@ -8314,6 +8314,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(display_settings_manager_tests PRIVATE cxx_std_23)
 
+    add_executable(ios_drawable_size_tests tests/ios_drawable_size_tests.cpp)
+    target_include_directories(ios_drawable_size_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ios_drawable_size_tests PRIVATE cxx_std_23)
+
     add_executable(ios_metal_export_pacing_tests
         tests/ios_metal_export_pacing_tests.cpp
         src/video/RendererAccessCoordinator.cpp)
@@ -9536,7 +9540,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(metal_drawable_provider_tests PRIVATE bgfx
             "-framework Foundation" "-framework QuartzCore" "-framework Metal")
         asobmashow_register_test(metal_drawable_provider_tests)
-        set_tests_properties(metal_drawable_provider_tests PROPERTIES RESOURCE_LOCK metal_device)
+        set_tests_properties(metal_drawable_provider_tests PROPERTIES
+            RESOURCE_LOCK metal_device ENVIRONMENT "MTL_DEBUG_LAYER=1")
         add_executable(bgfx_metal_readback_tests tests/bgfx_metal_readback_tests.mm)
         target_compile_features(bgfx_metal_readback_tests PRIVATE cxx_std_17)
         target_link_libraries(bgfx_metal_readback_tests PRIVATE bgfx "-framework Metal" "-framework Foundation")
@@ -9967,6 +9972,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(ios_drawable_size_tests)
     asobmashow_register_test(ios_metal_export_pacing_tests)
     asobmashow_register_test(display_orientation_sync_tests foundation_av_display_orientation_sync)
     asobmashow_register_test(ios_display_orientation_sync_tests foundation_av_ios_display_orientation_sync)
