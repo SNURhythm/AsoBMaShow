@@ -1767,6 +1767,7 @@ int main() {
   {
     GameplayRuleset selected = GameplayRuleset::LR2;
     bool quickRetry = false;
+    bool retryGauge = true, retryPacemaker = true, retryGoals = true;
     bool newPattern = false;
     ScrollView scroll(0, 0, 360, 400);
     scroll.setWidth(360)->setHeight(400);
@@ -1778,6 +1779,9 @@ int main() {
         {.onRulesetSelected =
              [&](GameplayRuleset ruleset) { selected = ruleset; },
          .onQuickRetrySelected = [&](bool enabled) { quickRetry = enabled; },
+         .onQuickRetryGaugeSelected = [&](bool enabled) { retryGauge = enabled; },
+         .onQuickRetryPacemakerSelected = [&](bool enabled) { retryPacemaker = enabled; },
+         .onQuickRetryGoalsSelected = [&](bool enabled) { retryGoals = enabled; },
          .onRetryPatternSelected = [&](bool value) { newPattern = value; }},
         {.width = 340.0f,
          .playOptionColumns = 2,
@@ -1815,10 +1819,32 @@ int main() {
             "quick retry defaults off with same pattern");
     require(quick->findViewByName("choice-cycle")->getVisible(),
             "quick retry uses one On/Off cycle button");
+    const std::array conditionNames{"quick-retry-gauge-choice", "quick-retry-pacemaker-choice",
+                                    "quick-retry-goals-choice"};
+    for (const auto *name : conditionNames) {
+      auto *choice = dynamic_cast<ChoiceControlView *>(panel->findViewByName(name));
+      require(choice && choice->selectedId() == "on", "retry conditions default on");
+      auto *cycle = dynamic_cast<Button *>(choice->findViewByName("choice-cycle"));
+      require(cycle && cycle->getVisible() && !cycle->isEnabled(),
+              "condition is one On/Off button disabled behind the master switch");
+    }
     click(*static_cast<Button *>(quick->findViewByName("choice-cycle")));
     require(quickRetry, "quick retry cycle enables automatic retry");
     panel->refresh({.quickRetryEnabled = true});
     scroll.applyYogaLayout();
+    for (const auto *name : conditionNames) {
+      auto *cycle = static_cast<Button *>(panel->findViewByName(name)->findViewByName("choice-cycle"));
+      require(cycle->isEnabled(), "master switch enables condition controls");
+      click(*cycle);
+    }
+    require(!retryGauge && !retryPacemaker && !retryGoals,
+            "each condition toggle reaches its own settings callback");
+    panel->refresh({.quickRetryEnabled = true, .quickRetryGauge = false,
+                    .quickRetryPacemaker = false, .quickRetryGoals = false});
+    for (const auto *name : conditionNames) {
+      auto *choice = static_cast<ChoiceControlView *>(panel->findViewByName(name));
+      require(choice->selectedId() == "off", "condition refresh retains separate selections");
+    }
     require(pattern->findViewByName("choice-buttons")->getVisible(),
             "same and new are distinct pattern buttons");
     click(*static_cast<Button *>(pattern->findViewByName("choice:new")));

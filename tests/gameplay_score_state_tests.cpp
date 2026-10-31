@@ -279,6 +279,110 @@ void testBestClearFallsBackToBottomGaugeWhenNoneQualifies() {
 }
 } // namespace
 
+void testQuickRetryProjectedSurvivalToGroove() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+  state.configureGauge(GaugeType::Hazard, GaugeAutoShiftMode::SurvivalToGroove);
+  for (int i = 0; i < 80; ++i) state.commitJudge(JudgeResult(PGreat, 0));
+  quick_retry::Projection pending;
+  pending.pendingClassicJudgements[Bad] = 1;
+  auto played = state;
+  played.commitJudge(JudgeResult(Bad, 0));
+  for (int i = 0; i < 19; ++i) played.commitJudge(JudgeResult(PGreat, 0));
+  require(played.getClearTypeRank() == kClearTypeNormalClearRank,
+          "deferred BAD on Hazard can shift to Normal and clear");
+  require(!quick_retry::shouldRetry(
+              state, 100, {.lamp = kClearTypeNormalClearRank, .requireGaugeClear = true}, pending),
+          "both gauge and goal checks allow the projected Normal fallback before Hazard fails");
+  require(quick_retry::shouldRetry(state, 100, {.lamp = kClearTypeHardClearRank}, pending),
+          "Normal fallback cannot satisfy a survival clear goal");
+}
+
+void testQuickRetryRequiredGauge() {
+  const quick_retry::Targets gaugeOnly{.requireGaugeClear = true};
+  require(!gaugeOnly.empty(), "gauge requirement enables retry without pacemaker targets");
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  const auto armed = quick_retry::armReachableTargets(
+      state, 100, {.score = 201, .pacemakerScore = 199, .requireGaugeClear = true});
+  require(armed.score < 0 && armed.pacemakerScore == 199 && armed.requireGaugeClear,
+          "impossible initial goals leave independent pacemaker and gauge requirements armed");
+  const auto goalOnly = quick_retry::armReachableTargets(
+      state, 100, {.score = 198, .pacemakerScore = 201});
+  require(goalOnly.score == 198 && goalOnly.pacemakerScore < 0,
+          "impossible initial pacemaker leaves achievable goals armed");
+  GameplayScoreState lowTotal(beatorajaScoreConfig(1, 7, 1.0));
+  lowTotal.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  const auto scoreOnly = quick_retry::armReachableTargets(
+      lowTotal, 1, {.score = 2, .requireGaugeClear = true});
+  require(scoreOnly.score == 2 && !scoreOnly.requireGaugeClear,
+          "impossible initial gauge does not loop or disable an achievable score target");
+  state.stagePassedNotes = 99;
+  state.comboBreak = 1;
+  const auto setGauge = [&](GaugeType type, float value) {
+    state.gaugeValues[gaugeTypeIndex(type)] = value;
+    if (state.gaugeType == type) state.currentGauge = value;
+  };
+  setGauge(GaugeType::Normal, 78);
+  require(quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "selected groove gauge retries before chart end when clear is impossible");
+  require(quick_retry::shouldRetry(state, 100, {.score = 0, .requireGaugeClear = true}),
+          "reached score does not suppress the independent gauge requirement");
+  require(quick_retry::shouldRetry(state, 100, {.score = 2, .requireGaugeClear = true}),
+          "reachable score does not suppress the independent gauge requirement");
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly, {.hellChargeTicks = 2}),
+          "gauge-only retry includes remaining HCN recovery");
+  setGauge(GaugeType::Normal, 79);
+  state.lightAssistClearMark = true;
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "physical gauge border is independent of assist lamp caps");
+  require(quick_retry::shouldRetry(state, 100, {.score = 3, .requireGaugeClear = true}),
+          "achievable gauge does not suppress unreachable goals retry");
+  require(quick_retry::shouldRetry(state, 100, {.score = 0, .pacemakerScore = 3}),
+          "reachable goal does not suppress an independently enabled pacemaker retry");
+  require(quick_retry::shouldRetry(state, 100, {.score = 3, .pacemakerScore = 2}),
+          "reachable pacemaker does not suppress independently enabled goals retry");
+  setGauge(GaugeType::Normal, 78);
+  require(!quick_retry::shouldRetry(state, 100, {.pacemakerScore = 2}),
+          "pacemaker-only selection ignores unselected goal and gauge requirements");
+  state.lightAssistClearMark = false;
+
+  for (const auto mode : {GaugeAutoShiftMode::SelectToUnder, GaugeAutoShiftMode::BestClear}) {
+    state.configureGauge(GaugeType::Hard, mode, GaugeProfile::Standard, GaugeType::Easy);
+    setGauge(GaugeType::Easy, 78);
+    require(quick_retry::shouldRetry(state, 100, gaugeOnly),
+            "unreachable auto-shift lower bound retries even with a surviving higher gauge");
+    state.gaugeSurvivalFailed.fill(true);
+    state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Easy)] = false;
+    setGauge(GaugeType::Easy, 79);
+    require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+            "recoverable lower bound keeps attempt after higher gauges die");
+  }
+  state.configureGauge(GaugeType::Easy, GaugeAutoShiftMode::SelectToUnder,
+                       GaugeProfile::Standard, GaugeType::Hard);
+  setGauge(GaugeType::Easy, 79);
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "lower bound above selected gauge uses the effective clamped bound");
+
+  for (const auto mode : {GaugeAutoShiftMode::None, GaugeAutoShiftMode::Continue}) {
+    state.configureGauge(GaugeType::Hard, mode);
+    state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+    require(quick_retry::shouldRetry(state, 100, gaugeOnly),
+            "failed selected survival gauge retries including Continue mode");
+  }
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::SurvivalToGroove);
+  setGauge(GaugeType::Normal, 78);
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "Survival-to-Groove keeps a surviving selected gauge");
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+  state.gaugeType = GaugeType::Normal;
+  setGauge(GaugeType::Normal, 79);
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "Survival-to-Groove permits recovery through Normal");
+  setGauge(GaugeType::Normal, 78);
+  require(quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "Survival-to-Groove retries when Normal fallback cannot recover");
+}
+
 void testQuickRetryDeferredBadGaugeFloor() {
   struct Case { float gauge; int remaining; int bads; int hcnTicks; bool clears; };
   for (const auto &test : std::array{
@@ -393,6 +497,8 @@ void testQuickRetryReachability() {
 }
 
 int main() {
+  testQuickRetryProjectedSurvivalToGroove();
+  testQuickRetryRequiredGauge();
   testQuickRetryDeferredBadGaugeFloor();
   testQuickRetryReachability();
   static_assert(kClearTypeLightAssistedEasyClearRank == 50);

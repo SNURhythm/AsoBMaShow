@@ -1335,13 +1335,20 @@ void testQuickRetryRoundTrip() {
   auto settings = AppSettingsStore::Load(path).settings;
   expect(!settings.quickRetryEnabled && !settings.quickRetryNewPattern,
          "existing profiles do not automatically retry and default to same pattern");
+  expect(settings.quickRetryGauge && settings.quickRetryPacemaker && settings.quickRetryGoals,
+         "all retry conditions default on behind the disabled master switch");
   settings.quickRetryEnabled = true;
   settings.quickRetryNewPattern = true;
+  settings.quickRetryGauge = false;
+  settings.quickRetryPacemaker = false;
+  settings.quickRetryGoals = false;
   std::string error;
   expect(AppSettingsStore::Save(path, settings, error), "quick retry settings save");
   const auto loaded = AppSettingsStore::Load(path).settings;
   expect(loaded.quickRetryEnabled && loaded.quickRetryNewPattern,
          "quick retry and new pattern survive settings reload");
+  expect(!loaded.quickRetryGauge && !loaded.quickRetryPacemaker && !loaded.quickRetryGoals,
+         "each disabled retry condition survives settings reload");
 }
 
 void testIpadGestureReminderRoundTrip() {

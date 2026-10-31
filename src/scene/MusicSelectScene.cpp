@@ -4422,6 +4422,9 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
       .clubMode = context.settings.gameplayClubModeEnabled,
       .quickRetryEnabled = context.settings.quickRetryEnabled,
+      .quickRetryGauge = context.settings.quickRetryGauge,
+      .quickRetryPacemaker = context.settings.quickRetryPacemaker,
+      .quickRetryGoals = context.settings.quickRetryGoals,
       .quickRetryNewPattern = context.settings.quickRetryNewPattern,
       .pacemakerTarget = selections.pacemakerTarget,
       .pacemakerGoalLabel = goalPacemakerLabel(),
@@ -4538,6 +4541,21 @@ void MusicSelectScene::openPlayOptions() {
          .onQuickRetrySelected = [this](bool enabled) {
            context.settings.quickRetryEnabled = enabled;
            if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry selection");
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetryGaugeSelected = [this](bool enabled) {
+           context.settings.quickRetryGauge = enabled;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry gauge selection");
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetryPacemakerSelected = [this](bool enabled) {
+           context.settings.quickRetryPacemaker = enabled;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry pacemaker selection");
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetryGoalsSelected = [this](bool enabled) {
+           context.settings.quickRetryGoals = enabled;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry goals selection");
            refreshPlayOptionsModal();
          },
          .onRetryPatternSelected = [this](bool newPattern) {

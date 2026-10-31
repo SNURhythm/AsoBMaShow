@@ -5357,30 +5357,35 @@ void GamePlayScene::configureQuickRetry() {
       options.practiceMode || options.practiceSession != nullptr || options.startPosition != 0)
     return;
 
-  if (pacemaker::normalizeTargetId(options.pacemakerTarget) == pacemaker::kTargetGoal) {
+  quickRetryTargets.requireGaugeClear = context.settings.quickRetryGauge;
+  if (context.settings.quickRetryGoals) {
     std::string error;
     const auto goals = context.scoreRepository.LoadChartGoalsForChart(chart->Meta, error);
     if (!goals) {
       SDL_Log("Cannot load Quick Retry goals: %s", error.c_str());
-      return;
     }
-    const int mode = scoreLongNoteModeForClearLamp(chart->Meta, options.longNoteMode);
-    for (const auto &entry : *goals) {
-      if (entry.goal.longNoteMode != mode || entry.progress.achieved) continue;
-      const auto &target = entry.goal.target;
-      if (!entry.progress.scoreMet && target.scoreNumerator > 0 && target.scoreDenominator > 0) {
-        const auto required = (2LL * chart->Meta.TotalNotes * target.scoreNumerator +
-                               target.scoreDenominator - 1) / target.scoreDenominator;
-        quickRetryTargets.add({.score = static_cast<int>(required)});
+    if (goals) {
+      const int mode = scoreLongNoteModeForClearLamp(chart->Meta, options.longNoteMode);
+      for (const auto &entry : *goals) {
+        if (entry.goal.longNoteMode != mode || entry.progress.achieved) continue;
+        const auto &target = entry.goal.target;
+        if (!entry.progress.scoreMet && target.scoreNumerator > 0 && target.scoreDenominator > 0) {
+          const auto required = (2LL * chart->Meta.TotalNotes * target.scoreNumerator +
+                                 target.scoreDenominator - 1) / target.scoreDenominator;
+          quickRetryTargets.add({.score = static_cast<int>(required)});
+        }
+        if (!entry.progress.lampMet && target.lamp >= 0)
+          quickRetryTargets.add({.lamp = target.lamp});
       }
-      if (!entry.progress.lampMet && target.lamp >= 0)
-        quickRetryTargets.add({.lamp = target.lamp});
     }
-  } else if (activePacemakerTarget.enabled) {
-    quickRetryTargets.add({.score = activePacemakerTarget.finalScore});
   }
+  // GOAL is governed by the Goals toggle and its alternative unfinished conditions,
+  // rather than duplicating only the displayed goal as an independent score target.
+  if (context.settings.quickRetryPacemaker && activePacemakerTarget.enabled &&
+      pacemaker::normalizeTargetId(options.pacemakerTarget) != pacemaker::kTargetGoal)
+    quickRetryTargets.pacemakerScore = activePacemakerTarget.finalScore;
   if (quickRetryTargets.empty()) return;
-  if (quickRetryTargets.lamp >= 0) {
+  if (quickRetryTargets.requireGaugeClear || quickRetryTargets.lamp >= 0) {
     for (auto *measure : chart->Measures) {
       if (measure == nullptr) continue;
       for (auto *timeline : measure->TimeLines) {
@@ -5399,11 +5404,8 @@ void GamePlayScene::configureQuickRetry() {
       }
     }
   }
-  // An incompatible gauge/assist setting must not create an endless restart
-  // loop before the player has any opportunity to change it.
-  if (quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryTargets,
-                              currentQuickRetryProjection()))
-    quickRetryTargets = {};
+  quickRetryTargets = quick_retry::armReachableTargets(
+      *state, chart->Meta.TotalNotes, quickRetryTargets, currentQuickRetryProjection());
 }
 
 quick_retry::Projection GamePlayScene::currentQuickRetryProjection() const {

@@ -904,6 +904,9 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
       {"quickRetryEnabled", settings.quickRetryEnabled},
+      {"quickRetryGauge", settings.quickRetryGauge},
+      {"quickRetryPacemaker", settings.quickRetryPacemaker},
+      {"quickRetryGoals", settings.quickRetryGoals},
       {"quickRetryNewPattern", settings.quickRetryNewPattern},
       {"selectedPacemakerGoalId", settings.selectedPacemakerGoalId},
       {"skinModeFilterName", settings.skinModeFilterName},
@@ -1331,6 +1334,9 @@ AppSettings settingsFromJson(const json &document,
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
   readValue(document, "quickRetryEnabled", settings.quickRetryEnabled, diagnostics);
+  readValue(document, "quickRetryGauge", settings.quickRetryGauge, diagnostics);
+  readValue(document, "quickRetryPacemaker", settings.quickRetryPacemaker, diagnostics);
+  readValue(document, "quickRetryGoals", settings.quickRetryGoals, diagnostics);
   readValue(document, "quickRetryNewPattern", settings.quickRetryNewPattern, diagnostics);
   readValue(document, "selectedPacemakerGoalId",
             settings.selectedPacemakerGoalId, diagnostics);

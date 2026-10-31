@@ -294,6 +294,27 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     }, overlayPortal, 18, 0, true, "on");
     quickRetryChoice->setName("quick-retry-choice");
     addView(quickRetryChoice);
+    addView(makeLabel(i18n::message("play_options.quick_retry.gauge.label")));
+    quickRetryGaugeChoice = new ChoiceControlView([this](const std::string &id) {
+      if (callbacks.onQuickRetryGaugeSelected) callbacks.onQuickRetryGaugeSelected(id == "on");
+      return true;
+    }, overlayPortal, 18, 0, true, "on");
+    quickRetryGaugeChoice->setName("quick-retry-gauge-choice");
+    addView(quickRetryGaugeChoice);
+    addView(makeLabel(i18n::message("play_options.quick_retry.pacemaker.label")));
+    quickRetryPacemakerChoice = new ChoiceControlView([this](const std::string &id) {
+      if (callbacks.onQuickRetryPacemakerSelected) callbacks.onQuickRetryPacemakerSelected(id == "on");
+      return true;
+    }, overlayPortal, 18, 0, true, "on");
+    quickRetryPacemakerChoice->setName("quick-retry-pacemaker-choice");
+    addView(quickRetryPacemakerChoice);
+    addView(makeLabel(i18n::message("play_options.quick_retry.goals.label")));
+    quickRetryGoalsChoice = new ChoiceControlView([this](const std::string &id) {
+      if (callbacks.onQuickRetryGoalsSelected) callbacks.onQuickRetryGoalsSelected(id == "on");
+      return true;
+    }, overlayPortal, 18, 0, true, "on");
+    quickRetryGoalsChoice->setName("quick-retry-goals-choice");
+    addView(quickRetryGoalsChoice);
     addView(makeLabel(i18n::message("play_options.retry_pattern.label")));
     retryPatternChoice = new ChoiceControlView([this](const std::string &id) {
       if (callbacks.onRetryPatternSelected) callbacks.onRetryPatternSelected(id == "new");
@@ -411,6 +432,15 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     quickRetryChoice->refresh({.selectedId = state.quickRetryEnabled ? "on" : "off",
         .options = {{.id = "off", .label = i18n::message("play_options.quick_retry.off")},
                     {.id = "on", .label = i18n::message("play_options.quick_retry.on")}}});
+    const auto refreshCondition = [&](ChoiceControlView *choice, bool enabled) {
+      choice->refresh({.selectedId = enabled ? "on" : "off",
+          .options = {{.id = "off", .label = i18n::message("play_options.quick_retry.off")},
+                      {.id = "on", .label = i18n::message("play_options.quick_retry.on")}},
+          .enabled = state.quickRetryEnabled});
+    };
+    refreshCondition(quickRetryGaugeChoice, state.quickRetryGauge);
+    refreshCondition(quickRetryPacemakerChoice, state.quickRetryPacemaker);
+    refreshCondition(quickRetryGoalsChoice, state.quickRetryGoals);
     retryPatternChoice->refresh({.selectedId = state.quickRetryNewPattern ? "new" : "same",
         .options = {{.id = "same", .label = i18n::message("play_options.retry_pattern.same")},
                     {.id = "new", .label = i18n::message("play_options.retry_pattern.new")}},
@@ -437,7 +467,8 @@ void PlayOptionsPanelView::setLaneOrderMessage(std::string message,
 void PlayOptionsPanelView::closeDropdowns() {
   for (auto *choice : {rulesetChoice, gaugeChoice, gaugeAutoShiftChoice,
                       gaugeLowerBoundChoice, longNoteModeChoice,
-                      assistOptionChoice, quickRetryChoice, retryPatternChoice, pacemakerChoice}) {
+                      assistOptionChoice, quickRetryChoice, quickRetryGaugeChoice,
+                      quickRetryPacemakerChoice, quickRetryGoalsChoice, retryPatternChoice, pacemakerChoice}) {
     if (choice) choice->closeMenu();
   }
   if (playOptionSection) playOptionSection->closeDropdowns();

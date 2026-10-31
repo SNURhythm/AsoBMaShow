@@ -40,28 +40,40 @@ list space in short landscape windows. Dropdown menus use the overlay layer.
 Play Options offers **Quick Retry** (Off/On, default Off) and **Retry Pattern**
 (Same/New, default Same). Same preserves the current random layout; New uses the
 normal retry path to generate another layout. Both preferences are saved with
-the profile.
+the profile. Three independent On/Off condition toggles—**Gauge**, **Pacemaker
+Target**, and **Goals**—default On and are saved with the profile too. They are
+disabled while the master switch is Off; turning all three Off prevents automatic
+retries even with the master switch On.
 
-During ordinary single-chart manual play, Quick Retry restarts as soon as no
-selected target remains reachable with the best possible remaining judgements.
-A normal pacemaker uses its final EX target. With **GOAL** selected, it considers
-all unfinished score and lamp conditions for this chart and long-note mode,
-including goals other than the one shown by the pacemaker. Conditions are
-alternatives: an impossible score does not end an attempt that can still earn
-an unfinished clear lamp, and vice versa. Conditions already fulfilled by saved
-results are excluded. A score condition reached during the current attempt is
-preserved even if the survival gauge subsequently fails.
+During ordinary single-chart manual play, Quick Retry restarts as soon as the
+enabled gauge clear, pacemaker target, or every unfinished goal condition becomes
+unreachable with the best possible remaining judgements. The gauge requirement
+works even without a pacemaker or unfinished goals. It uses the selected gauge for Off and Continue,
+and the effective lower-bound gauge for Select-to-Under and Best Clear.
+Survival-to-Groove permits either the selected survival gauge or its Normal
+fallback to clear. Assist lamp caps do not change the physical gauge requirement.
+
+Pacemaker Target uses the selected numeric pacemaker's final EX target. The Goals
+condition considers all unfinished score and lamp conditions for this chart and long-note
+mode, independently of the pacemaker selection. **GOAL** pacemaker selections are
+governed by the Goals toggle, not duplicated as a single pacemaker condition.
+Within Goals, conditions are alternatives: an impossible score does not end an
+attempt that can still earn an unfinished clear lamp, and vice versa. Conditions
+already fulfilled by saved results are excluded. The three enabled condition
+groups trigger independently: for example, an unreachable required gauge retries
+even if a score or goal remains reachable or has already been reached this attempt.
 
 The check includes deferred classic-LN head judgements, remaining HCN recovery,
-gauge auto-shift, and assist lamp limits. No target, no unfinished GOAL conditions,
-or targets already impossible before play leave automatic retry inactive, avoiding
-a restart loop caused by incompatible settings. Replay, autoplay, practice, course,
+gauge auto-shift, and assist lamp limits. Requirements already impossible before
+play are disabled independently, avoiding restart loops without disabling other
+reachable requirements. Replay, autoplay, practice, course,
 and mid-chart starts do not use Quick Retry. Automatic retries follow the same
 attempt reset behavior as manual retries and do not save discarded attempts.
 
 Goal conditions compile once per attempt to the lowest unfinished EX target and
-lamp rank. Runtime checks do not iterate goals or remaining notes: they compare
-those two thresholds using the fixed gauge table. Pending classic-LN judgements
+lamp rank; the numeric pacemaker retains its own EX threshold. Runtime checks do
+not iterate goals or remaining notes: they compare those thresholds and the
+required gauge using the fixed gauge table. Pending classic-LN judgements
 and remaining HCN recovery are maintained as per-note contributions during the
 existing judgement/gauge updates. Snapshot publication only copies their cached
 aggregate; it does not rescan the chart on input. The fallback controller also
