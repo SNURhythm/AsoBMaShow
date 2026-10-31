@@ -99,11 +99,13 @@ void testQuickRetryStartButtonLayoutAndActivation() {
       root.addView(button);
       int launches = 0;
       button->setOnClickListener([&] { ++launches; });
-      button->setQuickRetry(true, i18n::format("menu.selector.retry.summary", {{"targets", "HARD + AAA"}}));
+      const auto targets = std::string("(HARD ") + i18n::tr("menu.selector.retry.or") + " AAA) " +
+          i18n::tr("menu.selector.retry.or") + " " + i18n::tr("menu.selector.retry.chart_goals");
+      button->setQuickRetry(true, i18n::format("menu.selector.retry.summary", {{"targets", targets}}));
       root.applyYogaLayout();
       auto *summary = static_cast<TextView *>(button->getContentView()->findViewByName("quickRetryStartSummary"));
       auto *icon = static_cast<TextView *>(button->getContentView()->findViewByName("selectorButtonIcon"));
-      require(summary->getVisible() && summary->getText().find("HARD + AAA") != std::string::npos &&
+      require(summary->getVisible() && summary->getText().find(targets) != std::string::npos &&
                   icon->getText() == ui_icons::textForCodepoint(0xf071),
               "Quick Retry presents actual hurdles and a warning symbol");
       require(summary->getWidth() > 0 && summary->getHeight() >= 24 &&

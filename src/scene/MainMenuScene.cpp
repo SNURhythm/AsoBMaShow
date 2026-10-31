@@ -4926,11 +4926,17 @@ void MainMenuScene::refreshQuickRetryStartButton() {
     const auto target = pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
     if (context.settings.quickRetryPacemaker && pacemaker::targetIsGrade(target))
       groups.push_back({{{quick_retry::HurdleKind::Score, 0, pacemaker::displayTargetLabel(target)}}});
-    const auto description = quick_retry::hurdleText(
+    auto description = quick_retry::hurdleText(
         quick_retry::summarizeHurdles(groups, context.settings.quickRetryAllConditionsFail),
         i18n::tr("menu.selector.retry.or"));
-    const bool chartTargets = context.settings.quickRetryGoals ||
-        (context.settings.quickRetryPacemaker && target == pacemaker::kTargetBest);
+    if (context.settings.quickRetryGoals) {
+      const auto goals = i18n::tr("menu.selector.retry.chart_goals");
+      if (description.empty()) description = goals;
+      else description = "(" + description + ") " +
+          (context.settings.quickRetryAllConditionsFail ? i18n::tr("menu.selector.retry.or") : "+") +
+          " " + goals;
+    }
+    const bool chartTargets = context.settings.quickRetryPacemaker && target == pacemaker::kTargetBest;
     button->setQuickRetry(true, !description.empty()
         ? i18n::format("menu.selector.retry.summary", {{"targets", description}})
         : i18n::tr(chartTargets ? "menu.selector.retry.pending" : "menu.selector.retry.none"));

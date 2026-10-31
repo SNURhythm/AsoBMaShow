@@ -920,6 +920,7 @@
 {"menu.selector.play.label", "PLAY", "플레이", "プレイ", "开始", "開始"},
 {"menu.selector.play_options.label", "PLAY\nOPTIONS", "플레이\n옵션", "プレイ\n設定", "游玩\n选项", "遊玩\n選項"},
 {"menu.selector.random.label", "RANDOM", "랜덤", "ランダム", "随机", "隨機"},
+{"menu.selector.retry.chart_goals", "Chart goals", "채보 목표", "譜面目標", "谱面目标", "譜面目標"},
 {"menu.selector.retry.none", "No active targets", "활성 목표 없음", "有効な目標なし", "无有效目标", "無有效目標"},
 {"menu.selector.retry.or", "or", "또는", "または", "或", "或"},
 {"menu.selector.retry.pending", "Targets depend on chart", "채보 선택 후 목표 결정", "目標は譜面による", "目标取决于谱面", "目標取決於譜面"},
