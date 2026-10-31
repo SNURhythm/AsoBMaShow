@@ -62,10 +62,11 @@ the master switch with indentation and a vertical rule. Three condition checkbox
 disabled while the master switch is Off; unchecking all three conditions prevents
 automatic retries even with the master switch On.
 
-With Quick Retry enabled, the built-in selector's Play button uses an amber
+With Quick Retry enabled, the built-in selector's Play button uses a borderless amber
 warning treatment and shows the selected chart's concrete hurdles in small text,
-such as **HARD / AAA**. Comparable requirements collapse to the strictest hurdle
-for **Any fails** and the easiest hurdle for **All fail**. A slash joins hurdles
+such as **Keep HARD + AAA** or **Keep HARD or AAA**. Comparable requirements collapse
+to the strictest hurdle for **Any fails** and the easiest hurdle for **All fail**.
+A plus joins hurdles
 that must all remain reachable; **or** separates alternative ways to keep the
 attempt. Unfinished goal alternatives retain that meaning when combined with
 gauge and pacemaker requirements. Physical gauge checks stay separate from lamp

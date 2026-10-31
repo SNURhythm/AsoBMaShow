@@ -92,7 +92,7 @@ inline std::string hurdleText(const HurdleAlternatives &alternatives, const std:
     const bool grouped = alternatives.size() > 1 && clause.size() > 1;
     if (grouped) text += '(';
     for (std::size_t i = 0; i < clause.size(); ++i) {
-      if (i) text += " / ";
+      if (i) text += " + ";
       text += clause[i].label;
     }
     if (grouped) text += ')';

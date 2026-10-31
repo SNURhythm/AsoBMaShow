@@ -4937,7 +4937,6 @@ void MainMenuScene::refreshQuickRetryStartButton() {
             {.percent = context.settings.selectedPlaybackRatePercent,
              .mode = context.settings.selectedPlaybackMode}) != AssistClearMark::None;
     const int rank = gaugeTypeToClearRank(gaugeClearTypeForProfile(type, rules.resolvedProfile));
-    if (physicalGauge) label = i18n::format("menu.selector.retry.gauge", {{"gauge", label}});
     groups.push_back({{{physicalGauge ? quick_retry::HurdleKind::Gauge : quick_retry::HurdleKind::Clear,
                         clearLampOrder(rank), label}}});
   }

@@ -53,8 +53,7 @@ public:
     setThemedBackgroundColors(enabled ? app_theme::warningAction : main_menu_theme::action,
         enabled ? app_theme::warningActionHover : main_menu_theme::actionHover,
         enabled ? app_theme::warningActionPressed : main_menu_theme::actionPressed);
-    setStyledBorderWidth(enabled ? 2 : 0);
-    setThemedBorderColors(main_menu_theme::warning, main_menu_theme::warning, main_menu_theme::warning);
+    setStyledBorderWidth(0);
     for (auto *text : {icon_, label_, summary_}) text->setThemedColor(main_menu_theme::onAction);
   }
 

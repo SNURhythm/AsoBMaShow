@@ -548,12 +548,12 @@ void testQuickRetrySummaryCollapsesActualHurdles() {
               hurdleText(summarizeHurdles({{{hard}}, {{clear}}}, true), "or") == "CLEAR",
           "comparable clear requirements follow the same strict/easy policy");
   const std::vector<HurdleAlternatives> mixed{{{hard}}, {{aaa}}, {{aa}, {clear}}};
-  require(hurdleText(summarizeHurdles(mixed, false), "or") == "HARD / AAA",
+  require(hurdleText(summarizeHurdles(mixed, false), "or") == "HARD + AAA",
           "a stricter score hurdle subsumes weaker alternative goals");
   const auto all = summarizeHurdles(mixed, true);
   require(hurdleText(all, "or") == "AA or CLEAR",
           "All-fail retains the weakest score and clear alternatives");
-  const Hurdle physical{HurdleKind::Gauge, 300, "NORMAL gauge"};
+  const Hurdle physical{HurdleKind::Gauge, 300, "NORMAL"};
   require(summarizeHurdles({{{physical}}, {{hard}}}, false).front().size() == 2,
           "auto-shift physical gauge checks are not conflated with a clear lamp");
   // Compare the simplified expression with the original groups at boundaries.
