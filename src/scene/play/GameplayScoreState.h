@@ -936,6 +936,17 @@ public:
     return recalledClearTypeRank_.value_or(clearTypeToRank(getClearType()));
   }
 
+  [[nodiscard]] int completedClearTypeRank(
+      int totalNotes, const audio::PlaybackRate &playback = {}) const {
+    if (assistClearMark || lightAssistClearMark) {
+      return clear_policy::capRankForPlayback(getClearTypeRank(), playback);
+    }
+    return clear_policy::completedClearRank(
+        getClearTypeRank(), totalNotes, judgeCount.at(PGreat),
+        judgeCount.at(Great), judgeCount.at(Good), judgeCount.at(Bad),
+        judgeCount.at(Poor), comboBreak, playback);
+  }
+
   [[nodiscard]] const char *getClearTypeLabel() const {
     return recalledClearTypeRank_ ? clearTypeRankToLabel(*recalledClearTypeRank_)
                                   : clearTypeToLabel(getClearType());

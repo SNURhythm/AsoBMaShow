@@ -1,6 +1,7 @@
 #pragma once
 
 #include "repositories/ReplayRepository.h"
+#include "ResultClearLamp.h"
 #include "scene/play/RhythmState.h"
 
 #include <algorithm>
@@ -37,10 +38,11 @@ inline int effectiveClearRank(const ReplaySummary &summary) {
                             summary.maxScore, summary.playback);
 }
 
-inline int effectiveClearRank(
-    const result_persistence::ChartScoreWrite &score) {
-  return effectiveClearRank(score.clearType, score.maxCombo, score.comboBreak,
-                            score.maxScore, score.provenance.playback);
+inline int effectiveClearRank(const result_persistence::ChartScoreWrite &score) {
+  return result_clear_lamp::effectiveRank(score);
+}
+inline int effectiveClearRank(const result_persistence::ModernCourseResult &result) {
+  return result_clear_lamp::effectiveRank(result);
 }
 
 } // namespace replay_clear_mark

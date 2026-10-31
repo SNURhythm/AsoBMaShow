@@ -1,4 +1,6 @@
 #include "ModernResult.h"
+#include "BeatorajaClearType.h"
+#include "ResultClearLamp.h"
 #include "DurablePayloadLimits.h"
 #include "replay/ReplayFileLifecycle.h"
 #include "replay/ReplayPlayback.h"
@@ -93,6 +95,80 @@ struct CompletionFixture {
     state.slowCount = 1;
   }
 };
+
+void testCompleteLampAwards() {
+  CompletionFixture fixture;
+  fixture.state.maxCombo = 5;
+  fixture.state.comboBreak = 0;
+  fixture.state.judgeCount[Poor] = 0;
+  fixture.state.judgeCount[Good] = 0;
+  fixture.state.judgeCount[PGreat] = 4;
+  const auto capture = [&] { return result_persistence::captureChartScoreWrite(
+      fixture.meta, fixture.state, fixture.provenance, 0).clearType; };
+  expect(capture() == 700, "complete PGREAT/GREAT result earns Perfect");
+  fixture.state.judgeCount[PGreat] = 5;
+  fixture.state.judgeCount[Great] = 0;
+  expect(capture() == 800, "all PGREAT result earns Max");
+  fixture.state.judgeCount[PGreat] = 4;
+  fixture.state.judgeCount[Good] = 1;
+  expect(capture() == 600, "GOOD retains Full Combo");
+  fixture.state.judgeCount[Good] = 0;
+  expect(capture() == 300, "missing judgments cannot prove completion");
+  fixture.state.judgeCount[PGreat] = 5;
+  fixture.state.setAssistClearMark(AssistClearMark::LightAssistedEasy);
+  expect(capture() == 50, "assisted Max stays Light Assist");
+  fixture.state.setAssistClearMark(AssistClearMark::AssistedEasy);
+  expect(capture() == 100, "assist mark cannot earn Max");
+  fixture.state.setAssistClearMark(AssistClearMark::None);
+  fixture.state.failUnfinishedAttempt();
+  expect(capture() == 0, "failed attempt cannot earn Max");
+}
+
+void testHistoricalAchievementProjectionPreservesFacts() {
+  auto historical = validChartResult();
+  auto &score = historical.score;
+  score.score = 9; score.maxScore = 10; score.maxCombo = 5;
+  score.comboBreak = 0; score.pGreat = 4; score.great = 1; score.good = 0;
+  score.clearType = 600;
+  historical.resultFingerprint = result_persistence::modernResultFingerprint(historical);
+  const auto original = historical;
+  expect(result_clear_lamp::effectiveRank(score) == 700, "historical Perfect projection");
+  expect(historical == original, "projection preserves canonical facts and fingerprint");
+  auto current = historical;
+  current.score.clearType = 700;
+  expect(result_persistence::compareModernChartResultFacts(historical, current).agrees(),
+         "historical replay agrees with the stronger derived lamp");
+  score.finalGauge = 0;
+  expect(result_clear_lamp::effectiveRank(score) == 600, "zero final gauge cannot prove Perfect");
+  score.finalGauge = 100;
+  score.pGreat = 0; score.great = 0;
+  expect(result_clear_lamp::effectiveRank(score) == 600, "missing judgment evidence retains FC");
+}
+
+void testCourseAchievementUsesAllStages() {
+  result_persistence::ModernCourseResult course;
+  course.completedCharts = course.totalCharts = 2;
+  course.maxScore = 20; course.finalScore = 19; course.maxCombo = 10;
+  course.finalGauge = 100; course.clearType = 600;
+  auto first = validScore();
+  first.maxScore = 10; first.score = 9; first.maxCombo = 5;
+  first.comboBreak = 0; first.pGreat = 4; first.great = 1; first.good = 0;
+  auto last = first;
+  last.score = 10; last.pGreat = 5; last.great = 0; last.maxCombo = 10;
+  last.clearType = 800;
+  course.stages = {{.score = first}, {.score = last}};
+  expect(result_clear_lamp::effectiveRank(course) == 700,
+         "Max final stage cannot override earlier GREAT");
+  course.stages[0].score = last;
+  course.finalScore = 20;
+  expect(result_clear_lamp::effectiveRank(course) == 800, "all PGREAT course earns Max");
+  course.stages[0].score.clearType = kClearTypeLightAssistedEasyClearRank;
+  expect(result_clear_lamp::effectiveRank(course) == kClearTypeLightAssistedEasyClearRank,
+         "earlier assisted stage caps the whole course");
+  course.stages[0].score.clearType = kClearTypeHardClearRank;
+  course.completedCharts = 1;
+  expect(result_clear_lamp::effectiveRank(course) == 600, "incomplete course is not promoted");
+}
 
 void testHistoricalTimingRemainsReadable() {
   auto historical = validChartResult();
@@ -477,6 +553,11 @@ void testCourseResultPrefixAndAggregateContracts() {
 } // namespace
 
 int main() {
+  expect(beatorajaSongClearType(700) == 9, "Perfect skin ID");
+  expect(beatorajaSongClearType(800) == 10, "Max skin ID");
+  testCompleteLampAwards();
+  testHistoricalAchievementProjectionPreservesFacts();
+  testCourseAchievementUsesAllStages();
   testHistoricalTimingRemainsReadable();
   testCapturePreservesFailedPmsBadPoints();
   testCapturePreservesExactAndEmptyPoorTiming();

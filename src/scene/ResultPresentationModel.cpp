@@ -111,6 +111,8 @@ bool knownLampRank(int rank) {
       kClearTypeHardClearRank,
       kClearTypeExHardClearRank,
       kClearTypeFullComboRank,
+      kClearTypePerfectRank,
+      kClearTypeMaxRank,
   };
   return std::ranges::find(ranks, normalizeClearLamp(rank)) != ranks.end();
 }

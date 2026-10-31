@@ -56,6 +56,8 @@ isKnownGaugeAutoShift(GaugeAutoShiftMode value) noexcept {
       kClearTypeHardClearRank,
       kClearTypeExHardClearRank,
       kClearTypeFullComboRank,
+      kClearTypePerfectRank,
+      kClearTypeMaxRank,
   };
   for (const int rank : ranks) {
     if (value == rank) {

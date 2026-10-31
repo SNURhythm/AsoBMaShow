@@ -861,6 +861,14 @@ int main() {
     return 1;
   }
 
+  // Autoplay achievement evidence must contain the note promised by metadata.
+  chart.Meta.KeyMode = 7;
+  auto *autoMeasure = new bms_parser::Measure();
+  auto *autoTimeline = new bms_parser::TimeLine(8, false);
+  autoTimeline->SetNote(0, new bms_parser::Note(0));
+  autoMeasure->TimeLines.push_back(autoTimeline);
+  chart.Measures.push_back(autoMeasure);
+
   const ReplayData autoExport = replay_autoplay::BuildReplayData(
       chart, GaugeType::Normal, GaugeAutoShiftMode::None, {.percent = 200},
       std::nullopt, std::nullopt, std::nullopt, std::nullopt,
@@ -936,8 +944,8 @@ int main() {
           assist_options::kBpmGuide ||
       constantTempoBpmGuideAutoSummary.assistOption !=
           assist_options::kBpmGuide ||
-      constantTempoBpmGuideAutoExport.clearType != kClearTypeFullComboRank ||
-      constantTempoBpmGuideAutoSummary.clearType != kClearTypeFullComboRank) {
+      constantTempoBpmGuideAutoExport.clearType != kClearTypeMaxRank ||
+      constantTempoBpmGuideAutoSummary.clearType != kClearTypeMaxRank) {
     std::cerr << "constant-tempo BPM Guide replays retain guide rendering "
                  "without an assisted clear"
               << std::endl;

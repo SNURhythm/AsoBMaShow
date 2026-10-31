@@ -118,7 +118,11 @@ inline int maximumClear(const GameplayScoreState &state, int remaining,
   const bool fullCombo = total > 0 && state.comboBreak == 0 &&
       projection.pendingClassicJudgements[Bad] == 0 &&
       std::max(state.maxCombo, state.combo + remaining) >= total;
-  return clear_policy::fullComboRankForPlayback(best, fullCombo, {});
+  if (state.assistClearMark || state.lightAssistClearMark || !fullCombo) return best;
+  const int good = state.judgeCount.at(Good) + projection.pendingClassicJudgements[Good];
+  const int great = state.judgeCount.at(Great) + projection.pendingClassicJudgements[Great];
+  return std::max(best, good != 0 ? kClearTypeFullComboRank
+      : great != 0 ? kClearTypePerfectRank : kClearTypeMaxRank);
 }
 
 inline bool shouldRetry(const GameplayScoreState &state, int totalNotes,

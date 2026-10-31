@@ -286,7 +286,7 @@ inline int courseStageClearRank(
                  state.getClearTypeRank() >= kClearTypeAssistedEasyClearRank &&
                  !state.assistClearMark && !state.lightAssistClearMark &&
                  playback.neutral()
-             ? kClearTypeFullComboRank
+             ? state.completedClearTypeRank(meta.TotalNotes, playback)
              : kNoClearTypeRank;
 }
 

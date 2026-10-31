@@ -107,6 +107,25 @@ void testLegacyLightAssistOwnerAgreement() {
          "normalization does not bypass original fingerprint validation");
 }
 
+void testHistoricalFullComboSnapshotPreservesBytes() {
+  auto owner = validResult();
+  owner.score.pGreat = 5; owner.score.great = 0; owner.score.good = 0;
+  owner.score.score = 10; owner.score.maxCombo = 5; owner.score.comboBreak = 0;
+  owner.score.clearType = 600;
+  owner.judgementTiming.reset();
+  owner.resultFingerprint = result_persistence::modernResultFingerprint(owner);
+  std::string diagnostic;
+  auto wire = nlohmann::ordered_json::parse(*ir::serializeIrSubmissionSnapshot(capture(owner), diagnostic));
+  wire["submission"]["clearType"] = 600;
+  refreshJsonFingerprint(wire);
+  const auto historical = ir::deserializeIrSubmissionSnapshot(
+      wire.dump(), wire["fingerprint"].get<std::string>(), diagnostic);
+  expect(historical.has_value(), "historical FC snapshot authenticates");
+  if (!historical) return;
+  expect(ir::serializeIrSubmissionSnapshot(*historical, owner, diagnostic) == wire.dump(),
+         "historical FC snapshot retains bytes despite derived Max");
+}
+
 void testCaptureAndReplayIndependence() {
   const auto result = validResult();
   const auto snapshot = capture(result);
@@ -326,6 +345,7 @@ void testStrictValidationAndBounds() {
 } // namespace
 
 int main() {
+  testHistoricalFullComboSnapshotPreservesBytes();
   testLegacyLightAssistOwnerAgreement();
   testCaptureAndReplayIndependence();
   testCaptureUsesEffectiveFullComboClearRank();

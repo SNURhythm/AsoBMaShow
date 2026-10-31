@@ -140,6 +140,8 @@ int beatorajaClearTypeImageIndex(int rank) noexcept {
   case kClearTypeHardClearRank: return 6;
   case kClearTypeExHardClearRank: return 7;
   case kClearTypeFullComboRank: return 8;
+  case kClearTypePerfectRank: return 9;
+  case kClearTypeMaxRank: return 10;
   default: return 0;
   }
 }
@@ -373,14 +375,6 @@ std::optional<int> ResultSkinStateBridge::currentClearRank() const {
 std::optional<int> ResultSkinStateBridge::currentClearImageIndex() const {
   const auto rank = currentClearRank();
   if (!rank) return std::nullopt;
-  if (data_.courseMode && !data_.courseResult &&
-      *rank == kClearTypeFullComboRank && data_.state) {
-    // Native storage has one FC rank; Beatoraja's current ScoreData also
-    // distinguishes Perfect (no GOOD) and Max (all PGREAT).
-    if (count(Good).value_or(0) == 0) {
-      return count(Great).value_or(0) == 0 ? 10 : 9;
-    }
-  }
   return beatorajaClearTypeImageIndex(*rank);
 }
 

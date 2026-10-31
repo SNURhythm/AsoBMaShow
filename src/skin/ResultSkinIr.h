@@ -32,6 +32,8 @@ struct RankingData {
 
 inline int clearIndex(int rank) {
   rank = normalizeClearLamp(rank);
+  if (rank >= kClearTypeMaxRank) return 10;
+  if (rank >= kClearTypePerfectRank) return 9;
   if (rank >= kClearTypeFullComboRank) return 8;
   if (rank >= kClearTypeExHardClearRank) return 7;
   if (rank >= kClearTypeHardClearRank) return 6;

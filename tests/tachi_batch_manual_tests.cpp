@@ -664,6 +664,8 @@ void testMapsEveryLamp() {
       std::pair{kClearTypeHardClearRank, "HARD CLEAR"},
       std::pair{kClearTypeExHardClearRank, "EX HARD CLEAR"},
       std::pair{kClearTypeFullComboRank, "FULL COMBO"},
+      std::pair{kClearTypePerfectRank, "FULL COMBO"},
+      std::pair{kClearTypeMaxRank, "FULL COMBO"},
   };
   for (const auto &[rank, expectedLamp] : cases) {
     auto submission = validSubmission();

@@ -77,7 +77,7 @@ std::optional<int> parseRate(std::string_view text) {
   return value > 0 && value <= 10000 ? std::optional<int>(value) : std::nullopt;
 }
 void validate(const Target &target) {
-  constexpr std::array lamps{-1, 50, 100, 200, 300, 400, 500, 600};
+  constexpr std::array lamps{-1, 50, 100, 200, 300, 400, 500, 600, 700, 800};
   if (std::find(lamps.begin(), lamps.end(), target.lamp) == lamps.end() ||
       target.scoreDenominator < 1 || target.scoreDenominator > 10000 ||
       target.scoreNumerator < 0 || target.scoreNumerator > target.scoreDenominator ||

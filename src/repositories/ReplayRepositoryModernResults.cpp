@@ -4,6 +4,7 @@
 #include "ReplayRepositoryIrRows.h"
 
 #include "../ProfileDatabaseActivity.h"
+#include "../ResultClearLamp.h"
 #include "../Uuid.h"
 #include "../ir/IrSubmissionSnapshot.h"
 #include "../replay/ReplayFormat.h"
@@ -3271,7 +3272,7 @@ ReplayRepository::LoadIrReconciliationCandidates(
         .chartMd5 = source.result.score.chartMd5,
         .chartSha256 = source.result.score.chartSha256,
         .score = source.result.score.score,
-        .lampRank = source.result.score.clearType,
+        .lampRank = result_clear_lamp::effectiveRank(source.result.score),
         .eligible = ir::isSubmissionEligibleForProvider(
             providerId, source.snapshot.submission),
         .currentReceipt = std::move(source.receipt),
