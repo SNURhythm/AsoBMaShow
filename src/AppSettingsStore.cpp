@@ -814,6 +814,15 @@ void readStoragePreferences(const json &document,
 }
 
 json settingsToJson(const AppSettings &settings) {
+  const AppSettings::AudioTimingProfile currentTiming{
+      settings.audioOffsetMs, settings.visualOffsetMs, settings.inputKeysoundEnabled};
+  auto timingProfiles = settings.audioTimingProfiles.value_or(std::array{currentTiming, currentTiming});
+  timingProfiles[settings.bluetoothAudioTimingActive() ? 1 : 0] = currentTiming;
+  const auto timingJson = [](const AppSettings::AudioTimingProfile &profile) {
+    return json{{"audioOffsetMs", profile.audioOffsetMs},
+                {"visualOffsetMs", profile.visualOffsetMs},
+                {"inputKeysoundEnabled", profile.inputKeysoundEnabled}};
+  };
   json document = {
       {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
       {"storagePreferences", {
@@ -821,6 +830,9 @@ json settingsToJson(const AppSettings &settings) {
           {"download", storagePolicyToJson(settings.storagePreferences.download)},
           {"afterDownload", settings.storagePreferences.afterDownload}}},
       {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
+      {"audioTimingProfiles", {
+          {"nonBluetooth", timingJson(timingProfiles[0])},
+          {"bluetooth", timingJson(timingProfiles[1])}}},
       {"audioOffsetMs", settings.audioOffsetMs},
       {"visualOffsetMs", settings.visualOffsetMs},
       {"visibleTimeDurationMilliseconds",
@@ -1178,6 +1190,31 @@ AppSettings settingsFromJson(const json &document,
   readEnum(document, "hispeedFixMode", settings.hispeedFixMode, diagnostics);
   readValue(document, "inputKeysoundEnabled", settings.inputKeysoundEnabled,
             diagnostics);
+  // Seed BOTH categories before reading overrides, including partially missing
+  // documents. The runtime output selects a category after the device opens.
+  settings.captureAudioTimingProfile();
+  if (const auto profiles = document.find("audioTimingProfiles"); profiles != document.end()) {
+    if (profiles->is_object()) {
+      for (const auto &[name, index] : {std::pair{"nonBluetooth", 0}, std::pair{"bluetooth", 1}}) {
+        if (const auto block = profiles->find(name); block != profiles->end()) {
+          if (!block->is_object()) {
+            invalidValue(name, "expected audio timing profile object", diagnostics);
+            continue;
+          }
+          auto &profile = (*settings.audioTimingProfiles)[index];
+          readValue(*block, "audioOffsetMs", profile.audioOffsetMs, diagnostics);
+          readValue(*block, "visualOffsetMs", profile.visualOffsetMs, diagnostics);
+          readValue(*block, "inputKeysoundEnabled", profile.inputKeysoundEnabled, diagnostics);
+        }
+      }
+    } else {
+      invalidValue("audioTimingProfiles", "expected object", diagnostics);
+    }
+  }
+  const auto &initialTiming = (*settings.audioTimingProfiles)[0];
+  settings.audioOffsetMs = initialTiming.audioOffsetMs;
+  settings.visualOffsetMs = initialTiming.visualOffsetMs;
+  settings.inputKeysoundEnabled = initialTiming.inputKeysoundEnabled;
   readValue(document, "prepMetronomeEnabled", settings.prepMetronomeEnabled,
             diagnostics);
   readValue(document, "prepMetronomeMaxDurationMilliseconds",

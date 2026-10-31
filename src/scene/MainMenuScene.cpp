@@ -4965,6 +4965,7 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
+  context.refreshAudioTimingProfile(true);
   auto session = buildCourseGameplaySession(
       {.courseId = activeFolder.courseId,
        .courseKey = activeFolder.courseKey,
@@ -5184,6 +5185,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   const GaugeType gaugeAutoShiftLowerBound =
       profileSelections.gaugeAutoShiftLowerBound;
   const GameplayRuleset ruleset = profileSelections.ruleset;
+  context.refreshAudioTimingProfile(true);
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const std::string playOption = profileSelections.playOption;
   int selectedLongNoteMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
@@ -7768,6 +7770,7 @@ void MainMenuScene::startModernGBattlePlayback(
   const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
   const GaugeType gaugeAutoShiftLowerBound =
       profileSelections.gaugeAutoShiftLowerBound;
+  context.refreshAudioTimingProfile(true);
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const GameplayRuleset ruleset = profileSelections.ruleset;
   const audio::PlaybackRate playback{
@@ -8716,6 +8719,7 @@ bool MainMenuScene::needsContinuousPresentation() const {
 }
 
 void MainMenuScene::update(float dt) {
+  context.refreshAudioTimingProfile();
   if (!applyPendingTabSwitch()) return;
   if (!context.pendingKomboNotificationProfile.empty()) {
     const auto profile = std::exchange(context.pendingKomboNotificationProfile, {});

@@ -9,6 +9,9 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
+
+std::optional<bool> IOSAudioOutputIsBluetooth();
 #include <stop_token>
 #include <string>
 #include <vector>

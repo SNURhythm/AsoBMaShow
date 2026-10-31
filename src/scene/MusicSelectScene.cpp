@@ -2278,6 +2278,7 @@ void MusicSelectScene::tryCompletePendingPreloadLaunch() {
       main_menu_profile::Selections::fromSettings(context.settings);
   const auto snapshot = bars_.readView();
   const auto tableContext = musicSelectTableContextForLaunch(snapshot);
+  context.refreshAudioTimingProfile(true);
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const bool doublePlayFlip = context.settings.skinDoublePlayOption == 1;
   const audio::PlaybackRate playback{
@@ -2451,6 +2452,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
   const auto tableContext = musicSelectTableContextForLaunch(snapshot);
+  context.refreshAudioTimingProfile(true);
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const bool doublePlayFlip = context.settings.skinDoublePlayOption == 1;
   const audio::PlaybackRate playback{
@@ -2631,6 +2633,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
   if (launching_ || bar.courseCharts.empty() || !bar.presentation.exists) {
     return;
   }
+  context.refreshAudioTimingProfile(true);
   auto session = buildCourseGameplaySession(
       {.courseId = bar.courseId,
        .courseKey = bar.courseKey,
@@ -3400,6 +3403,7 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
+  context.refreshAudioTimingProfile();
   if (!context.pendingKomboNotificationProfile.empty() &&
       toolbarControlAvailable(MusicSelectToolbarControl::Kombo)) {
     const auto profile = std::exchange(context.pendingKomboNotificationProfile, {});

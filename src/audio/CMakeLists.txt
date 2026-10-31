@@ -1,4 +1,4 @@
-target_sources(main PRIVATE AudioBackend.cpp AudioDeviceManager.cpp AudioMix.cpp
+target_sources(main PRIVATE AudioBackend.cpp DesktopAudioRoute.cpp LinuxAudioRoute.cpp AudioDeviceManager.cpp AudioMix.cpp
                             ChartVisualAssetResolver.cpp
                             AudioWrapper.cpp ChartAudioRenderer.cpp
                             MusicPreparation.cpp ClubBeat.cpp decoder.cpp DecodedAssetCache.cpp

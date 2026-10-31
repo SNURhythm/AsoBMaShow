@@ -157,6 +157,7 @@ bool SettingsScene::canPrepareForStorageMaintenance(std::string &error) {
 }
 
 void SettingsScene::init() {
+  context.refreshAudioTimingProfile(true);
   lastLayoutWidth = -1;
   ensureProfileController();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -239,6 +240,14 @@ bool SettingsScene::needsContinuousPresentation() const {
 }
 
 void SettingsScene::update(float dt) {
+  // Finish calibration and text edits under the profile they began with.
+  if (!calibrationActive && (!offsetInput || !offsetInput->getSelected()) &&
+      (!visualOffsetInput || !visualOffsetInput->getSelected()) &&
+      context.refreshAudioTimingProfile()) {
+    lastLayoutWidth = -1;
+    refreshSettingsText();
+    refreshAudioDiagnostics(true);
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateGameplaySkinSettingsController();
   applyPendingSoundSetFolderPick();

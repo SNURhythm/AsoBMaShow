@@ -261,6 +261,14 @@ else()
         list(APPEND COMMON_LIBS portaudio)
     endif()
 
+    if(WIN32)
+        list(APPEND COMMON_LIBS cfgmgr32 ole32 uuid)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+        list(APPEND COMMON_LIBS PkgConfig::PIPEWIRE)
+    endif()
+
     # libcurl for desktop difficulty table downloads
     find_package(CURL REQUIRED)
     list(APPEND COMMON_LIBS CURL::libcurl)
@@ -4991,6 +4999,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(audio_wrapper_lifecycle_tests
         tests/audio_wrapper_lifecycle_tests.cpp
         src/audio/AudioBackend.cpp
+        src/audio/DesktopAudioRoute.cpp
+        src/audio/LinuxAudioRoute.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
         src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp
@@ -5043,6 +5053,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/MinizBridge.c
         src/Utils.cpp
         src/audio/AudioBackend.cpp
+        src/audio/DesktopAudioRoute.cpp
+        src/audio/LinuxAudioRoute.cpp
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
@@ -5116,6 +5128,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(video_decode_state_tests PRIVATE cxx_std_23)
+
+    add_executable(audio_route_graph_tests tests/audio_route_graph_tests.cpp)
+    target_include_directories(audio_route_graph_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(audio_route_graph_tests PRIVATE cxx_std_23)
 
     add_executable(audio_device_manager_tests
         tests/audio_device_manager_tests.cpp
@@ -6614,6 +6630,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/MinizBridge.c
         src/Utils.cpp
         src/audio/AudioBackend.cpp
+        src/audio/DesktopAudioRoute.cpp
+        src/audio/LinuxAudioRoute.cpp
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
@@ -9166,6 +9184,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES TIMEOUT 15)
     asobmashow_register_test(skin_sound_bundle_decode_tests foundation_av_skin_sound_bundle_decode)
     set_tests_properties(foundation_av_skin_sound_bundle_decode PROPERTIES TIMEOUT 15)
+    asobmashow_register_test(audio_route_graph_tests)
     asobmashow_register_test(audio_device_manager_tests foundation_av_audio_device)
     asobmashow_register_test(jukebox_restore_tests foundation_av_jukebox_restore)
     set_tests_properties(foundation_av_jukebox_restore PROPERTIES TIMEOUT 30)

@@ -74,6 +74,23 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
+    // deviceId comes from the active AAudio stream, not the connected-device list.
+    public int audioOutputBluetoothType(int deviceId) {
+        AudioManager manager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (manager == null) return -1;
+        for (android.media.AudioDeviceInfo device : manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)) {
+            if (device.getId() != deviceId) continue;
+            int type = device.getType();
+            return type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+                    || type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                    || type == android.media.AudioDeviceInfo.TYPE_HEARING_AID
+                    || type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET
+                    || type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER
+                    || type == android.media.AudioDeviceInfo.TYPE_BLE_BROADCAST ? 1 : 0;
+        }
+        return -1;
+    }
+
     // UI-thread fields; each JNI-owned document gates its own queued work.
     NativeDocumentView nativeDocumentView;
     boolean nativeDocumentDestroyed;

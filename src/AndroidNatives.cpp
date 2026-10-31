@@ -126,6 +126,22 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeAcquireRawTouchGesture(
   return static_cast<jlong>(input::android::RawTouchRegistration::activeEpoch());
 }
 
+std::optional<bool> AndroidAudioOutputIsBluetooth(int deviceId) {
+  if (deviceId <= 0) return std::nullopt;
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  if (!env) return std::nullopt;
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+  if (!activity) return std::nullopt;
+  auto cls = env->GetObjectClass(activity);
+  const auto method = cls ? env->GetMethodID(cls, "audioOutputBluetoothType", "(I)I") : nullptr;
+  int result = -1;
+  if (method) result = env->CallIntMethod(activity, method, deviceId);
+  if (env->ExceptionCheck()) { env->ExceptionClear(); result = -1; }
+  if (cls) env->DeleteLocalRef(cls);
+  env->DeleteLocalRef(activity);
+  return result < 0 ? std::nullopt : std::optional<bool>(result != 0);
+}
+
 namespace {
 
 std::mutex gMusicStreamMutex;

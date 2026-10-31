@@ -1,4 +1,5 @@
 #include "AudioBackend.h"
+#include "DesktopAudioRoute.h"
 #include "../StableHash.h"
 
 #include "../targets.h"
@@ -6,6 +7,12 @@
 #include <miniaudio.h>
 #if TARGET_OS_IPHONE
 #include "../input/AppleInputTimestamp.h"
+#include "../iOSNatives.hpp"
+#endif
+
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#include <dlfcn.h>
 #endif
 
 #include <algorithm>
@@ -155,6 +162,14 @@ public:
     // opened route's hardware burst. The backend reapplies this on reroutes.
     config.aaudio.bufferSizeInBursts = 2;
 #endif
+#if TARGET_OS_ANDROID
+    config.notificationCallback = [](const ma_device_notification *notification) {
+      auto *self = static_cast<MiniaudioStream *>(notification->pDevice->pUserData);
+      if (notification->type == ma_device_notification_type_rerouted ||
+          notification->type == ma_device_notification_type_started)
+        self->captureAndroidOutputId();
+    };
+#endif
     config.dataCallback = &MiniaudioStream::dataCallback;
     config.pUserData = this;
 
@@ -194,6 +209,9 @@ public:
       return;
     }
     initialized_ = true;
+#if TARGET_OS_ANDROID
+    captureAndroidOutputId();
+#endif
 #if TARGET_OS_IPHONE
     if (device_.pContext->backend == ma_backend_coreaudio) {
       device_.coreaudio.outputBoundaryCallback = &MiniaudioStream::outputBoundary;
@@ -283,8 +301,35 @@ public:
   }
 
   [[nodiscard]] RuntimeState runtimeState() const override { return callbackFormat_.read(state_); }
+  [[nodiscard]] std::optional<bool> outputIsBluetooth(bool = false) const override {
+#if TARGET_OS_IPHONE
+    return IOSAudioOutputIsBluetooth();
+#elif TARGET_OS_ANDROID
+    return AndroidAudioOutputIsBluetooth(androidOutputId_.load());
+#else
+    return std::nullopt;
+#endif
+  }
+
 
 private:
+#if TARGET_OS_ANDROID
+  // Capture only while the backend owns a stable stream (initialization or
+  // start/reroute notification); polling the raw stream can race its replacement.
+  void captureAndroidOutputId() {
+    int id = -1;
+    if (device_.pContext && device_.pContext->backend == ma_backend_aaudio &&
+        device_.aaudio.pStreamPlayback) {
+      using GetDeviceId = int32_t (*)(void *);
+      auto query = reinterpret_cast<GetDeviceId>(dlsym(device_.pContext->aaudio.hAAudio,
+                                                      "AAudioStream_getDeviceId"));
+      if (query) id = query(device_.aaudio.pStreamPlayback);
+    }
+    androidOutputId_.store(id);
+  }
+  std::atomic<int> androidOutputId_{-1};
+#endif
+
 #if TARGET_OS_IPHONE
   static void outputBoundary(ma_device *device, ma_bool32 begin,
                               ma_uint32 frameCount) {
@@ -585,6 +630,10 @@ public:
   }
 
   [[nodiscard]] RuntimeState runtimeState() const override { return callbackFormat_.read(state_); }
+  [[nodiscard]] std::optional<bool> outputIsBluetooth(bool refresh = false) const override {
+    return desktopOutputIsBluetooth(stream_, refresh);
+  }
+
 
 private:
   static int callback(const void *, void *output, unsigned long frameCount,

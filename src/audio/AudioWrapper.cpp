@@ -642,6 +642,10 @@ public:
             .diagnostic = std::move(error)};
   }
 
+  [[nodiscard]] std::optional<bool> outputIsBluetooth(bool refresh) const {
+    return backend_ ? backend_->outputIsBluetooth(refresh) : std::nullopt;
+  }
+
   [[nodiscard]] audio::RuntimeState runtimeState() const {
     return backend_ == nullptr ? audio::RuntimeState{}
                                : backend_->runtimeState();
@@ -2055,6 +2059,13 @@ audio::Capabilities AudioWrapper::capabilities() const {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
   return backendFactory != nullptr ? backendFactory->capabilities()
                                    : audio::Capabilities{};
+}
+
+std::optional<bool> AudioWrapper::outputIsBluetooth(bool refresh) const {
+  std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  if (const auto *configurable = dynamic_cast<const ConfigurableBackendLifecycle *>(backend.get()))
+    return configurable->outputIsBluetooth(refresh);
+  return std::nullopt;
 }
 
 audio::RuntimeState AudioWrapper::runtimeState() const {

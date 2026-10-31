@@ -32,6 +32,7 @@ asobmashow_label_tests(area_app
 )
 
 asobmashow_label_tests(area_audio
+    audio_route_graph_tests
     android_audio_latency_tests
     android_native_music_focus_tests
     android_sound_picker_admission_tests

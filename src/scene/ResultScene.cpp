@@ -4344,6 +4344,7 @@ bool ResultScene::needsContinuousPresentation() const {
 }
 
 void ResultScene::update(float dt) {
+  context.refreshAudioTimingProfile();
   if (presentationSkinRefreshPending
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
       && (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())

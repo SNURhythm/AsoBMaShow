@@ -739,6 +739,8 @@ void SettingsScene::refreshAudioDiagnostics(bool force) {
   if (audioEffectiveText != nullptr) {
     std::ostringstream text;
     text << i18n::tr("settings.audio.output.prefix") << audioModel.effectiveDeviceLabel << "\n";
+    text << i18n::tr(context.settings.bluetoothAudioTimingActive()
+        ? "settings.audio.timing_profile.bluetooth" : "settings.audio.timing_profile.other") << "\n";
     if (audioModel.effectiveSampleRate > 0) {
       text << i18n::format("settings.audio.format.message",
                            {{"rate", std::to_string(audioModel.effectiveSampleRate)}});

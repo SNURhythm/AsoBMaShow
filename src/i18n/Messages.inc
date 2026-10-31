@@ -1405,6 +1405,8 @@
 {"settings.audio.sound_played.message", "Sound played.", "소리를 재생했습니다.", "音声を再生しました。", "已播放声音。", "已播放聲音。"},
 {"settings.audio.still_initializing.message", "Still initializing.", "초기화 중입니다.", "初期化中です。", "仍在初始化。", "仍在初始化。"},
 {"settings.audio.test_sound.label", "Test Sound", "소리 테스트", "テスト音を再生", "测试声音", "測試聲音"},
+{"settings.audio.timing_profile.bluetooth", "Timing / keysound profile: Bluetooth", "타이밍 / 키음 프로필: 블루투스", "タイミング / キー音プロファイル: Bluetooth", "时序 / 键音配置：蓝牙", "時序 / 鍵音設定：藍牙"},
+{"settings.audio.timing_profile.other", "Timing / keysound profile: Non-Bluetooth", "타이밍 / 키음 프로필: 블루투스 외", "タイミング / キー音プロファイル: Bluetooth以外", "时序 / 键音配置：非蓝牙", "時序 / 鍵音設定：非藍牙"},
 {"settings.audio.try_again_shortly.message", "Try again shortly.", "잠시 후 다시 시도하세요.", "しばらくしてから再試行してください。", "请稍后重试。", "請稍後重試。"},
 {"settings.audio.unknown.label", "Unknown", "알 수 없음", "不明", "未知", "未知"},
 {"settings.audio.volume.bgm.label", "BGM (%)", "배경음 (%)", "BGM (%)", "BGM (%)", "BGM (%)"},
@@ -2576,5 +2578,6 @@
 {"tutorial.replay.label", "Tutorial", "튜토리얼", "チュートリアル", "教程", "教學"},
 {"tutorial.save.error", "Could not save your choice. Please try again.", "선택한 내용을 저장하지 못했습니다. 다시 시도해 주세요.", "選択を保存できませんでした。もう一度お試しください。", "无法保存你的选择。请重试。", "無法儲存你的選擇。請再試一次。"},
 {"tutorial.tables.body", "Choose a difficulty table here, then choose a level to browse its songs. Tables also show songs you have not downloaded yet.", "여기서 난이도표를 펼치고 레벨을 선택하면 곡 목록을 볼 수 있습니다. 아직 다운로드하지 않은 곡도 표시됩니다.", "ここで難易度表を開き、レベルを選ぶと曲の一覧が表示されます。まだダウンロードしていない曲も探せます。", "在此选择难度表，再选择等级以浏览歌曲。难度表也会显示尚未下载的歌曲。", "在此選擇難度表，再選擇等級以瀏覽歌曲。難度表也會顯示尚未下載的歌曲。"},
+
 {"tutorial.tables.title", "Browse difficulty tables", "난이도표에서 곡 찾기", "難易度表から曲を探す", "浏览难度表", "瀏覽難度表"},
 {"tutorial.welcome.title", "Welcome to AsoBMaShow", "AsoBMaShow에 오신 것을 환영합니다", "AsoBMaShowへようこそ", "欢迎来到 AsoBMaShow", "歡迎來到 AsoBMaShow"},
