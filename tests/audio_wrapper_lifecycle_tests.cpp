@@ -3502,6 +3502,13 @@ void testSharedOutputPreservesFloatHeadroomAndCallbackTiming() {
   require(first.calls == std::vector<std::pair<std::int64_t, unsigned>>{
               {1'000'000, 4096}, {1'092'879, 904}} && first.calls == second.calls,
           "bounded submix chunks preserve each frame's native presentation time");
+  control->timingCallback({.fallbackSteadyMicros = 2'000'000}, control->timingUserData);
+  control->renderCallback(pcm.data(), 5000, 2, control->renderUserData);
+  require(!first.timing.outputTimestampKnown && !second.timing.outputTimestampKnown &&
+              first.timing.outputSteadyMicros == 0 &&
+              first.timing.fallbackSteadyMicros == 2'092'879 &&
+              second.timing.fallbackSteadyMicros == first.timing.fallbackSteadyMicros,
+          "both submixes receive offset fallback timing without a fabricated hardware timestamp");
   control->events.clear();
   require(a->stop(error), "one node can stop");
   control->renderCallback(pcm.data(), 1, 2, control->renderUserData);
@@ -3630,42 +3637,71 @@ void testApplicationAudioRecoversInitialDeviceStartFailure() {
           "startup recovery selects the saved output without concurrent native streams");
 }
 
-void testSharedGameplayMatchesStandaloneSamplesAndNativeTimeline() {
+void testSharedGameplayMatchesStandaloneSamplesAndTimeline() {
+  for (const bool nativeTiming : {false, true}) {
+    for (const int speed : {50, 100, 200}) {
+      Stopwatch directClock, sharedClock;
+      auto directControl = std::make_shared<FactoryControl>();
+      auto sharedControl = std::make_shared<FactoryControl>();
+      AudioWrapper standalone(&directClock, std::make_unique<FakeConfigurableFactory>(directControl));
+      audio::ApplicationAudio audio(&sharedClock, std::make_unique<FakeConfigurableFactory>(sharedControl));
+      auto &shared = audio.gameplay();
+      std::vector<short> wave(20000);
+      for (std::size_t i = 0; i < wave.size(); ++i) wave[i] = static_cast<short>((i % 100) * 200 - 10000);
+      for (auto *processor : {&standalone, &shared}) {
+        require(processor->loadGeneratedSound(PATH("timing-wave"), wave, 1, 44100) &&
+                    processor->stopSounds().success, "timing fixture prepares chart PCM");
+        std::string error;
+        require(processor->setPlaybackRate({.percent = speed}, error), "timing fixture selects speed");
+        require(processor->stageScheduledSound(PATH("timing-wave"), audio::Bus::Bgm, 113) &&
+                    processor->stageScheduledSound(PATH("timing-wave"), audio::Bus::Keysound, 92'891) &&
+                    processor->startDevice().success, "onsets straddle an oversized callback chunk");
+        processor->seekClock(0);
+      }
+      directClock.start(); sharedClock.start();
+      const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      const auto origin = now + 10000;
+      const audio::RenderTiming timing{.outputSteadyMicros = nativeTiming ? origin : 0,
+          .outputTimestampKnown = nativeTiming, .fallbackSteadyMicros = nativeTiming ? 0 : origin};
+      directControl->timingCallback(timing, directControl->timingUserData);
+      sharedControl->timingCallback(timing, sharedControl->timingUserData);
+      std::vector<short> expected(5000 * 2), actual(5000 * 2);
+      directControl->renderCallback(expected.data(), 5000, 2, directControl->renderUserData);
+      sharedControl->renderCallback(actual.data(), 5000, 2, sharedControl->renderUserData);
+      require(actual == expected, "shared output does not add, drop, delay or change gameplay samples");
+      for (const long long offset : {0LL, 1000LL, 92880LL, 100000LL}) {
+        const auto directTime = standalone.songTimeMicrosAtSteadyMicros(origin + offset);
+        const auto sharedTime = shared.songTimeMicrosAtSteadyMicros(origin + offset);
+        require(directTime && sharedTime && std::abs(*directTime - *sharedTime) <= 2,
+                "shared output preserves native and fallback chart-time mapping within integer microsecond rounding");
+      }
+      require(static_cast<UserData *>(directControl->renderUserData)->audioPresentationSegmentCount.load() ==
+                  (nativeTiming ? 1U : 0U),
+              "software fallback does not fabricate native presentation history");
+    }
+  }
+}
+
+void testSharedUnknownTimingKeepsNativeCallbackClockOrigin() {
   for (const int speed : {50, 100, 200}) {
-    Stopwatch directClock, sharedClock;
-    auto directControl = std::make_shared<FactoryControl>();
-    auto sharedControl = std::make_shared<FactoryControl>();
-    AudioWrapper standalone(&directClock, std::make_unique<FakeConfigurableFactory>(directControl));
-    audio::ApplicationAudio audio(&sharedClock, std::make_unique<FakeConfigurableFactory>(sharedControl));
-    auto &shared = audio.gameplay();
-    std::vector<short> wave(20000);
-    for (std::size_t i = 0; i < wave.size(); ++i) wave[i] = static_cast<short>((i % 100) * 200 - 10000);
-    for (auto *processor : {&standalone, &shared}) {
-      require(processor->loadGeneratedSound(PATH("timing-wave"), wave, 1, 44100) &&
-                  processor->stopSounds().success, "timing fixture prepares chart PCM");
-      std::string error;
-      require(processor->setPlaybackRate({.percent = speed}, error), "timing fixture selects speed");
-      require(processor->stageScheduledSound(PATH("timing-wave"), audio::Bus::Bgm, 113) &&
-                  processor->stageScheduledSound(PATH("timing-wave"), audio::Bus::Keysound, 92'891) &&
-                  processor->startDevice().success, "onsets straddle an oversized callback chunk");
-      processor->seekClock(0);
-    }
-    directClock.start(); sharedClock.start();
-    const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+    Stopwatch clock;
+    auto control = std::make_shared<FactoryControl>();
+    audio::ApplicationAudio audio(&clock, std::make_unique<FakeConfigurableFactory>(control));
+    auto &gameplay = audio.gameplay();
+    require(gameplay.stopSounds().success, "stop gameplay to configure fallback clock rate");
+    std::string error;
+    require(gameplay.setPlaybackRate({.percent = speed}, error) &&
+                gameplay.startDevice().success, "configure fallback clock rate");
+    gameplay.seekClock(1'000'000);
+    clock.start();
+    std::vector<short> pcm(5000 * 2);
+    const auto before = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    const audio::RenderTiming timing{.outputSteadyMicros = now + 10000, .outputTimestampKnown = true};
-    directControl->timingCallback(timing, directControl->timingUserData);
-    sharedControl->timingCallback(timing, sharedControl->timingUserData);
-    std::vector<short> expected(5000 * 2), actual(5000 * 2);
-    directControl->renderCallback(expected.data(), 5000, 2, directControl->renderUserData);
-    sharedControl->renderCallback(actual.data(), 5000, 2, sharedControl->renderUserData);
-    require(actual == expected, "shared output does not add, drop, delay or change gameplay samples");
-    for (const long long offset : {0LL, 1000LL, 92880LL, 100000LL}) {
-      const auto directTime = standalone.songTimeMicrosAtSteadyMicros(timing.outputSteadyMicros + offset);
-      const auto sharedTime = shared.songTimeMicrosAtSteadyMicros(timing.outputSteadyMicros + offset);
-      require(directTime && sharedTime && std::abs(*directTime - *sharedTime) <= 2,
-              "shared output preserves native chart-time mapping within integer microsecond rounding");
-    }
+    control->renderCallback(pcm.data(), 5000, 2, control->renderUserData);
+    const auto mapped = gameplay.songTimeMicrosAtSteadyMicros(before);
+    require(mapped && *mapped <= 1'000'002,
+            "unknown-time oversized callback must not shift the clock ahead by its final chunk");
   }
 }
 
@@ -3736,8 +3772,9 @@ int runRenderBenchmark() {
 int main(int argc, char **argv) {
   try {
     if (argc == 2 && std::string_view(argv[1]) == "--benchmark") return runRenderBenchmark();
+    testSharedUnknownTimingKeepsNativeCallbackClockOrigin();
     testApplicationAudioRecoversInitialDeviceStartFailure();
-    testSharedGameplayMatchesStandaloneSamplesAndNativeTimeline();
+    testSharedGameplayMatchesStandaloneSamplesAndTimeline();
     testSystemLoadRevalidatesRateAfterConcurrentOutputChange();
     testSubmixStopWaitsForItsActiveCallbackWithoutStoppingDevice();
     testChartUnloadLeavesSystemPlaybackRunning();

@@ -5468,7 +5468,7 @@ void GamePlayScene::playQuickRetryFeedback() {
   if (feedback.sound) {
     auto &audio = context.systemAudio();
     audio.stopSkinSound(*feedback.sound);
-    audio.playSkinSound(*feedback.sound, 1.0F, false);
+    audio.playSkinSound(*feedback.sound, context.settings.audioVideo.audio.masterVolume, false);
   }
 }
 

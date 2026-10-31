@@ -37,7 +37,10 @@ same native callback; there is no intermediate audio queue, extra output period,
 or worker handoff. Gameplay writes directly into the float output buffer and an
 idle system submix does no per-sample copying. An active system submix adds its
 samples before the final clip/conversion. Native presentation timestamps and
-sample scheduling remain authoritative. Device reconfiguration suspends both
+sample scheduling remain authoritative. Oversized callbacks without a native
+presentation timestamp use one fallback wall-clock origin plus each chunk's
+frame offset; this fallback never becomes native presentation history.
+Device reconfiguration suspends both
 processors, converts retained PCM before restarting output, and supports rollback.
 A submix stop closes its render gate and waits on the control thread for an
 already admitted callback; the callback never waits on that gate.

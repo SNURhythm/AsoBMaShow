@@ -463,8 +463,10 @@ long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
 
   const bool nativeTiming = userData->pendingRenderTiming.outputTimestampKnown &&
                             userData->pendingRenderTiming.outputSteadyMicros > 0;
+  const auto fallbackMicros = userData->pendingRenderTiming.fallbackSteadyMicros;
   const auto wallMicros = nativeTiming
-      ? userData->pendingRenderTiming.outputSteadyMicros : nowMicros();
+      ? userData->pendingRenderTiming.outputSteadyMicros
+      : fallbackMicros > 0 ? fallbackMicros : nowMicros();
   publishAudioClockAnchor(userData,
                           {.micros = bufferStartMicros,
                            .wallMicros = wallMicros,

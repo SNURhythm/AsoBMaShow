@@ -55,6 +55,9 @@ enum class RenderFormat { Signed16, Float32, Float32Additive };
 struct RenderTiming {
   std::int64_t outputSteadyMicros = 0;
   bool outputTimestampKnown = false;
+  // Software fallback origin for the first frame when splitting a callback
+  // without a native timestamp. This is not a hardware presentation estimate.
+  std::int64_t fallbackSteadyMicros = 0;
 };
 using RenderTimingCallback = void (*)(RenderTiming, void *);
 struct NativeBufferFrameLimits {

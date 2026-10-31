@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
@@ -71,13 +72,21 @@ struct SharedAudioOutput::State {
 
   static void render(void *output, std::uint32_t frames, int channels, void *context) {
     auto &state = *static_cast<State *>(context);
-    const auto timing = state.pendingTiming;
+    auto timing = state.pendingTiming;
     state.pendingTiming = {};
     if (!output || !frames || channels <= 0) return;
     auto *pcm = static_cast<short *>(output);
     if (channels != 2) {
       std::fill_n(pcm, static_cast<std::size_t>(frames) * channels, short{0});
       return;
+    }
+    // One wall-clock origin for the whole untimestamped native buffer. Small
+    // callbacks keep AudioWrapper's existing clock read, with no extra syscall.
+    if (frames > kScratchFrames &&
+        (!timing.outputTimestampKnown || timing.outputSteadyMicros <= 0) &&
+        timing.fallbackSteadyMicros <= 0) {
+      timing.fallbackSteadyMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
     }
     std::array<bool, kSubmixCount> entered{};
     for (std::size_t index = 0; index < entered.size(); ++index)
@@ -88,13 +97,17 @@ struct SharedAudioOutput::State {
       const auto samples = static_cast<std::size_t>(count) * 2;
       if (!entered[0]) std::fill_n(state.mix.data(), samples, 0.0F);
       auto chunkTiming = timing;
-      if (chunkTiming.outputTimestampKnown && rate) {
+      if (rate && (chunkTiming.outputTimestampKnown || chunkTiming.fallbackSteadyMicros > 0)) {
         const auto delta = static_cast<std::int64_t>(
             static_cast<std::uint64_t>(offset) * 1'000'000 / rate);
-        chunkTiming.outputSteadyMicros = chunkTiming.outputSteadyMicros >
-                std::numeric_limits<std::int64_t>::max() - delta
-            ? std::numeric_limits<std::int64_t>::max()
-            : chunkTiming.outputSteadyMicros + delta;
+        const auto advance = [delta](std::int64_t origin) {
+          return origin > std::numeric_limits<std::int64_t>::max() - delta
+              ? std::numeric_limits<std::int64_t>::max() : origin + delta;
+        };
+        if (chunkTiming.outputTimestampKnown && chunkTiming.outputSteadyMicros > 0)
+          chunkTiming.outputSteadyMicros = advance(chunkTiming.outputSteadyMicros);
+        if (chunkTiming.fallbackSteadyMicros > 0)
+          chunkTiming.fallbackSteadyMicros = advance(chunkTiming.fallbackSteadyMicros);
       }
       for (std::size_t index = 0; index < entered.size(); ++index) {
         if (!entered[index]) continue;
