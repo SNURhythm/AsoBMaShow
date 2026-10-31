@@ -5493,6 +5493,9 @@ void GamePlayScene::renderQuickRetryFeedback(RenderContext &renderContext) {
     started.reset();
     return;
   }
+  // A reshuffled #RANDOM branch can disarm every target. Its carried feedback
+  // still needs a label even when configureQuickRetry did not prepare one.
+  if (!quickRetryReasonText) prepareQuickRetryFeedback();
   const float fade = (1.0F - progress) * (1.0F - progress);
   const auto color = app_theme::withAlpha(app_theme::amber(),
       static_cast<std::uint8_t>(190.0F * fade)).toABGR();
