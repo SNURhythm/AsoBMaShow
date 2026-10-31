@@ -9071,6 +9071,9 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
         if (const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             !longNote->IsTail()) {
           longNote->Press(pressedTime);
+          if (laneInputController != nullptr) {
+            laneInputController->rememberAcceptedLongHeadJudge(longNote, judgeResult);
+          }
           const bool chargeLongNote =
               effectiveLongNoteIsCharge(longNote, chart, options.longNoteMode);
           if (chargeLongNote) {

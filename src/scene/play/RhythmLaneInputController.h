@@ -73,6 +73,9 @@ public:
   Result onMissedNote(bms_parser::Note *note, long long songTimeMicros);
   void resetLaneStates();
   [[nodiscard]] const quick_retry::Projection &quickRetryProjection() const noexcept;
+  // Replay and legacy scene presses bypass pressLane but share deferred LN state.
+  void rememberAcceptedLongHeadJudge(bms_parser::LongNote *head,
+                                     const JudgeResult &judgeResult);
   void resolveQuickRetryNote(const bms_parser::Note *note);
   [[nodiscard]] bool chargeTailJudgedSuccessfully(
       const bms_parser::LongNote *tail) const;
@@ -126,8 +129,6 @@ private:
   long long inputTimeMicros(const InputContext &context) const;
   [[nodiscard]] bool noteAllowed(const bms_parser::Note *note) const;
   [[nodiscard]] ResultBatch resultBatch(const Result &selected) const;
-  void rememberAcceptedLongHeadJudge(bms_parser::LongNote *head,
-                                     const JudgeResult &judgeResult);
   [[nodiscard]] JudgeResult acceptedLongHeadJudge(
       const bms_parser::LongNote *tail) const;
   Result pressNote(bms_parser::Note *note, long long pressedTime,
