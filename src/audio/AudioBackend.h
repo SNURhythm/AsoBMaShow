@@ -78,6 +78,7 @@ public:
                                  : audio::playback::BackendRunState::Stopped};
   }
   [[nodiscard]] virtual RuntimeState runtimeState() const = 0;
+  [[nodiscard]] virtual std::optional<bool> outputIsBluetooth(bool = false) const { return std::nullopt; }
 };
 
 class IBackendFactory {

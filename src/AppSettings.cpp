@@ -511,6 +511,23 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   }
 }
 
+void AppSettings::captureAudioTimingProfile() {
+  const AudioTimingProfile current{audioOffsetMs, visualOffsetMs, inputKeysoundEnabled};
+  if (!audioTimingProfiles) audioTimingProfiles = std::array{current, current};
+  (*audioTimingProfiles)[audioTimingType_.bluetooth ? 1 : 0] = current;
+}
+
+bool AppSettings::selectAudioTimingProfile(bool bluetooth) {
+  captureAudioTimingProfile();
+  if (audioTimingType_.bluetooth == bluetooth) return false;
+  audioTimingType_.bluetooth = bluetooth;
+  const auto &profile = (*audioTimingProfiles)[bluetooth ? 1 : 0];
+  audioOffsetMs = profile.audioOffsetMs;
+  visualOffsetMs = profile.visualOffsetMs;
+  inputKeysoundEnabled = profile.inputKeysoundEnabled;
+  return true;
+}
+
 void AppSettings::sanitize() {
   prepMetronomeMaxDurationMilliseconds =
       std::max(0, prepMetronomeMaxDurationMilliseconds);
@@ -560,6 +577,11 @@ void AppSettings::sanitize() {
       std::clamp(audioOffsetMs, kMinAudioOffsetMs, kMaxAudioOffsetMs);
   visualOffsetMs =
       std::clamp(visualOffsetMs, kMinVisualOffsetMs, kMaxVisualOffsetMs);
+  captureAudioTimingProfile();
+  for (auto &profile : *audioTimingProfiles) {
+    profile.audioOffsetMs = std::clamp(profile.audioOffsetMs, kMinAudioOffsetMs, kMaxAudioOffsetMs);
+    profile.visualOffsetMs = std::clamp(profile.visualOffsetMs, kMinVisualOffsetMs, kMaxVisualOffsetMs);
+  }
   visibleTimeDurationMilliseconds =
       std::clamp(visibleTimeDurationMilliseconds, kMinVisibleTimeMs,
                  kMaxVisibleTimeMs);

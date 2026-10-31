@@ -3345,6 +3345,7 @@ void GamePlayScene::cancelGameplaySkinPreparation() noexcept {
 }
 
 void GamePlayScene::init() {
+  context.refreshAudioTimingProfile(true);
   context.profileGameplayActive.store(true, std::memory_order_release);
   profileGameplayBlockerActive = true;
   context.jukebox.setEmbeddedBgaBrightnessPercent(
@@ -3932,6 +3933,9 @@ bool GamePlayScene::reset() {
     guidedAccessReminderLayout->setVisible(false);
   }
   stopRealtimeGameplayAuthority(false);
+  context.refreshAudioTimingProfile(true);
+  if (!isReplayPlayback() && !options.autoPlay && !options.practiceMode && !options.practiceSession)
+    options.autoKeySound = !context.settings.inputKeysoundEnabled;
   if (ownedInputHandler != nullptr) {
     const auto scopes =
         makeGameplayInputScopes(presentationKeyMode());

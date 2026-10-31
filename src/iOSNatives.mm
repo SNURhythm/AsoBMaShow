@@ -24,6 +24,20 @@
 #include <UIKit/UIKit.h>
 #include <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dispatch/dispatch.h>
+std::optional<bool> IOSAudioOutputIsBluetooth() {
+  @autoreleasepool {
+    auto outputs = [AVAudioSession sharedInstance].currentRoute.outputs;
+    if (outputs.count == 0) return std::nullopt;
+    bool bluetooth = false;
+    for (AVAudioSessionPortDescription *output in outputs) {
+      bluetooth |= [output.portType isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+                   [output.portType isEqualToString:AVAudioSessionPortBluetoothHFP] ||
+                   [output.portType isEqualToString:AVAudioSessionPortBluetoothLE];
+    }
+    return bluetooth;
+  }
+}
+
 #include <algorithm>
 #include <atomic>
 #include <array>

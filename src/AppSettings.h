@@ -160,6 +160,18 @@ public:
   player_settings::AudioVideoSettings audioVideo =
       player_settings::defaultAudioVideoSettingsForPlatform();
   player_settings::ReplayPreferences replayPreferences;
+  struct AudioTimingProfile {
+    int audioOffsetMs = 0;
+    int visualOffsetMs = 0;
+    bool inputKeysoundEnabled = true;
+    bool operator==(const AudioTimingProfile &) const = default;
+  };
+  // Index 0 is non-Bluetooth, index 1 is Bluetooth. Missing profiles migrate
+  // from the active legacy values together, before either can be edited.
+  std::optional<std::array<AudioTimingProfile, 2>> audioTimingProfiles;
+  void captureAudioTimingProfile();
+  bool selectAudioTimingProfile(bool bluetooth);
+  [[nodiscard]] bool bluetoothAudioTimingActive() const { return audioTimingType_.bluetooth; }
   int audioOffsetMs = 0;
   int visualOffsetMs = 0;
   // Matches Beatoraja PlayConfig.duration. Green number is the derived live
@@ -489,6 +501,10 @@ public:
   bool operator==(const AppSettings &) const = default;
 
 private:
+  struct RuntimeAudioTimingType {
+    bool bluetooth = false;
+    bool operator==(const RuntimeAudioTimingType &) const { return true; }
+  } audioTimingType_;
   // Viewport selection is runtime context, not a persisted preference.
   struct RuntimeOrientation {
     PresentationOrientation value = PresentationOrientation::Landscape;

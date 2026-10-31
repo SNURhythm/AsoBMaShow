@@ -270,6 +270,7 @@ public:
   void setCompressor(float threshold, float ratio);
   [[nodiscard]] audio::Capabilities capabilities() const override;
   [[nodiscard]] audio::RuntimeState runtimeState() const override;
+  [[nodiscard]] std::optional<bool> outputIsBluetooth(bool refresh = false) const override;
   bool restart(const audio::StreamRequest &request,
                std::string &errorMessage) override;
   bool restore(const audio::RuntimeState &previous,

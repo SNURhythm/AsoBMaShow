@@ -1230,7 +1230,8 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
 
   cardsColumn->addView(
       makeCard(metrics, i18n::message("settings.timing.audio_offset.label"), i18n::message("settings.timing.negative_values_make_audio_earlier.message"),
-               offsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
+               offsetControls, metrics.offsetCardHeight, metrics.cardsWidth,
+               context.settings.bluetoothAudioTimingActive()));
 
   auto *visualOffsetControls = new View();
   visualOffsetControls->setFlexDirection(FlexDirection::Row);
@@ -1300,7 +1301,8 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
 
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.timing.visual_offset.label"), i18n::message("settings.timing.move_notes_without_changing_audio_bga.message"),
-      visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth));
+      visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth,
+      context.settings.bluetoothAudioTimingActive()));
 
   return cardsColumn;
 }

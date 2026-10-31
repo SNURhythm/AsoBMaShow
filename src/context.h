@@ -932,6 +932,7 @@ public:
                       ? "audio runtime remained on its effective working state"
                       : audioStartupApplyResult.message.resolve().c_str());
     }
+    refreshAudioTimingProfile(true);
     ui_theme::setActiveMode(settings.uiThemeMode ==
                                     AppSettings::UiThemeMode::Light
                                 ? ui_theme::ThemeMode::Light
@@ -1515,6 +1516,23 @@ public:
     } catch (...) {
       SDL_Log("IR application lifecycle update failed");
     }
+  }
+
+  std::chrono::steady_clock::time_point audioTimingRouteCheckedAt{};
+
+  // Call only at safe boundaries: menus/settings or before a new attempt.
+  // Gameplay and calibration keep their timing values until they finish.
+  bool refreshAudioTimingProfile(bool force = false) {
+    if (!force && profileGameplayActive.load(std::memory_order_acquire)) return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (!force && now - audioTimingRouteCheckedAt < std::chrono::seconds(1)) return false;
+    audioTimingRouteCheckedAt = now;
+    const auto bluetooth = jukebox.audioRuntime().outputIsBluetooth(force);
+    if (!bluetooth || !settings.selectAudioTimingProfile(*bluetooth)) return false;
+    jukebox.setBgaOffsetMs(settings.audioOffsetMs);
+    std::string error;
+    if (!saveSettings(&error)) SDL_Log("Failed to save audio timing profiles: %s", error.c_str());
+    return true;
   }
 
   bool saveSettings(std::string *errorMessage = nullptr) {

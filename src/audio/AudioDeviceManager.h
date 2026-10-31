@@ -24,6 +24,7 @@ public:
   virtual ~IAudioRuntime() = default;
   [[nodiscard]] virtual Capabilities capabilities() const = 0;
   [[nodiscard]] virtual RuntimeState runtimeState() const = 0;
+  [[nodiscard]] virtual std::optional<bool> outputIsBluetooth(bool = false) const { return std::nullopt; }
   virtual bool restart(const StreamRequest &request,
                        std::string &errorMessage) = 0;
   virtual bool restore(const RuntimeState &previous,

@@ -364,6 +364,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
                    .playAreaZoom = 1.25F,
                    .playAreaBottomPaddingPercent = 12.5F},
   };
+  expected.sanitize();
   const std::string expectedConfigurationDigest =
       skin::skinConfigurationDigest(expected.presentation().skin.entries.at(*entry.entry));
   std::string error;
@@ -3007,7 +3008,75 @@ void testKeybombModeResolution() {
          "independent scratchless styles and other modes do not overwrite each other");
 }
 
+void testAudioDeviceTimingProfiles() {
+  TempDirectory temp;
+  const auto path = temp.path() / "audio-profiles.json";
+  writeFile(path, R"({"schemaVersion":8,"audioOffsetMs":123,"visualOffsetMs":-45,"inputKeysoundEnabled":false})");
+  auto settings = AppSettingsStore::Load(path).settings;
+  settings.selectAudioTimingProfile(true);
+  expect(settings.audioOffsetMs == 123 && settings.visualOffsetMs == -45 &&
+             !settings.inputKeysoundEnabled, "legacy values migrate to Bluetooth");
+  settings.audioOffsetMs = 250;
+  settings.visualOffsetMs = 12;
+  settings.inputKeysoundEnabled = true;
+  settings.selectAudioTimingProfile(false);
+  expect(settings.audioOffsetMs == 123 && settings.visualOffsetMs == -45 &&
+             !settings.inputKeysoundEnabled, "legacy non-Bluetooth values remain independent");
+  settings.audioOffsetMs = 7;
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save independent audio profiles");
+  settings = AppSettingsStore::Load(path).settings;
+  expect(settings.audioOffsetMs == 7, "non-Bluetooth edits survive restart");
+  settings.selectAudioTimingProfile(true);
+  expect(settings.audioOffsetMs == 250 && settings.visualOffsetMs == 12 &&
+             settings.inputKeysoundEnabled, "Bluetooth edits survive restart");
+  settings.audioOffsetMs = 300;
+  expect(AppSettingsStore::Save(path, settings, error), "save while Bluetooth is active");
+  settings = AppSettingsStore::Load(path).settings;
+  settings.selectAudioTimingProfile(true);
+  expect(settings.audioOffsetMs == 300, "active Bluetooth edits are captured on save");
+  settings.selectAudioTimingProfile(false);
+  expect(settings.audioOffsetMs == 7, "saving Bluetooth does not overwrite other output");
+  auto legacy = AppSettingsStore::LoadLegacyCfg(fixture("legacy-full.cfg")).settings;
+  const int offset = legacy.audioOffsetMs;
+  const int visual = legacy.visualOffsetMs;
+  const bool keysound = legacy.inputKeysoundEnabled;
+  legacy.selectAudioTimingProfile(true);
+  expect(legacy.audioOffsetMs == offset && legacy.visualOffsetMs == visual &&
+             legacy.inputKeysoundEnabled == keysound, "legacy cfg migrates both profiles");
+}
+
+void testAudioTimingProfileValidation() {
+  TempDirectory temp;
+  const auto path = temp.path() / "audio-profiles.json";
+  writeFile(path, R"({"schemaVersion":8,"audioOffsetMs":17,"visualOffsetMs":-23,
+    "inputKeysoundEnabled":false,"audioTimingProfiles":{
+      "nonBluetooth":{"audioOffsetMs":-99999},
+      "bluetooth":{"audioOffsetMs":99999,"visualOffsetMs":99999,"inputKeysoundEnabled":"bad"}}})");
+  auto loaded = AppSettingsStore::Load(path);
+  expect(!loaded.diagnostics.empty(), "malformed timing profile reports diagnostics");
+  auto &settings = loaded.settings;
+  expect(settings.audioOffsetMs == -1000 && settings.visualOffsetMs == -23 &&
+             !settings.inputKeysoundEnabled, "partial profile inherits legacy values and clamps offsets");
+  settings.audioOffsetMs = 8;
+  expect(!settings.selectAudioTimingProfile(false) && settings.audioOffsetMs == 8,
+         "same route preserves unsaved active edits");
+  settings.selectAudioTimingProfile(true);
+  expect(settings.audioOffsetMs == 1000 && settings.visualOffsetMs == 1000 &&
+             !settings.inputKeysoundEnabled, "inactive Bluetooth profile is sanitized too");
+  settings.selectAudioTimingProfile(false);
+  expect(settings.audioOffsetMs == 8, "switching captures the current profile before restoring another");
+  writeFile(path, R"({"schemaVersion":8,"audioOffsetMs":37,"inputKeysoundEnabled":false,
+    "audioTimingProfiles":{"bluetooth":null}})");
+  settings = AppSettingsStore::Load(path).settings;
+  settings.selectAudioTimingProfile(true);
+  expect(settings.audioOffsetMs == 37 && !settings.inputKeysoundEnabled,
+         "malformed profile falls back to migrated legacy values");
+}
+
 int main() {
+  testAudioDeviceTimingProfiles();
+  testAudioTimingProfileValidation();
   testMonoAudioRoundTrip();
   testKeybombSettingsPersist();
   testKeybombModeResolution();

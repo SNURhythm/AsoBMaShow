@@ -11,6 +11,8 @@
 #include <optional>
 #include <memory>
 
+std::optional<bool> AndroidAudioOutputIsBluetooth(int deviceId);
+
 namespace music_stream { class Source; }
 
 struct PlatformDirectoryImportProgress;

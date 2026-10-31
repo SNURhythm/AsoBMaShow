@@ -493,7 +493,7 @@ inline View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
 
 inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
                       const i18n::Text &description, View *body, int minHeight,
-                      int width = 0) {
+                      int width = 0, bool bluetoothProfile = false) {
   auto *card = new View();
   card->setFlexDirection(FlexDirection::Column);
   card->setGap(metrics.cardGap);
@@ -526,7 +526,24 @@ inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
   header->setGap(metrics.compact ? 6.0f : 8.0f);
   auto *titleText =
       makeHeading(title, metrics.sectionTitleSize);
-  header->addView(titleText);
+  titleText->setName("settingsSectionTitle");
+  if (bluetoothProfile) {
+    auto *titleRow = new View();
+    titleRow->setFlexDirection(FlexDirection::Row);
+    titleRow->setAlignItems(YGAlignCenter);
+    titleRow->setGap(8);
+    titleText->setFlexShrink(1);
+    titleRow->addView(titleText);
+    auto *icon = new TextView(ui_icons::kFontAwesomeBrandsPath, metrics.sectionTitleSize);
+    icon->setName("settingsBluetoothProfileIcon");
+    icon->setText(ui_icons::textForCodepoint(ui_icons::kBluetooth));
+    icon->setThemedColor(app_theme::textSecondary);
+    icon->setFlexShrink(0);
+    titleRow->addView(icon);
+    header->addView(titleRow);
+  } else {
+    header->addView(titleText);
+  }
   if (!description.empty()) {
     auto *descriptionText = makeWrappedText(description, metrics.bodyTextSize,
                                             app_theme::textSecondary());

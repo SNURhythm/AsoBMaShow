@@ -35,6 +35,29 @@ and Show Same Folder clears it along with the other filters.
 The filter panel scrolls within half the song column's height, preserving chart
 list space in short landscape windows. Dropdown menus use the overlay layer.
 
+## Audio timing profiles
+
+Audio offset, visual offset, and the Input Trigger / Auto Timed keysound rule
+are saved separately for Bluetooth and non-Bluetooth outputs in each player
+profile. Existing settings (including legacy config imports) seed both categories.
+Edits then affect only the current category. Audio diagnostics shows that category.
+Audio Offset, Visual Offset, and Input Audio headings show a Font Awesome Bluetooth
+mark when that profile is active. Count-in has its own section and remains shared
+between audio profiles.
+
+Selection follows the actual output route. Songs and calibration retain the
+category they started with; new attempts and menus can select the new category.
+Finishing a timing text edit also precedes switching. Unknown, disconnected, or
+mixed routes retain the current category. Replay/practice keysound overrides
+remain separate from the normal-play rule.
+
+Detection uses AVAudioSession on iOS, the active AAudio device on Android,
+CoreAudio transport on macOS, audio sessions and hardware ancestry on Windows,
+and PipeWire node links/device metadata on Linux (including PipeWire JACK).
+Custom virtual routes without identifiable hardware remain unknown. Linux builds
+require the system PipeWire development package (`libpipewire-0.3-dev` on Debian/
+Ubuntu); native JACK without PipeWire transport metadata remains unknown.
+
 ## Application appearance and responsive layout
 
 `src/view/AppTheme.h` shares the selector's typography and palette across
