@@ -1328,6 +1328,22 @@ void testScreenOrientationRoundTripAndDefaults() {
   }
 }
 
+void testQuickRetryRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "quick-retry.json";
+  writeFile(path, R"({"schemaVersion":4})");
+  auto settings = AppSettingsStore::Load(path).settings;
+  expect(!settings.quickRetryEnabled && !settings.quickRetryNewPattern,
+         "existing profiles do not automatically retry and default to same pattern");
+  settings.quickRetryEnabled = true;
+  settings.quickRetryNewPattern = true;
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "quick retry settings save");
+  const auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.quickRetryEnabled && loaded.quickRetryNewPattern,
+         "quick retry and new pattern survive settings reload");
+}
+
 void testIpadGestureReminderRoundTrip() {
   TempDirectory temp;
   expect(AppSettings{}.ipadGestureReminderEnabled,
@@ -3122,6 +3138,7 @@ int main() {
   testAntiAliasingPersistenceAndMigration();
   testMetalDisplayLinkDefaultPersistence();
   testPrepMetronomeDurationPersistence();
+  testQuickRetryRoundTrip();
   testIpadGestureReminderRoundTrip();
   testScreenOrientationRoundTripAndDefaults();
   testReplayPreferencesSurviveSettingsRoundTrip();

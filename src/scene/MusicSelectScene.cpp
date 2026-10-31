@@ -4421,6 +4421,8 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .assistOption = selections.assistOption,
       .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
       .clubMode = context.settings.gameplayClubModeEnabled,
+      .quickRetryEnabled = context.settings.quickRetryEnabled,
+      .quickRetryNewPattern = context.settings.quickRetryNewPattern,
       .pacemakerTarget = selections.pacemakerTarget,
       .pacemakerGoalLabel = goalPacemakerLabel(),
       .profileId = context.profileManager.activeProfile().id,
@@ -4531,6 +4533,16 @@ void MusicSelectScene::openPlayOptions() {
            if (!context.saveSettings()) {
              SDL_Log("Failed to save music-select Club mode");
            }
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetrySelected = [this](bool enabled) {
+           context.settings.quickRetryEnabled = enabled;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry selection");
+           refreshPlayOptionsModal();
+         },
+         .onRetryPatternSelected = [this](bool newPattern) {
+           context.settings.quickRetryNewPattern = newPattern;
+           if (!context.saveSettings()) SDL_Log("Failed to save retry pattern selection");
            refreshPlayOptionsModal();
          },
          .onPacemakerSelected = [this](const std::string &target) {

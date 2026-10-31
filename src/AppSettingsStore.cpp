@@ -903,6 +903,8 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
+      {"quickRetryEnabled", settings.quickRetryEnabled},
+      {"quickRetryNewPattern", settings.quickRetryNewPattern},
       {"selectedPacemakerGoalId", settings.selectedPacemakerGoalId},
       {"skinModeFilterName", settings.skinModeFilterName},
       {"skinSortId", settings.skinSortId},
@@ -1328,6 +1330,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
+  readValue(document, "quickRetryEnabled", settings.quickRetryEnabled, diagnostics);
+  readValue(document, "quickRetryNewPattern", settings.quickRetryNewPattern, diagnostics);
   readValue(document, "selectedPacemakerGoalId",
             settings.selectedPacemakerGoalId, diagnostics);
   readBoundedSkinString(document, "skinModeFilterName",

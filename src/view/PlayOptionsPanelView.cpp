@@ -287,6 +287,21 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(clubModeButton);
 
   if (layout.showPacemaker) {
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.quick_retry.label")), ui_icons::kRotate));
+    quickRetryChoice = new ChoiceControlView([this](const std::string &id) {
+      if (callbacks.onQuickRetrySelected) callbacks.onQuickRetrySelected(id == "on");
+      return true;
+    }, overlayPortal, 18, 0, true, "on");
+    quickRetryChoice->setName("quick-retry-choice");
+    addView(quickRetryChoice);
+    addView(makeLabel(i18n::message("play_options.retry_pattern.label")));
+    retryPatternChoice = new ChoiceControlView([this](const std::string &id) {
+      if (callbacks.onRetryPatternSelected) callbacks.onRetryPatternSelected(id == "new");
+      return true;
+    }, overlayPortal);
+    retryPatternChoice->setName("retry-pattern-choice");
+    addView(retryPatternChoice);
+
     addView(makeSectionHeader(makeLabel(i18n::message("play_options.pacemaker.label")), ui_icons::kFlagCheckered));
     pacemakerChoice = new ChoiceControlView([this](const std::string &id) {
       if (callbacks.onPacemakerSelected) callbacks.onPacemakerSelected(id);
@@ -392,6 +407,15 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     clubModeButtonContent->setChecked(state.clubMode);
     toggle_button::style(clubModeButton, state.clubMode);
   }
+  if (quickRetryChoice) {
+    quickRetryChoice->refresh({.selectedId = state.quickRetryEnabled ? "on" : "off",
+        .options = {{.id = "off", .label = i18n::message("play_options.quick_retry.off")},
+                    {.id = "on", .label = i18n::message("play_options.quick_retry.on")}}});
+    retryPatternChoice->refresh({.selectedId = state.quickRetryNewPattern ? "new" : "same",
+        .options = {{.id = "same", .label = i18n::message("play_options.retry_pattern.same")},
+                    {.id = "new", .label = i18n::message("play_options.retry_pattern.new")}},
+        .enabled = state.quickRetryEnabled});
+  }
   if (pacemakerChoice) {
     std::vector<DropdownView::Option> options;
     for (const char *target : pacemaker::kSelectableTargets) {
@@ -413,7 +437,7 @@ void PlayOptionsPanelView::setLaneOrderMessage(std::string message,
 void PlayOptionsPanelView::closeDropdowns() {
   for (auto *choice : {rulesetChoice, gaugeChoice, gaugeAutoShiftChoice,
                       gaugeLowerBoundChoice, longNoteModeChoice,
-                      assistOptionChoice, pacemakerChoice}) {
+                      assistOptionChoice, quickRetryChoice, retryPatternChoice, pacemakerChoice}) {
     if (choice) choice->closeMenu();
   }
   if (playOptionSection) playOptionSection->closeDropdowns();

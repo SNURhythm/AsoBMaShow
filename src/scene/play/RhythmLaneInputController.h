@@ -1,4 +1,5 @@
 #pragma once
+#include "QuickRetryProjection.h"
 
 #include "../../AppSettings.h"
 #include "../../ReplayData.h"
@@ -71,6 +72,7 @@ public:
   std::span<const Result> advanceHellChargeVoices(long long songTimeMicros);
   Result onMissedNote(bms_parser::Note *note, long long songTimeMicros);
   void resetLaneStates();
+  [[nodiscard]] quick_retry::Projection quickRetryProjection() const;
   [[nodiscard]] bool chargeTailJudgedSuccessfully(
       const bms_parser::LongNote *tail) const;
 

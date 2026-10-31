@@ -4750,6 +4750,8 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .playbackRatePercent = playbackRate,
        .playbackLocked = playbackLocked,
        .clubMode = context.settings.gameplayClubModeEnabled,
+       .quickRetryEnabled = context.settings.quickRetryEnabled,
+       .quickRetryNewPattern = context.settings.quickRetryNewPattern,
        .pacemakerTarget = profileSelections.pacemakerTarget,
        .pacemakerGoalLabel = goalPacemakerLabel(),
        .profileId = context.profileManager.activeProfile().id,
@@ -7307,6 +7309,16 @@ void MainMenuScene::buildPlayOptionsModal() {
          setPlaybackModeSelection(mode);
        },
        .onClubModeToggled = [this]() { toggleGameplayClubMode(); },
+       .onQuickRetrySelected = [this](bool enabled) {
+         context.settings.quickRetryEnabled = enabled;
+         if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry selection");
+         refreshPlayOptionsPanel();
+       },
+       .onRetryPatternSelected = [this](bool newPattern) {
+         context.settings.quickRetryNewPattern = newPattern;
+         if (!context.saveSettings()) SDL_Log("Failed to save retry pattern selection");
+         refreshPlayOptionsPanel();
+       },
        .onPacemakerSelected = [this](const std::string &target) {
          setPacemakerTargetSelection(target);
        },

@@ -1766,6 +1766,8 @@ int main() {
 
   {
     GameplayRuleset selected = GameplayRuleset::LR2;
+    bool quickRetry = false;
+    bool newPattern = false;
     ScrollView scroll(0, 0, 360, 400);
     scroll.setWidth(360)->setHeight(400);
     auto *content = new View();
@@ -1774,7 +1776,9 @@ int main() {
         ->setAlignItems(YGAlignStretch);
     auto *panel = new PlayOptionsPanelView(
         {.onRulesetSelected =
-             [&](GameplayRuleset ruleset) { selected = ruleset; }},
+             [&](GameplayRuleset ruleset) { selected = ruleset; },
+         .onQuickRetrySelected = [&](bool enabled) { quickRetry = enabled; },
+         .onRetryPatternSelected = [&](bool value) { newPattern = value; }},
         {.width = 340.0f,
          .playOptionColumns = 2,
          .showGauge = true,
@@ -1804,6 +1808,26 @@ int main() {
     panel->refresh({.ruleset = GameplayRuleset::LR2, .clubMode = true});
     require(clubContent->checked(),
             "Club Beat refresh switches to its on state");
+
+    auto *quick = dynamic_cast<ChoiceControlView *>(panel->findViewByName("quick-retry-choice"));
+    auto *pattern = dynamic_cast<ChoiceControlView *>(panel->findViewByName("retry-pattern-choice"));
+    require(quick && pattern && quick->selectedId() == "off" && pattern->selectedId() == "same",
+            "quick retry defaults off with same pattern");
+    require(quick->findViewByName("choice-cycle")->getVisible(),
+            "quick retry uses one On/Off cycle button");
+    click(*static_cast<Button *>(quick->findViewByName("choice-cycle")));
+    require(quickRetry, "quick retry cycle enables automatic retry");
+    panel->refresh({.quickRetryEnabled = true});
+    scroll.applyYogaLayout();
+    require(pattern->findViewByName("choice-buttons")->getVisible(),
+            "same and new are distinct pattern buttons");
+    click(*static_cast<Button *>(pattern->findViewByName("choice:new")));
+    require(newPattern, "new pattern choice reaches settings callback");
+    panel->refresh({.quickRetryEnabled = true, .quickRetryNewPattern = true});
+    click(*static_cast<Button *>(pattern->findViewByName("choice:same")));
+    require(!newPattern, "same pattern can be restored directly");
+    click(*static_cast<Button *>(quick->findViewByName("choice-cycle")));
+    require(!quickRetry, "quick retry cycle disables automatic retry");
 
     click(*beatoraja);
     require(selected == GameplayRuleset::Beatoraja,

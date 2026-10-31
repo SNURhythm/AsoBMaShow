@@ -35,6 +35,30 @@ and Show Same Folder clears it along with the other filters.
 The filter panel scrolls within half the song column's height, preserving chart
 list space in short landscape windows. Dropdown menus use the overlay layer.
 
+## Quick Retry
+
+Play Options offers **Quick Retry** (Off/On, default Off) and **Retry Pattern**
+(Same/New, default Same). Same preserves the current random layout; New uses the
+normal retry path to generate another layout. Both preferences are saved with
+the profile.
+
+During ordinary single-chart manual play, Quick Retry restarts as soon as no
+selected target remains reachable with the best possible remaining judgements.
+A normal pacemaker uses its final EX target. With **GOAL** selected, it considers
+all unfinished score and lamp conditions for this chart and long-note mode,
+including goals other than the one shown by the pacemaker. Conditions are
+alternatives: an impossible score does not end an attempt that can still earn
+an unfinished clear lamp, and vice versa. Conditions already fulfilled by saved
+results are excluded. A score condition reached during the current attempt is
+preserved even if the survival gauge subsequently fails.
+
+The check includes deferred classic-LN head judgements, remaining HCN recovery,
+gauge auto-shift, and assist lamp limits. No target, no unfinished GOAL conditions,
+or targets already impossible before play leave automatic retry inactive, avoiding
+a restart loop caused by incompatible settings. Replay, autoplay, practice, course,
+and mid-chart starts do not use Quick Retry. Automatic retries follow the same
+attempt reset behavior as manual retries and do not save discarded attempts.
+
 ## Audio timing profiles
 
 Audio offset, visual offset, and the Input Trigger / Auto Timed keysound rule

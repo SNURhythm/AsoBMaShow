@@ -1532,6 +1532,8 @@ void testLegacyLongHeadVoiceControls() {
     RhythmLaneInputController controller(chart.get(), nullptr, lanes,
         gameplay::CompiledGameplayJudge::from(rules));
     const auto head = controller.pressLane(0, {.songTimeMicros = 1'000'000}).keySoundNote;
+    require(controller.quickRetryProjection().pendingClassicJudgements[PGreat] == (type == 1 ? 1 : 0),
+            "legacy retry projection includes only uncommitted classic heads");
     const auto pending = controller.releaseLane(0, {.songTimeMicros = 1'500'000});
     require(!pending.hasJudge && pending.gainNote == nullptr && pending.keySoundNote == nullptr,
             "legacy deferred release leaves head audible and tail silent");
@@ -1541,6 +1543,9 @@ void testLegacyLongHeadVoiceControls() {
               "legacy release-margin recovery neither retriggers nor controls the voice");
     }
     const auto resolved = controller.advancePendingReleases(1'600'000);
+    require(controller.quickRetryProjection().pendingClassicJudgements[PGreat] ==
+                (type == 1 && recover ? 1 : 0),
+            "resolved classic heads leave retry projection while recovered holds remain");
     require(resolved.size() == (recover ? 0 : 1) &&
                 (recover || (resolved[0].gainNote == head && resolved[0].keysoundGain == 0 &&
                              resolved[0].keySoundNote != nullptr &&

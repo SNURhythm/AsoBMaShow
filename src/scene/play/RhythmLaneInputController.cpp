@@ -808,6 +808,16 @@ RhythmLaneInputController::resultBatch(const Result &selected) const {
   return result;
 }
 
+quick_retry::Projection RhythmLaneInputController::quickRetryProjection() const {
+  quick_retry::Projection result;
+  for (const auto &entry : acceptedLongHeadJudges) {
+    if (entry.head->Tail != nullptr && !entry.head->Tail->IsPlayed &&
+        effectiveLongNoteIsClassic(entry.head, chart, longNoteModeOverride))
+      result.acceptClassicHead(entry.judge.judgement);
+  }
+  return result;
+}
+
 void RhythmLaneInputController::rememberAcceptedLongHeadJudge(
     bms_parser::LongNote *head, const JudgeResult &judgeResult) {
   const auto found = std::ranges::find(acceptedLongHeadJudges, head,

@@ -287,6 +287,28 @@ GameplaySimulation::hellChargeBalances() const noexcept {
   return hellChargeBalanceMicros_;
 }
 
+quick_retry::Projection GameplaySimulation::quickRetryProjection() const {
+  quick_retry::Projection result;
+  for (const auto &lane : laneStates_) {
+    const NoteId tailId = lane.heldTailId != kInvalidNoteId
+                              ? lane.heldTailId : lane.pendingReleaseTailId;
+    if (tailId == kInvalidNoteId || noteStates_[tailId].played) continue;
+    const auto &tail = definition_.note(tailId);
+    if (tail.longNoteRule == LongNoteRule::Classic && tail.pairId != kInvalidNoteId)
+      result.acceptClassicHead(noteStates_[tail.pairId].acceptedHeadJudge.judgement);
+  }
+  for (const auto headId : definition_.hellChargeHeads()) {
+    const auto &head = definition_.note(headId);
+    if (!noteAllowed(headId) || head.pairId == kInvalidNoteId) continue;
+    const auto &tail = definition_.note(head.pairId);
+    const auto &tailState = noteStates_[head.pairId];
+    if (tailState.dead && !(tailState.played && tailState.playedTimeMicros < tail.timingMicros)) continue;
+    result.hellChargeTicks += quick_retry::remainingHellChargeTicks(
+        head.timingMicros, tail.timingMicros, lastAdvancedMicros_, hellChargeBalanceMicros_[headId]);
+  }
+  return result;
+}
+
 GameplayTerminalReason GameplaySimulation::terminalReason() const noexcept {
   return terminalReason_;
 }

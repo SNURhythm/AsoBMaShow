@@ -996,6 +996,8 @@ void RealtimeGameplayWorker::publishSnapshot() {
       snapshot.longNoteHoldingByLane[lane] = holdingCounts[lane] != 0;
     }
     snapshot.attempt = simulation_.snapshot();
+    if (config_.publishQuickRetryProjection)
+      snapshot.quickRetryProjection = simulation_.quickRetryProjection();
     const auto &graph = simulation_.skinGameplayGraphState();
     if (firstPublication ||
         snapshot.skinGameplayGraph.judgementRevision != graph.judgementRevision ||

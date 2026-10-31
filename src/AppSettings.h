@@ -400,6 +400,8 @@ public:
   std::string selectedPlayOption = kDefaultPlayOption;
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
+  bool quickRetryEnabled = false;
+  bool quickRetryNewPattern = false;
   std::string selectedPacemakerTarget = kDefaultPacemakerTarget;
   std::int64_t selectedPacemakerGoalId = 0; // Zero uses the lowest unfinished score goal.
   // Direct StringPropertyFactory PlayerConfig values. Mode and difficulty

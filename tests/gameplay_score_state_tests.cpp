@@ -1,6 +1,7 @@
 #include "AssistOptionUtils.h"
 #include "scene/play/GameplayScoreState.h"
 #include "scene/play/RhythmState.h"
+#include "scene/play/QuickRetry.h"
 
 #include <bit>
 #include <cstdint>
@@ -278,7 +279,71 @@ void testBestClearFallsBackToBottomGaugeWhenNoneQualifies() {
 }
 } // namespace
 
+void testQuickRetryReachability() {
+  require(quick_retry::remainingHellChargeTicks(1'000'000, 1'200'000, 0, 0) == 0,
+          "exactly 200ms future HCN cannot earn a strict recovery tick");
+  require(quick_retry::remainingHellChargeTicks(1'000'000, 2'000'000, 1'500'000, -100'000) == 1,
+          "negative carried HCN balance reduces remaining recovery");
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  const std::array score{quick_retry::Condition{.score = 199}};
+  require(!quick_retry::shouldRetry(state, 100, score), "perfect start can reach target");
+  quick_retry::Projection pending;
+  pending.pendingClassicJudgements[Great] = 1;
+  const std::array maxScore{quick_retry::Condition{.score = 200}};
+  require(quick_retry::shouldRetry(state, 100, maxScore, pending),
+          "accepted GREAT classic head makes MAX impossible before its tail");
+  state.commitJudge(JudgeResult(Great, 0));
+  require(!quick_retry::shouldRetry(state, 100, score), "exactly attainable EX target continues");
+  state.commitJudge(JudgeResult(Great, 0));
+  require(quick_retry::shouldRetry(state, 100, score), "one EX below target retries immediately");
+  state.commitJudge(JudgeResult(Kpoor, 0));
+  require(state.stagePassedNotes == 2, "empty poor consumes no remaining score opportunity");
+  const std::array alternatives{quick_retry::Condition{.score = 199},
+                               quick_retry::Condition{.score = 198}};
+  require(!quick_retry::shouldRetry(state, 100, alternatives), "any achievable alternative keeps attempt");
+  require(!quick_retry::shouldRetry(state, 100, {}), "no targets must not cause retry loop");
+
+  state.comboBreak = 1;
+  state.stagePassedNotes = 99;
+  state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 78;
+  const std::array clear{quick_retry::Condition{.lamp = 300}};
+  require(quick_retry::shouldRetry(state, 100, clear), "one recovery point cannot reach 80 border");
+  require(!quick_retry::shouldRetry(state, 100, clear, {.hellChargeTicks = 2}), "HCN recovery can rescue clear target");
+  state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 79;
+  require(!quick_retry::shouldRetry(state, 100, clear), "exact gauge border remains attainable");
+  const std::array compound{quick_retry::Condition{.score = 199},
+                           quick_retry::Condition{.lamp = 300}};
+  require(!quick_retry::shouldRetry(state, 100, compound), "unreachable score does not discard reachable lamp");
+  const std::array fc{quick_retry::Condition{.lamp = 600}};
+  require(quick_retry::shouldRetry(state, 100, fc), "broken combo cannot recover full combo");
+  state.comboBreak = 0;
+  state.combo = state.maxCombo = 99;
+  require(!quick_retry::shouldRetry(state, 100, fc), "normal gauge can still earn full combo");
+  state.lightAssistClearMark = true;
+  require(quick_retry::shouldRetry(state, 100, clear), "assist cap prevents normal clear goal");
+
+  state.lightAssistClearMark = false;
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+  const std::array reached{quick_retry::Condition{.score = 2}};
+  require(!quick_retry::shouldRetry(state, 100, reached),
+          "survival failure must preserve a score target already reached");
+  const std::array lostAtFailure{quick_retry::Condition{.score = 3}};
+  require(quick_retry::shouldRetry(state, 100, lostAtFailure),
+          "terminal survival failure cannot earn remaining EX");
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
+  state.comboBreak = 1;
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hazard)] = true;
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::ExHard)] = true;
+  const std::array hard{quick_retry::Condition{.lamp = 400}};
+  require(!quick_retry::shouldRetry(state, 100, hard), "Best Clear retains surviving hard gauge");
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+  require(quick_retry::shouldRetry(state, 100, hard), "dead hard gauges cannot recover after shift");
+}
+
 int main() {
+  testQuickRetryReachability();
   static_assert(kClearTypeLightAssistedEasyClearRank == 50);
   static_assert(kClearTypeAssistedEasyClearRank == 100);
   static_assert(normalizeClearLamp(150) == kClearTypeLightAssistedEasyClearRank);

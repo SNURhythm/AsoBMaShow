@@ -4,6 +4,7 @@
 #include "GameplayCandidateRules.h"
 #include "GameplayDefinition.h"
 #include "GameplayScoreState.h"
+#include "QuickRetryProjection.h"
 #include "SkinGameplayGraphState.h"
 #include "../../AppSettings.h"
 
@@ -279,6 +280,7 @@ public:
   [[nodiscard]] bool automaticResultOverflowed() const noexcept;
   [[nodiscard]] std::span<const std::int64_t>
   hellChargeBalances() const noexcept;
+  [[nodiscard]] quick_retry::Projection quickRetryProjection() const;
   [[nodiscard]] GameplayTerminalReason terminalReason() const noexcept;
   [[nodiscard]] bool terminal() const noexcept;
   [[nodiscard]] GameplayAttemptSnapshot terminalSnapshot() const noexcept;

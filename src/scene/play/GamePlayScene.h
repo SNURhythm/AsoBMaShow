@@ -3,6 +3,7 @@
 //
 
 #pragma once
+#include "QuickRetry.h"
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayData.h"
@@ -194,6 +195,14 @@ private:
   void abortPlayFromStartSelectControl();
   [[nodiscard]] lane_cover::State laneCoverState() const noexcept;
   void adjustLaneCoverFromInput(float deltaPercent);
+  void configureQuickRetry();
+  quick_retry::Projection currentQuickRetryProjection(long long timeMicros) const;
+  quick_retry::Projection realtimeQuickRetryProjection;
+  bool retryIfTargetsUnreachable(long long timeMicros);
+  std::vector<quick_retry::Condition> quickRetryConditions;
+  std::vector<bms_parser::LongNote *> quickRetryHellChargeHeads;
+  bool quickRetryPending = false;
+  bool quickRetryNewPattern = false;
   void restartCurrentPattern();
   bool restartCourseFromBeginning();
   void retryWithNewPattern();
