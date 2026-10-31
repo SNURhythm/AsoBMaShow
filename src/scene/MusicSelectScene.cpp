@@ -4109,6 +4109,7 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
 
 void MusicSelectScene::refreshToolbarAvailability() {
   if (!toolbar_) return;
+  toolbar_->setQuickRetryEnabled(context.settings.quickRetryEnabled);
   using Control = MusicSelectToolbarControl;
   for (const auto control : {Control::ChartMenu, Control::MoreMenu,
        Control::ChartViewer, Control::ChartRecords, Control::Rankings, Control::RevealChart,
@@ -4464,6 +4465,7 @@ void MusicSelectScene::updatePlayOptions(
 }
 
 void MusicSelectScene::refreshPlayOptionsModal() {
+  if (toolbar_) toolbar_->setQuickRetryEnabled(context.settings.quickRetryEnabled);
   if (playOptionsModal_ != nullptr) {
     playOptionsModal_->refresh(playOptionsState());
   }

@@ -29,6 +29,19 @@ inline GoalTargets compileGoalTargets(std::span<const chart_goals::GoalProgress>
   return result;
 }
 
+// Metadata cannot supply the HCN tick budget. Only claim eligibility when
+// zero recovery and an optimistic recovery bound agree; otherwise defer the
+// summary until the chart's timing-dependent requirements are known.
+inline std::optional<bool> startupTargetEligible(const GameplayScoreState &state,
+                                                int totalNotes, Targets target,
+                                                bool hasLongNotes) {
+  const bool eligible = !armReachableTargets(state, totalNotes, target).empty();
+  if (!eligible && hasLongNotes &&
+      !armReachableTargets(state, totalNotes, target,
+          {.hellChargeTicks = std::numeric_limits<int>::max()}).empty()) return std::nullopt;
+  return eligible;
+}
+
 // A clause describes hurdles that must all remain reachable. Multiple clauses
 // are alternative ways to keep the attempt. Gauge is separate from Clear when
 // auto-shift or assists prevent equating physical gauge survival with a lamp.

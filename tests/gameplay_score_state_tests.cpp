@@ -535,6 +535,25 @@ void testQuickRetryReachability() {
   require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(hard)), "dead hard gauges cannot recover after shift");
 }
 
+void testQuickRetrySummaryStartupEligibility() {
+  GameplayScoreState initial(beatorajaScoreConfig(100, 7, 200));
+  initial.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+  initial.setAssistClearMark(AssistClearMark::LightAssistedEasy);
+  require(quick_retry::startupTargetEligible(initial, 100, {.lamp = kClearTypeHardClearRank}, true) == false,
+          "Light Assist excludes the impossible HARD summary even with HCN recovery");
+  require(quick_retry::startupTargetEligible(initial, 100, {.pacemakerScore = 178}, true) == true,
+          "the independent AAA pacemaker remains in the summary");
+  require(quick_retry::startupTargetEligible(initial, 100, {.score = 201}, false) == false,
+          "summary omits scores beyond a perfect play");
+  require(quick_retry::startupTargetEligible(initial, 100, {.requireGaugeClear = true}, true) == true,
+          "assist caps do not remove the physical HARD gauge requirement");
+  GameplayScoreState lowTotal(beatorajaScoreConfig(1, 7, 1));
+  require(quick_retry::startupTargetEligible(lowTotal, 1, {.requireGaugeClear = true}, false) == false,
+          "unreachable initial groove gauge is omitted without long notes");
+  require(!quick_retry::startupTargetEligible(lowTotal, 1, {.requireGaugeClear = true}, true).has_value(),
+          "unknown HCN recovery defers a summary instead of disabling a possible target");
+}
+
 void testQuickRetrySummaryCollapsesActualHurdles() {
   using namespace quick_retry;
   const Hurdle aa{HurdleKind::Score, 140, "AA"}, aaa{HurdleKind::Score, 160, "AAA"};
@@ -592,6 +611,7 @@ void testQuickRetrySummaryCollapsesActualHurdles() {
 }
 
 int main() {
+  testQuickRetrySummaryStartupEligibility();
   testQuickRetrySummaryCollapsesActualHurdles();
   testQuickRetryProjectedSurvivalToGroove();
   testQuickRetryRequiredGauge();

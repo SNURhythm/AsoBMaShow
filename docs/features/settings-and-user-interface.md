@@ -72,6 +72,11 @@ attempt. Unfinished goal alternatives retain that meaning when combined with
 gauge and pacemaker requirements. Physical gauge checks stay separate from lamp
 goals when auto-shift or assists make them different. Course launches keep the
 ordinary button; random selections indicate that targets depend on the chart.
+The summary excludes requirements disabled by gameplay's startup eligibility
+check. If eligibility depends on long-note recovery unavailable in chart metadata,
+it shows that targets depend on the chart rather than an estimated hurdle.
+The custom selector's toolbar also adds an amber warning icon beside Play Options
+while Quick Retry is enabled.
 
 During ordinary single-chart manual play, **Any fails** restarts as soon as one
 enabled condition group becomes unreachable with the best possible remaining

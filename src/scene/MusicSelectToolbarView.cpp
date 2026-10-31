@@ -171,6 +171,8 @@ void MusicSelectToolbarView::rebuild() {
                                     24));
       content = label;
     }
+    const bool retryWarning = control == MusicSelectToolbarControl::PlayOptions && quickRetryEnabled_;
+    if (retryWarning) width = std::min(availableWidth, width + 28);
     widths.push_back(width);
     controls_.push_back({.control = control,
                          .codepoint = codepoint,
@@ -201,6 +203,18 @@ void MusicSelectToolbarView::rebuild() {
       goalRecommendationBadge_ = makeGoalRecommendationBadge();
       flagContent->addView(goalRecommendationBadge_);
       button->setContentView(flagContent);
+    } else if (retryWarning) {
+      auto *row = new View();
+      row->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
+      row->setJustifyContent(YGJustifyCenter)->setGap(4);
+      auto *warning = makeIcon(0xf071);
+      warning->setWidth(24)->setFlexShrink(0);
+      warning->setThemedColor(app_theme::amber);
+      content->setMinWidth(0)->setFlexShrink(1)->setAutoFitText(true);
+      row->addView(warning);
+      row->addView(content);
+      controls_.back().icon = warning;
+      button->setContentView(row);
     } else {
       button->setContentView(content);
     }
@@ -319,6 +333,14 @@ bool MusicSelectToolbarView::isControlEnabled(MusicSelectToolbarControl control)
   case MusicSelectToolbarControl::Settings: return bool(callbacks_.openSettings);
   default: return true;
   }
+}
+
+void MusicSelectToolbarView::setQuickRetryEnabled(bool enabled) {
+  if (quickRetryEnabled_ == enabled) return;
+  quickRetryEnabled_ = enabled;
+  rebuild();
+  place(state_.hasPosition ? state_.x : kDefaultPosition,
+        state_.hasPosition ? state_.y : kDefaultPosition);
 }
 
 void MusicSelectToolbarView::setControlEnabled(MusicSelectToolbarControl control,

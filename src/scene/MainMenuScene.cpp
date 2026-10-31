@@ -4919,11 +4919,25 @@ void MainMenuScene::refreshQuickRetryStartButton() {
   const auto &meta = selected->meta;
   const auto effective = currentEffectivePlayOptionSelection();
   const int mode = long_note_mode::valueFromId(effective.longNoteMode);
+  const auto rules = compileGameplayGaugeRules(profileSelections.ruleset, meta, GaugeProfile::Standard);
+  GameplayScoreState initial({.gaugeRules = rules, .keyMode = meta.KeyMode});
+  initial.configureGauge(profileSelections.gaugeType, profileSelections.gaugeAutoShift,
+      rules.resolvedProfile, profileSelections.gaugeAutoShiftLowerBound);
+  initial.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      effective.assistOption, meta.MinBpm, meta.MaxBpm,
+      {.percent = context.settings.selectedPlaybackRatePercent,
+       .mode = context.settings.selectedPlaybackMode}));
+  bool uncertain = false;
+  const auto eligible = [&](quick_retry::Targets target) {
+    const auto result = quick_retry::startupTargetEligible(initial, meta.TotalNotes, target,
+                                                          meta.TotalLongNotes > 0);
+    if (!result) uncertain = true;
+    return result.value_or(false);
+  };
   std::vector<quick_retry::HurdleAlternatives> groups;
-  if (context.settings.quickRetryGauge) {
+  if (context.settings.quickRetryGauge && eligible({.requireGaugeClear = true})) {
     const auto required = quick_retry::requiredGaugeType(profileSelections.gaugeType,
         profileSelections.gaugeAutoShift, profileSelections.gaugeAutoShiftLowerBound);
-    const auto rules = compileGameplayGaugeRules(profileSelections.ruleset, meta, GaugeProfile::Standard);
     auto type = required;
     std::string label = gaugeButtonLabel(required, GaugeAutoShiftMode::None);
     if (profileSelections.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
@@ -4944,7 +4958,7 @@ void MainMenuScene::refreshQuickRetryStartButton() {
       pacemaker::normalizeTargetId(profileSelections.pacemakerTarget) != pacemaker::kTargetGoal) {
     const auto target = pacemaker::targetFromSelection(meta, profileSelections.pacemakerTarget,
         scoreBestScores.bestFor(meta, mode));
-    if (target.enabled) {
+    if (target.enabled && eligible({.pacemakerScore = target.finalScore})) {
       const auto label = target.label == pacemaker::kTargetBest
           ? target.label + " " + std::to_string(target.finalScore) : target.label;
       groups.push_back({{{quick_retry::HurdleKind::Score, target.finalScore, label}}});
@@ -4968,11 +4982,15 @@ void MainMenuScene::refreshQuickRetryStartButton() {
     const auto goals = quick_retry::compileGoalTargets(quickRetryGoals_,
         scoreLongNoteModeForClearLamp(meta, mode), meta.TotalNotes);
     quick_retry::HurdleAlternatives alternatives;
-    if (goals.scoreLabel) alternatives.push_back({{quick_retry::HurdleKind::Score,
+    if (goals.scoreLabel && eligible({.score = goals.targets.score})) alternatives.push_back({{quick_retry::HurdleKind::Score,
         goals.targets.score, chart_goals::targetLabels(*goals.scoreLabel).score}});
-    if (goals.targets.lamp >= 0) alternatives.push_back({{quick_retry::HurdleKind::Clear,
+    if (goals.targets.lamp >= 0 && eligible({.lamp = goals.targets.lamp})) alternatives.push_back({{quick_retry::HurdleKind::Clear,
         clearLampOrder(goals.targets.lamp), kombo::lampLabel(goals.targets.lamp)}});
     if (!alternatives.empty()) groups.push_back(std::move(alternatives));
+  }
+  if (uncertain) {
+    button->setQuickRetry(true, i18n::tr("menu.selector.retry.pending"));
+    return;
   }
   const auto hurdles = quick_retry::summarizeHurdles(groups, context.settings.quickRetryAllConditionsFail);
   const auto description = quick_retry::hurdleText(hurdles, i18n::tr("menu.selector.retry.or"));
