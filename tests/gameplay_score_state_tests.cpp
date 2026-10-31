@@ -279,6 +279,37 @@ void testBestClearFallsBackToBottomGaugeWhenNoneQualifies() {
 }
 } // namespace
 
+void testQuickRetryDeferredBadGaugeFloor() {
+  struct Case { float gauge; int remaining; int bads; int hcnTicks; bool clears; };
+  for (const auto &test : std::array{
+           Case{2, 80, 1, 0, true}, Case{2, 78, 1, 0, false},
+           Case{20, 63, 1, 0, false}, Case{2, 81, 2, 0, true},
+           Case{2, 78, 1, 2, true}}) {
+    GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+    state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+    state.stagePassedNotes = 100 - test.remaining;
+    state.comboBreak = 1;
+    state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = test.gauge;
+    quick_retry::Projection pending;
+    pending.pendingClassicJudgements[Bad] = test.bads;
+    pending.hellChargeTicks = test.hcnTicks;
+
+    auto played = state;
+    for (int i = 0; i < test.bads; ++i) played.commitJudge(JudgeResult(Bad, 0));
+    for (int i = test.bads; i < test.remaining; ++i) played.commitJudge(JudgeResult(PGreat, 0));
+    for (int i = 0; i < test.hcnTicks; ++i) played.applyGaugeJudgementRate(Great, 0.5F);
+    if ((played.getClearTypeRank() == kClearTypeNormalClearRank) != test.clears)
+      std::cerr << "start=" << test.gauge << " remaining=" << test.remaining
+                << " bads=" << test.bads << " ticks=" << test.hcnTicks
+                << " final=" << played.currentGauge << '\n';
+    require((played.getClearTypeRank() == kClearTypeNormalClearRank) == test.clears,
+            "deferred BAD fixture confirms attainable clear with real gauge clamping");
+    require(quick_retry::shouldRetry(state, 100, {.lamp = kClearTypeNormalClearRank}, pending) ==
+                !test.clears,
+            "projection applies deferred damage at the floor before optimistic recovery");
+  }
+}
+
 void testQuickRetryReachability() {
   require(quick_retry::remainingHellChargeTicks(1'000'000, 1'200'000, 0, 0) == 0,
           "exactly 200ms future HCN cannot earn a strict recovery tick");
@@ -362,6 +393,7 @@ void testQuickRetryReachability() {
 }
 
 int main() {
+  testQuickRetryDeferredBadGaugeFloor();
   testQuickRetryReachability();
   static_assert(kClearTypeLightAssistedEasyClearRank == 50);
   static_assert(kClearTypeAssistedEasyClearRank == 100);

@@ -52,13 +52,21 @@ inline int maximumClear(const GameplayScoreState &state, int remaining,
         -rules.delta(type, Bad, 0) >= definition.maximum) continue;
     const float delta = rules.delta(type, PGreat, state.gaugeValues[i]);
     const float hcnDelta = rules.delta(type, Great, state.gaugeValues[i], 0.5F);
-    double value = state.gaugeValues[i] + double(delta) * remaining +
-                   double(hcnDelta) * projection.hellChargeTicks;
+    double recovery = double(delta) * remaining +
+                      double(hcnDelta) * projection.hellChargeTicks;
+    double damage = 0;
     for (int j = Great; j <= Bad; ++j) {
       const int count = projection.pendingClassicJudgements[j];
-      value += count * double(rules.delta(type, static_cast<Judgement>(j),
-                                         0) - delta);
+      const double deferredDelta = rules.delta(type, static_cast<Judgement>(j), 0);
+      recovery += count * (std::max(0.0, deferredDelta) - delta);
+      damage += count * std::min(0.0, deferredDelta);
     }
+    // Damage before recovery maximizes the benefit of a groove gauge's floor.
+    // This optimistic ordering needs only cached judgement counts, not a scan
+    // of pending tails. Survival gauges cannot recover through their death floor.
+    double value = state.gaugeValues[i] + damage;
+    if (!definition.survival) value = std::max<double>(definition.minimum, value);
+    value += recovery;
     // A conservative float accumulation bound avoids replaying every remaining
     // judgement near the border. Work is bounded by the fixed gauge table.
     value += (remaining + projection.hellChargeTicks) *
