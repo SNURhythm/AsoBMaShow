@@ -64,10 +64,11 @@ this list. Once the shared daily bonus budget is spent, the folders are empty.
 Both the built-in browser and skin-driven selector support these folders, with
 normal search/filter/navigation behavior and refresh after play or day rollover.
 
-A play starting below the daily goal awards **10 points for every completed
-round**, even when simultaneous completions take the total above the target.
-For example, two completed rounds at 10/20 award 20 points, finishing at 30/20.
-This overflow is regular progress, not extra savings. Later plays award
+Completed rounds award **10 points**, capped at the points remaining to reach
+the daily goal. Once a completion reaches that goal, later completions from
+the same play immediately use extra-challenge rewards. For example, two
+completions at 10/20 award 10 + 1 points, finishing at 21/20 with one point
+added to savings. Extra-challenge rounds award
 **1 bonus point each**, sharing a hardcoded **10-point daily budget** across all
 assignments. There is no per-assignment cap: one assignment can earn all ten.
 All assignment progression stops when the shared budget is spent. Simultaneous

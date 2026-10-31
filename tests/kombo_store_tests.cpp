@@ -362,20 +362,20 @@ int main() {
   savedPlay.chart = "extra";
   recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:14:20", 0);
   imported = load(db);
-  CHECK(imported.days.at(importedDay).points == 11);
+  CHECK(imported.days.at(importedDay).points == 2);
   CHECK(imported.days.at(importedDay).assignments[0].requirement.levels[0].level == "Z");
   resetExtraChallenge(imported, "one", importedDay);
   save(db, imported);
   savedPlay.chart = "easy1";
   recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:15:20", 0);
   imported = load(db);
-  CHECK(imported.days.at(importedDay).assignments[0].charts == 1 && imported.days.at(importedDay).points == 11);
+  CHECK(imported.days.at(importedDay).assignments[0].charts == 1 && imported.days.at(importedDay).points == 2);
   resetExtraChallenge(imported, "one", importedDay); // Duplicate confirmation is harmless.
   CHECK(imported.days.at(importedDay).assignments[0].charts == 1);
   savedPlay.chart = "easy2";
   recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:16:20", 0);
   imported = load(db);
-  CHECK(imported.days.at(importedDay).points == 12);
+  CHECK(imported.days.at(importedDay).points == 3);
   CHECK(imported.days.at(importedDay).assignments[0].requirement.chartCount == 2);
   CHECK(imported.days.at(importedDay).assignments[0].requirement.levels[0].level == "intro");
   advance(imported, importedDay + 1);
@@ -421,10 +421,10 @@ int main() {
   CHECK(migratedRange.requirement.levels[0].level == "Z");
   savedPlay.chart = "partial-zero"; savedPlay.previousLamp = 300;
   recordSavedPlay(db, chartPath, savedPlay, "partial-zero-md5", "2023-11-14 22:14:20", 1);
-  CHECK(load(db).days.at(importedDay).points == 10);
+  CHECK(load(db).days.at(importedDay).points == 1);
   savedPlay.chart = "partial-one";
   recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:15:20", 1);
-  CHECK(load(db).days.at(importedDay).points == 11);
+  CHECK(load(db).days.at(importedDay).points == 2);
   std::filesystem::remove(chartPath);
 
   // Unsupported or damaged state must be reported, never silently replaced.

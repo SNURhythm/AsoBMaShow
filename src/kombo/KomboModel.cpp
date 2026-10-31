@@ -371,20 +371,28 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
   std::sort(ordered.begin(), ordered.end(), [](const auto *a, const auto *b) {
     return a->requirement.id < b->requirement.id;
   });
-  std::vector<Progress *> completed;
+  // Settle each completion in stable ID order so later completions from this
+  // play use bonus rewards immediately after the daily target is reached.
+  const auto completeRound = [&](Progress &progress) {
+    const bool extra = day.points >= day.config.dailyGoal;
+    const auto reward = extra ? 1 : std::min<std::int64_t>(
+        regularRoundPoints, day.config.dailyGoal - day.points);
+    ++progress.completedRounds;
+    progress.charts = 0;
+    progress.earnedPoints += reward;
+    day.points += reward;
+    if (extra) { ++progress.bonusRounds; ++s.savings; --remainingBonus; }
+  };
   for (auto *item : ordered) {
-    if (bonus && remainingBonus == 0) break;
+    if (day.points >= day.config.dailyGoal && remainingBonus == 0) break;
     auto &progress = *item;
     if (isGoalsAssignment(progress.requirement)) {
       for (const auto &goal : p.achievedGoals) {
-        if (bonus && remainingBonus == 0) break;
+        if (day.points >= day.config.dailyGoal && remainingBonus == 0) break;
         if (goal.empty() || !progress.usedCharts.insert(goal).second) continue;
         progress.chartProgress.emplace(goal, ChartAchievement{});
         if (++progress.charts < progress.requirement.chartCount) continue;
-        ++progress.completedRounds;
-        progress.charts = 0;
-        completed.push_back(&progress);
-        if (bonus) --remainingBonus;
+        completeRound(progress);
       }
       continue;
     }
@@ -415,18 +423,7 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
     if (!meetsTargets(progress.requirement, achievement.lamp, achievement.score, achievement.maxScore)) continue;
     progress.usedCharts.insert(p.chart);
     if (++progress.charts < progress.requirement.chartCount) continue;
-    ++progress.completedRounds;
-    progress.charts = 0;
-    completed.push_back(&progress);
-    if (bonus) --remainingBonus;
-  }
-  // Every round completed by a pre-goal play earns its full regular reward.
-  // Bonus mode begins on the next play; overflow is not bonus savings.
-  for (auto *progress : completed) {
-    const auto reward = bonus ? 1 : regularRoundPoints;
-    progress->earnedPoints += reward;
-    day.points += reward;
-    if (bonus) { ++progress->bonusRounds; ++s.savings; }
+    completeRound(progress);
   }
   // Every assignment sees the same final daily total, independent of list order.
   if (!bonus && day.points >= day.config.dailyGoal) {
