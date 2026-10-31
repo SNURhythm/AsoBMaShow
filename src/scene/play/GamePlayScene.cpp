@@ -5487,14 +5487,21 @@ void GamePlayScene::renderQuickRetryFeedback() {
   const auto clear = app_theme::withAlpha(app_theme::amber(), 0).toABGR();
   const float width = rendering::window_width;
   const float height = rendering::window_height;
-  const float edge = 28.0F + 30.0F * progress;
+  const float edge = std::min(28.0F + 30.0F * progress, std::min(width, height) * 0.5F);
   auto &batch = quickRetryFeedbackBatch;
   batch.setSubmitView(rendering::ui_view);
   batch.begin();
-  batch.addRectVerticalGradient(0, 0, width, edge, color, clear);
-  batch.addRectVerticalGradient(0, height - edge, width, edge, clear, color);
-  batch.addRectColors(0, edge, edge, height - 2 * edge, color, clear, clear, color);
-  batch.addRectColors(width - edge, edge, edge, height - 2 * edge, clear, color, color, clear);
+  // Four mitered strips share the outer and inner corners. Their gradients
+  // meet continuously, without gaps or brighter overlapping corner patches.
+  const auto strip = [&](float ax, float ay, float bx, float by,
+                         float cx, float cy, float dx, float dy) {
+    batch.addTriangleColors(ax, ay, bx, by, cx, cy, color, color, clear);
+    batch.addTriangleColors(ax, ay, cx, cy, dx, dy, color, clear, clear);
+  };
+  strip(0, 0, width, 0, width - edge, edge, edge, edge);
+  strip(width, 0, width, height, width - edge, height - edge, width - edge, edge);
+  strip(width, height, 0, height, edge, height - edge, width - edge, height - edge);
+  strip(0, height, 0, 0, edge, edge, edge, height - edge);
   // A crisp inner rim makes the broad glow visible over bright BGA/skins.
   const auto rim = Color(255, 239, 205,
       static_cast<std::uint8_t>(145.0F * fade)).toABGR();

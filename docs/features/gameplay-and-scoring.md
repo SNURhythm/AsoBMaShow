@@ -41,7 +41,7 @@ the personal-best ghost gains replay progression.
 ## Automatic retry feedback
 
 Automatic Quick Retry plays a glassy two-note cue and a 320 ms amber edge pulse
-with a bright pale-gold rim for both Keep and Reshuffle. Manual retry remains silent. The cue is preloaded
+with joined corners and a bright pale-gold rim for both Keep and Reshuffle. Manual retry remains silent. The cue is preloaded
 when Quick Retry targets are armed and uses the system-audio processor, so chart
 stop/reload cannot cut it off or change its pitch. Master volume and mute apply.
 The sound and fade state survive replacement of the gameplay scene; repeated
