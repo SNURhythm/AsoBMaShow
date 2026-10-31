@@ -117,7 +117,7 @@ throughput. Buffer count is not a user setting.
   prevent window resizing. The deprecated flag remains a compatibility
   workaround, and Direct Metal presentation must be verified separately.
   See [Apple's migration guidance](https://developer.apple.com/documentation/technotes/tn3192-migrating-your-app-from-the-deprecated-uirequiresfullscreen-key).
-  On iOS, it also offers a saved **Gameplay frame pacing** On/Off control,
+  On iOS, it also offers a saved **Improved frame pacing** On/Off control,
   which uses CAMetalDisplayLink internally.
   It defaults to On for new profiles and profiles without a saved preference.
   An explicit saved Off remains an override.
