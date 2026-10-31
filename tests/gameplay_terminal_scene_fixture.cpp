@@ -229,11 +229,24 @@ public:
   StartOptions options;
   struct {
     FixtureJukebox jukebox;
+    struct {
+      int plays = 0;
+      float gain = -1.0F;
+      void stopSkinSound(int) {}
+      void playSkinSound(int, float value, bool) { ++plays; gain = value; }
+    } systemSounds;
+    auto &systemAudio() { return systemSounds; }
+    struct {
+      std::optional<int> sound = 1;
+      std::optional<long long> startedMicros;
+      std::string reason;
+    } quickRetryFeedback;
     std::function<void()> requestImprovedFramePacing;
     std::atomic_bool appInBackground{false};
     InputProfile inputProfile;
     void refreshAudioTimingProfile(bool) {}
     struct {
+      struct { struct { float masterVolume = 1.0F; } audio; } audioVideo;
       bool inputKeysoundEnabled = true;
       bool ipadGestureReminderEnabled = false;
       int notesDisplayTimingMilliseconds = 0;
@@ -493,7 +506,13 @@ public:
   std::optional<quick_retry::Projection> realtimeQuickRetryProjection;
   std::int64_t quickRetryRemainingHellChargeTicks = 0;
   quick_retry::Projection currentQuickRetryProjection() const;
-  bool retryIfTargetsUnreachable() { return false; }
+  quick_retry::Targets quickRetryTargets;
+  pacemaker::Target activePacemakerTarget;
+  bool quickRetryNewPattern = false;
+  int reshuffles = 0;
+  void playQuickRetryFeedback();
+  void retryWithNewPattern() { ++reshuffles; }
+  bool retryIfTargetsUnreachable();
   void updateQuickRetryHellCharge(const bms_parser::LongNote *, long long) {}
   bool finishIfGaugeFailed();
   void updateSkinGameplayGraph(long long) {}
@@ -2696,7 +2715,42 @@ void testLegacyMineKeysoundOnlyOnDetonation() {
   }
 }
 
+void testAutomaticRetryCue() {
+  for (const bool reshuffle : {false, true}) {
+    GamePlayScene scene;
+    scene.quickRetryTargets.score = 5; // Two notes can earn at most four EX points.
+    scene.quickRetryNewPattern = reshuffle;
+    scene.queueDeferred = true;
+    scene.context.jukebox.paused = true;
+    require(!scene.retryIfTargetsUnreachable() && scene.context.systemSounds.plays == 0,
+            "paused gameplay does not trigger automatic retry feedback");
+    scene.context.jukebox.paused = false;
+    require(scene.retryIfTargetsUnreachable() && scene.context.systemSounds.plays == 1,
+            "automatic Keep and Reshuffle each trigger a cue immediately");
+    require(scene.context.quickRetryFeedback.reason == "GOAL SCORE UNREACHABLE",
+            "automatic Keep and Reshuffle retain the failed target reason before reset");
+    require(scene.retryIfTargetsUnreachable() && scene.context.systemSounds.plays == 1,
+            "a pending retry never retriggers the cue");
+    require(reshuffle ? scene.reshuffles == 1 : scene.deferred.size() == 1,
+            "feedback preserves the existing retry scheduling");
+  }
+  for (const float volume : {0.0F, 0.25F, 1.0F}) {
+    GamePlayScene scene;
+    scene.clock = 1234;
+    scene.context.settings.audioVideo.audio.masterVolume = volume;
+    scene.playQuickRetryFeedback();
+    require(scene.context.systemSounds.gain == volume,
+            "retry cue passes master attenuation and mute to the system voice");
+    require(scene.context.quickRetryFeedback.startedMicros == 1234,
+            "visual cue still starts when audio is muted");
+  }
+  GamePlayScene manual;
+  manual.restartCurrentPattern();
+  require(manual.context.systemSounds.plays == 0, "manual retry stays silent");
+}
+
 int main(int argc, char **argv) {
+  testAutomaticRetryCue();
   testLegacyMissedHcnPreview();
   testLegacyMineKeysoundOnlyOnDetonation();
   testLegacyLongNoteTimingSamples();

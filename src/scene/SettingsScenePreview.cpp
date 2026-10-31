@@ -255,7 +255,7 @@ void SettingsScene::ensurePreviewRenderer() {
           return skin::createLuaSkinProductionHttpTransport(stop);
         },
         .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-            context.jukebox.audioRuntime(), [this] {
+            context.systemAudio(), [this] {
               return context.settings.audioVideo.audio.masterVolume;
             }, {}, context.skinLiveResourceCounters),
         .captureLegacyInputGeneration = [this] {

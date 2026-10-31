@@ -368,20 +368,6 @@ MusicSelectScene::~MusicSelectScene() {
 
 void MusicSelectScene::configureSoundServices() {
   if (context.storageMaintenanceActive) return;
-  // Do this before either creating or resuming the preview service. Parsing
-  // can outlast its preview delay; later chart staging must not reset the
-  // device underneath an authored file that has already started.
-  if (!context.jukebox.playbackRate().neutral()) {
-    if (previewAudio_) previewAudio_->silenceAndWait();
-    const auto stopped = context.jukebox.stop();
-    std::string error;
-    if (!stopped.success || !context.jukebox.setPlaybackRate({}, error)) {
-      SDL_Log("Could not reset selector audio for preview: %s", error.c_str());
-      previewAudio_.reset();
-      systemSound_.reset();
-      return;
-    }
-  }
   if (previewAudio_ && systemSound_ &&
       soundSetPath_ == context.settings.skinSelectSoundSetPath &&
       soundSetBookmark_ == context.settings.skinSelectSoundSetBookmark) {
@@ -442,7 +428,7 @@ void MusicSelectScene::configureSoundServices() {
           selectSoundRoots, skin::MusicSelectSystemSound::Select)
           .value_or(std::filesystem::path{kSkinSoundAssetRoot} / "select.wav");
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
-      musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm,
+      musicSelectPreviewAudioPort(context.systemAudio(), selectBgm,
           [this](const auto &path, bool highlight, const auto &cancelled, std::stop_token stop) {
             return playChartPreview(path, highlight, cancelled, stop);
           }, [this] { chartPreviewPlayer_.Stop(); }),
@@ -452,7 +438,7 @@ void MusicSelectScene::configureSoundServices() {
   }
   systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
       selectSoundRoots,
-      musicSelectSkinSoundPlayback(context.jukebox.audioRuntime()));
+      musicSelectSkinSoundPlayback(context.systemAudio()));
   soundSetPath_ = context.settings.skinSelectSoundSetPath;
   soundSetBookmark_ = context.settings.skinSelectSoundSetBookmark;
 }
@@ -545,17 +531,14 @@ void MusicSelectScene::init() {
                 fspath_to_utf8(request.meta.BmsPath))) {
           return;
         }
-        // Stage the chart without stopping the shared audio device when the
-        // jukebox owns no active playback, so the select BGM/preview playing on
-        // the same AudioWrapper keep playing through the preload. No explicit
-        // jukebox.stop() here: loadChartPreservingDevice tears down any prior
-        // jukebox session itself (and only stops the device when it must).
+        // Chart staging owns only gameplay audio; select BGM/preview and SEs
+        // continue on the independent system submix.
         auto previewCache = std::make_shared<audio::DecodedAssetCache>(
             audio::DecodedAssetCache::kUnlimitedRetainedBytes);
         context.jukebox.setDecodedAssetCache(previewCache);
         ScopeExit releasePreviewCache([this] { context.jukebox.setDecodedAssetCache(nullptr); });
         const auto loaded =
-            context.jukebox.loadChartPreservingDevice(*chart, true, cancelled);
+            context.jukebox.loadChart(*chart, true, cancelled);
         if (!loaded.success || cancelled.load(std::memory_order_relaxed) ||
             preloadWorker_->superseded(
                 fspath_to_utf8(request.meta.BmsPath))) {
@@ -4799,7 +4782,7 @@ bool MusicSelectScene::activateSkin(
       .initialFrame = makeFrame(),
       .builtinImageReader = archive_file::readFileBounded,
       .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-          context.jukebox.audioRuntime(),
+          context.systemAudio(),
           [this] { return context.settings.audioVideo.audio.masterVolume; },
           {.maximumIdentities = std::numeric_limits<std::size_t>::max(),
            .maximumEncodedBytes = std::numeric_limits<std::size_t>::max(),

@@ -1,6 +1,6 @@
 target_sources(main PRIVATE AudioBackend.cpp DesktopAudioRoute.cpp LinuxAudioRoute.cpp AudioDeviceManager.cpp AudioMix.cpp
                             ChartVisualAssetResolver.cpp
-                            AudioWrapper.cpp ChartAudioRenderer.cpp
+                            AudioWrapper.cpp SharedAudioOutput.cpp ApplicationAudio.cpp ChartAudioRenderer.cpp
                             MusicPreparation.cpp ClubBeat.cpp decoder.cpp DecodedAssetCache.cpp
                             GameplayBgaMissStateTracker.cpp Jukebox.cpp
                             MusicPlayerService.cpp MusicPlaylist.cpp

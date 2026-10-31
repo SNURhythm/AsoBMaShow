@@ -2,8 +2,11 @@
 
 #include "GameplayScoreState.h"
 #include "QuickRetryProjection.h"
+#include "../../i18n/Localization.h"
 #include <limits>
 #include <span>
+#include <string>
+#include <string_view>
 
 namespace quick_retry {
 // Each unfinished condition is an alternative opportunity for progress.
@@ -144,6 +147,44 @@ inline bool shouldRetry(const GameplayScoreState &state, int totalNotes,
     include(!scoreReachable && !lampReachable);
   }
   return targets.allConditionsFail ? allFailed : anyFailed;
+}
+
+// Called only when presenting a retry, using the same projection as its trigger.
+inline std::string failureReason(const GameplayScoreState &state, int totalNotes,
+                                 const Targets &targets, const Projection &projection = {},
+                                 std::string_view pacemakerLabel = "PACEMAKER") {
+  if (!shouldRetry(state, totalNotes, targets, projection)) return {};
+  const bool hasGoals = targets.score >= 0 || targets.lamp >= 0;
+  const int groups = int(targets.requireGaugeClear) + int(targets.pacemakerScore >= 0) + int(hasGoals);
+  if (targets.allConditionsFail && groups > 1) return i18n::tr("gameplay.quick_retry.all_unreachable");
+  if (targets.requireGaugeClear &&
+      shouldRetry(state, totalNotes, {.requireGaugeClear = true}, projection)) {
+    auto gauge = requiredGaugeType(state.selectedGaugeType, state.gaugeAutoShift,
+                                  state.gaugeAutoShiftLowerBound);
+    if (state.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
+        state.gaugeRules().gauges[gaugeTypeIndex(gauge)].survival)
+      gauge = GaugeType::Normal;
+    return i18n::format("gameplay.quick_retry.clear_unreachable", {{"gauge", gaugeTypeToLabel(gauge)}});
+  }
+  if (targets.pacemakerScore >= 0 &&
+      shouldRetry(state, totalNotes, {.pacemakerScore = targets.pacemakerScore}, projection)) {
+    if (pacemakerLabel.empty() || pacemakerLabel == "PACEMAKER")
+      return i18n::tr("gameplay.quick_retry.pacemaker_unreachable");
+    if (pacemakerLabel == "BEST") return i18n::tr("gameplay.quick_retry.best_unreachable");
+    return i18n::format("gameplay.quick_retry.target_unreachable", {{"target", pacemakerLabel}});
+  }
+  if (targets.score >= 0 && targets.lamp >= 0) return i18n::tr("gameplay.quick_retry.goals_unreachable");
+  if (targets.lamp >= 0) {
+    const int lamp = normalizeClearLamp(targets.lamp);
+    if (lamp >= kClearTypeFullComboRank) return i18n::tr("gameplay.quick_retry.full_combo_unreachable");
+    const char *gauge = lamp >= kClearTypeExHardClearRank ? "EX-HARD" :
+        lamp >= kClearTypeHardClearRank ? "HARD" :
+        lamp >= kClearTypeNormalClearRank ? "NORMAL" :
+        lamp >= kClearTypeEasyClearRank ? "EASY" :
+        lamp >= kClearTypeAssistedEasyClearRank ? "ASSIST EASY" : "LIGHT ASSIST EASY";
+    return i18n::format("gameplay.quick_retry.clear_unreachable", {{"gauge", gauge}});
+  }
+  return i18n::tr("gameplay.quick_retry.score_unreachable");
 }
 
 inline Targets armReachableTargets(const GameplayScoreState &state, int totalNotes,

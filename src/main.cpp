@@ -1054,7 +1054,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     // The miniaudio device is independent of SDL's paused audio devices.
     const bool gameplayContinues = sceneManager.currentScene != nullptr &&
         sceneManager.currentScene->continuesAudioInBackground();
-    context.jukebox.audioRuntime().setApplicationSuspended(
+    context.applicationAudio.setApplicationSuspended(
         background && !gameplayContinues);
 #endif
     scene_event_routing::dispatchApplicationBackgroundChange(

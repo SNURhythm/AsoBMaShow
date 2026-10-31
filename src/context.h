@@ -49,6 +49,7 @@
 #include "audio/GameplayBgaFrame.h"
 #include "audio/Jukebox.h"
 #include "audio/AudioDeviceManager.h"
+#include "audio/ApplicationAudio.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/MusicPlayerService.h"
 #include "input/InputDeviceRegistry.h"
@@ -250,7 +251,17 @@ public:
         error = "The active profile input path is not configured.";
         return false;
       };
+  audio::ApplicationAudio applicationAudio;
   Jukebox jukebox;
+  AudioWrapper &systemAudio() noexcept { return applicationAudio.systemSounds(); }
+  // Automatic-retry feedback outlives the gameplay scene during Reshuffle.
+  // PCM is retained by the system processor until application shutdown.
+  struct {
+    std::optional<audio::SkinSoundHandle> sound;
+    bool loadAttempted = false;
+    std::optional<long long> startedMicros;
+    std::string reason;
+  } quickRetryFeedback;
   audio::AudioDeviceManager audioDeviceManager;
   audio::ApplyResult audioStartupApplyResult;
   music_player::MusicPlayerService musicPlayer;
@@ -592,8 +603,9 @@ public:
         inputProfile(application_context_detail::loadActiveInput(
             profileManager, profileInitializationResult)),
         bokutachiCacheStore(std::make_shared<ir::tachi::BokutachiCacheStore>()),
-        jukebox(&gameStopwatch),
-        audioDeviceManager(jukebox.audioRuntime(), jukebox,
+        applicationAudio(&gameStopwatch),
+        jukebox(&gameStopwatch, applicationAudio.gameplay()),
+        audioDeviceManager(applicationAudio, jukebox,
                            settings.audioVideo.audio),
         musicPlayer(musicPlaylistRepository, chartRepository),
         temporaryPathCleanupService(
@@ -1527,7 +1539,7 @@ public:
     const auto now = std::chrono::steady_clock::now();
     if (!force && now - audioTimingRouteCheckedAt < std::chrono::seconds(1)) return false;
     audioTimingRouteCheckedAt = now;
-    const auto bluetooth = jukebox.audioRuntime().outputIsBluetooth(force);
+    const auto bluetooth = applicationAudio.outputIsBluetooth(force);
     if (!bluetooth || !settings.selectAudioTimingProfile(*bluetooth)) return false;
     jukebox.setBgaOffsetMs(settings.audioOffsetMs);
     std::string error;

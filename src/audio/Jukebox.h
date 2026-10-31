@@ -183,6 +183,7 @@ public:
   Jukebox(Stopwatch *stopwatch);
   Jukebox(Stopwatch *stopwatch,
           std::unique_ptr<audio::IBackendFactory> backendFactory);
+  Jukebox(Stopwatch *stopwatch, AudioWrapper &gameplayAudio);
   ~Jukebox();
   void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> cache) {
     audio.setDecodedAssetCache(std::move(cache));
@@ -456,7 +457,9 @@ private:
   std::atomic_bool schedulerStarting = false;
   std::thread playThread;
   Stopwatch *stopwatch;
-  AudioWrapper audio;
+  std::unique_ptr<AudioWrapper> ownedAudio;
+  AudioWrapper &audio;
+  void initializeBgaPrograms();
   std::vector<ScheduledAudioEvent> audioList;
   size_t audioCursor = 0;
   std::vector<std::pair<long long, int>> bmpList;

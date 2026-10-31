@@ -50,19 +50,15 @@ struct SkinSystemSoundService {
 }
 struct MusicSelectScene {
   struct Context {
+    int systemAudio() { return 0; }
     struct Settings { std::string skinSelectSoundSetPath, skinSelectSoundSetBookmark; } settings;
     struct Jukebox {
       struct Rate { int percent = 100; bool neutral() const { return percent == 100; } } rate;
       struct Result { bool success = true; };
-      bool filePlaying = false;
       int stops = 0;
-      int audioRuntime() { return 0; }
       Rate playbackRate() const { return rate; }
-      Result stop() { filePlaying = false; ++stops; return {}; }
+      Result stop() { ++stops; return {}; }
       bool setPlaybackRate(Rate value, std::string &) { rate = value; return true; }
-      void finishDelayedPreload() {
-        if (!rate.neutral()) { stop(); rate = {}; }
-      }
     } jukebox;
     std::atomic_bool appInBackground = false;
     std::atomic_bool storageMaintenanceActive = false;
@@ -85,22 +81,15 @@ int main() {
   scene.context.jukebox.rate.percent = 150;
   scene.configureSoundServices();
   assert(scene.previewAudio_->path == std::filesystem::path("first/select.wav"));
-  assert(scene.context.jukebox.rate.neutral() && scene.context.jukebox.stops == 1 &&
-         "selector audio must start only after clearing a retained gameplay rate");
-  // Parsing may still be blocked when the preview delay expires. Its later
-  // chart staging must preserve a file that has already started.
-  scene.context.jukebox.filePlaying = true;
-  scene.context.jukebox.finishDelayedPreload();
-  assert(scene.context.jukebox.filePlaying);
+  assert(scene.context.jukebox.rate.percent == 150 && scene.context.jukebox.stops == 0 &&
+         "system sound setup does not reset or stop gameplay");
   assert(scene.systemSound_->roots.front() == "first");
   scene.configureSoundServices();
   assert(previewCreated == 1 && "unchanged settings must preserve the services");
-  scene.context.jukebox.rate.percent = 150;
+  scene.context.jukebox.rate.percent = 200;
   scene.configureSoundServices();
-  scene.context.jukebox.filePlaying = true;
-  scene.context.jukebox.finishDelayedPreload();
-  assert(scene.context.jukebox.filePlaying && scene.context.jukebox.stops == 2 &&
-         previewCreated == 1 && "resume resets rate even when reusing sound services");
+  assert(scene.context.jukebox.rate.percent == 200 && scene.context.jukebox.stops == 0 &&
+         previewCreated == 1 && "resuming sound services is independent of retained gameplay rate");
   scene.context.settings = {"second", "bookmark2"};
   scene.configureSoundServices();
   assert(previewCreated == 2 && previewAlive == 1 && systemAlive == 1);

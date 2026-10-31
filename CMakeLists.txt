@@ -5003,6 +5003,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/LinuxAudioRoute.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SharedAudioOutput.cpp
+        src/audio/ApplicationAudio.cpp
         src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp
         src/Utils.cpp
         src/path.cpp
@@ -5013,6 +5015,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(audio_wrapper_lifecycle_tests PRIVATE cxx_std_23)
     target_link_libraries(audio_wrapper_lifecycle_tests PRIVATE ${COMMON_LIBS})
+    # Optional optimized callback comparison; excluded from ordinary builds/tests.
+    get_target_property(AUDIO_RENDER_BENCHMARK_SOURCES audio_wrapper_lifecycle_tests SOURCES)
+    add_executable(audio_render_benchmark EXCLUDE_FROM_ALL ${AUDIO_RENDER_BENCHMARK_SOURCES})
+    target_include_directories(audio_render_benchmark PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(audio_render_benchmark PRIVATE cxx_std_23)
+    target_compile_options(audio_render_benchmark PRIVATE
+        $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-O2>
+        $<$<CXX_COMPILER_ID:MSVC>:/O2>)
+    target_link_libraries(audio_render_benchmark PRIVATE ${COMMON_LIBS})
     add_executable(skin_sound_bundle_decode_tests
         tests/skin_sound_bundle_decode_tests.cpp
         tests/support/AllocationFailure.cpp
@@ -5058,6 +5069,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SharedAudioOutput.cpp
+        src/audio/ApplicationAudio.cpp
         src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp
@@ -6635,6 +6648,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SharedAudioOutput.cpp
+        src/audio/ApplicationAudio.cpp
         src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp

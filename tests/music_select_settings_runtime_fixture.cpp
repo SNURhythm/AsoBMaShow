@@ -150,7 +150,7 @@ struct ApplicationContext {
     int legacyInputGeneration(int, int) { return 0; }
     bool hasCurrentLegacyPressEdge() const { return gesture; }
   } inputDeviceRegistry;
-  struct { int audioRuntime() { return 0; } } jukebox;
+  int systemAudio() { return 0; }
   std::atomic_bool appInBackground = false;
   std::atomic_bool replayVideoExportActive = false;
   struct { bool requested = false; bool exportRequested() const { return requested; } } rendererAccess;

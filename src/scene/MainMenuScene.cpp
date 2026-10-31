@@ -1825,7 +1825,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tabLoadingOverlay_->setVisible(false);
   overlayPortal->present(tabLoadingOverlay_);
   previewFilePlayer_ = std::make_unique<MusicSelectPreviewFilePlayer>(
-      &context.jukebox.audioRuntime(), std::filesystem::path{}, true);
+      &context.systemAudio(), std::filesystem::path{}, true);
   previewWorker_ = std::make_unique<MainMenuPreviewController>(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
         const auto &meta = request.meta;
@@ -1876,15 +1876,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
           if (isCancelled()) {
             return;
           }
-          if (this->context.settings.chartPreviewMode == audio::ChartPreviewMode::PreviewFile) {
-            // Returning from rate-adjusted gameplay must not let chart staging
-            // stop a preview file that has just started on the shared device.
-            std::string error;
-            if (!this->context.jukebox.setPlaybackRate({}, error)) {
-              SDL_Log("Preview rate reset failed: %s", error.c_str());
-              return;
-            }
-          }
           const auto previewPath = musicSelectPreviewFilePath(meta.BmsPath, meta.Preview);
           if (!willStart.load() &&
               this->context.settings.chartPreviewMode == audio::ChartPreviewMode::PreviewFile &&
@@ -1893,7 +1884,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                        true, cancelled, {},
                                        this->context.settings.audioVideo.audio.masterVolume)) {
             setSelectedChart(chart, false);
-            const auto loaded = this->context.jukebox.loadChartPreservingDevice(*chart, true, cancelled);
+            const auto loaded = this->context.jukebox.loadChart(*chart, true, cancelled);
             previewVisualsLoaded_ = true;
             if (isCancelled()) {
               previewFilePlayer_->stopCurrent();

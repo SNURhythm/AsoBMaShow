@@ -6,6 +6,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <type_traits>
 
 namespace audio {
 // One callback producer, one UI consumer. Three buffers transfer ownership;
@@ -32,11 +33,17 @@ public:
     publish(0);
   }
 
-  void push(const short *pcm, std::uint32_t frames, int channels,
+  template <typename Sample>
+  void push(const Sample *pcm, std::uint32_t frames, int channels,
             std::uint32_t sampleRate) noexcept {
+    const auto toPcm = [](Sample value) {
+      if constexpr (std::is_same_v<Sample, float>)
+        return static_cast<short>(std::clamp(value, -1.0F, 1.0F) * 32767.0F);
+      else return value;
+    };
     for (std::uint32_t i = 0; i < frames; ++i) {
-      left_[cursor_] = pcm[static_cast<std::size_t>(i) * channels];
-      right_[cursor_] = pcm[static_cast<std::size_t>(i) * channels + (channels > 1 ? 1 : 0)];
+      left_[cursor_] = toPcm(pcm[static_cast<std::size_t>(i) * channels]);
+      right_[cursor_] = toPcm(pcm[static_cast<std::size_t>(i) * channels + (channels > 1 ? 1 : 0)]);
       cursor_ = (cursor_ + 1) % kSize;
     }
     pending_ += frames;

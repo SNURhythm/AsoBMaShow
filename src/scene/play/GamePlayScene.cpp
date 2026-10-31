@@ -284,7 +284,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
             return skin::createLuaSkinProductionHttpTransport(stop);
           },
           .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-              context.jukebox.audioRuntime(), [&context] {
+              context.systemAudio(), [&context] {
                 return context.settings.audioVideo.audio.masterVolume;
               }, {}, context.skinLiveResourceCounters),
           .captureLegacyInputGeneration = [&context] {
@@ -4163,20 +4163,20 @@ bool GamePlayScene::reset() {
 
 void GamePlayScene::prepareGuidedAccessChime() {
   std::atomic<bool> cancelled{false};
-  guidedAccessChime = context.jukebox.audioRuntime().loadSkinSound(
+  guidedAccessChime = context.systemAudio().loadSkinSound(
       fspath_to_path_t(std::filesystem::path("assets/guided-access-enabled.wav")),
       cancelled, 256 * 1024, std::numeric_limits<std::size_t>::max()).handle;
 }
 
 void GamePlayScene::playGuidedAccessChime() {
   if (guidedAccessChime) {
-    context.jukebox.audioRuntime().playSkinSound(*guidedAccessChime, 1.0F, false);
+    context.systemAudio().playSkinSound(*guidedAccessChime, 1.0F, false);
   }
 }
 
 void GamePlayScene::stopGuidedAccessChime(bool release) {
   if (!guidedAccessChime) return;
-  auto &audio = context.jukebox.audioRuntime();
+  auto &audio = context.systemAudio();
   audio.stopSkinSound(*guidedAccessChime);
   if (release) {
     audio.disposeSkinSound(*guidedAccessChime);
@@ -5405,6 +5405,7 @@ void GamePlayScene::configureQuickRetry() {
   }
   quickRetryTargets = quick_retry::armReachableTargets(
       *state, chart->Meta.TotalNotes, quickRetryTargets, currentQuickRetryProjection());
+  if (!quickRetryTargets.empty()) prepareQuickRetryFeedback();
 }
 
 quick_retry::Projection GamePlayScene::currentQuickRetryProjection() const {
@@ -5439,15 +5440,100 @@ bool GamePlayScene::retryIfTargetsUnreachable() {
   if (quickRetryTargets.empty() || state == nullptr || state->isEnding ||
       !state->isPlaying || advancingGameplayInBackground || context.jukebox.isPaused())
     return false;
-  if (!quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryTargets,
-                               currentQuickRetryProjection()))
+  const auto projection = currentQuickRetryProjection();
+  if (!quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryTargets, projection))
     return false;
+  context.quickRetryFeedback.reason = quick_retry::failureReason(
+      *state, chart->Meta.TotalNotes, quickRetryTargets, projection, activePacemakerTarget.label);
   quickRetryPending = true;
   state->isEnding = true;
   stopRealtimeGameplayAuthority(false);
+  playQuickRetryFeedback();
   if (quickRetryNewPattern) retryWithNewPattern();
   else restartCurrentPattern();
   return true;
+}
+
+void GamePlayScene::prepareQuickRetryFeedback() {
+  if (!quickRetryReasonText) {
+    quickRetryReasonText = std::make_unique<TextView>(
+        app_theme::boldFont, 34, TextView::FontWeight::Bold);
+    quickRetryReasonText->setDeferredTextureMaterialization(true);
+    quickRetryReasonText->setGlyphAtlasEnabled(true);
+    quickRetryReasonText->setMinimumFontSize(16);
+    quickRetryReasonText->setAlign(TextView::CENTER);
+    quickRetryReasonText->setVAlign(TextView::MIDDLE);
+    quickRetryReasonText->setColor({255, 239, 205, 255});
+  }
+  auto &feedback = context.quickRetryFeedback;
+  if (feedback.loadAttempted) return;
+  feedback.loadAttempted = true;
+  std::atomic_bool cancelled{false};
+  feedback.sound = context.systemAudio().loadSkinSound(
+      fspath_to_path_t(std::filesystem::path("assets/quick-retry.wav")),
+      cancelled, 256 * 1024, std::numeric_limits<std::size_t>::max()).handle;
+}
+
+void GamePlayScene::playQuickRetryFeedback() {
+  auto &feedback = context.quickRetryFeedback;
+  feedback.startedMicros = nowMicros();
+  if (feedback.sound) {
+    auto &audio = context.systemAudio();
+    audio.stopSkinSound(*feedback.sound);
+    audio.playSkinSound(*feedback.sound, context.settings.audioVideo.audio.masterVolume, false);
+  }
+}
+
+void GamePlayScene::renderQuickRetryFeedback(RenderContext &renderContext) {
+  auto &started = context.quickRetryFeedback.startedMicros;
+  if (!started) return;
+  constexpr float durationMicros = 450'000.0F;
+  const float progress = std::clamp(float(nowMicros() - *started) / durationMicros, 0.0F, 1.0F);
+  if (progress >= 1.0F) {
+    started.reset();
+    return;
+  }
+  // A reshuffled #RANDOM branch can disarm every target. Its carried feedback
+  // still needs a label even when configureQuickRetry did not prepare one.
+  if (!quickRetryReasonText) prepareQuickRetryFeedback();
+  const float fade = (1.0F - progress) * (1.0F - progress);
+  const auto color = app_theme::withAlpha(app_theme::amber(),
+      static_cast<std::uint8_t>(190.0F * fade)).toABGR();
+  const auto clear = app_theme::withAlpha(app_theme::amber(), 0).toABGR();
+  const float width = rendering::window_width;
+  const float height = rendering::window_height;
+  const float edge = std::min(28.0F + 30.0F * progress, std::min(width, height) * 0.5F);
+  renderContext.flushUiBatch();
+  auto &batch = quickRetryFeedbackBatch;
+  batch.setSubmitView(rendering::ui_view);
+  batch.begin();
+  // Four mitered strips share the outer and inner corners. Their gradients
+  // meet continuously, without gaps or brighter overlapping corner patches.
+  const auto strip = [&](float ax, float ay, float bx, float by,
+                         float cx, float cy, float dx, float dy) {
+    batch.addTriangleColors(ax, ay, bx, by, cx, cy, color, color, clear);
+    batch.addTriangleColors(ax, ay, cx, cy, dx, dy, color, clear, clear);
+  };
+  strip(0, 0, width, 0, width - edge, edge, edge, edge);
+  strip(width, 0, width, height, width - edge, height - edge, width - edge, edge);
+  strip(width, height, 0, height, edge, height - edge, width - edge, height - edge);
+  strip(0, height, 0, 0, edge, edge, edge, height - edge);
+  // A crisp inner rim makes the broad glow visible over bright BGA/skins.
+  const auto rim = Color(255, 239, 205,
+      static_cast<std::uint8_t>(145.0F * fade)).toABGR();
+  constexpr float rimWidth = 3.0F;
+  batch.addRect(0, 0, width, rimWidth, rim);
+  batch.addRect(0, height - rimWidth, width, rimWidth, rim);
+  batch.addRect(0, rimWidth, rimWidth, height - 2 * rimWidth, rim);
+  batch.addRect(width - rimWidth, rimWidth, rimWidth, height - 2 * rimWidth, rim);
+  batch.end();
+  if (quickRetryReasonText && !context.quickRetryFeedback.reason.empty()) {
+    quickRetryReasonText->setText(context.quickRetryFeedback.reason);
+    quickRetryReasonText->setSize(static_cast<int>(std::max(1.0F, width - 64.0F)), 64);
+    quickRetryReasonText->setPosition(32, static_cast<int>((height - 64.0F) * 0.5F));
+    RenderContext::OpacityScope opacity(renderContext, fade);
+    quickRetryReasonText->render(renderContext);
+  }
 }
 
 void GamePlayScene::configureSkinIrTarget() {
@@ -7424,6 +7510,7 @@ void GamePlayScene::renderScene() {
 #endif
   updateSkinResetLayoutVisibility();
   renderCoursePauseHoldRing();
+  renderQuickRetryFeedback(renderContext);
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }

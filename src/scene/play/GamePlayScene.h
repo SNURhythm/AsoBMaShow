@@ -68,6 +68,8 @@ private:
   PlayfieldPresentationMetadataCache presentationMetadataCache;
   rendering::SimpleBatchRenderer virtualControllerBatch;
   rendering::SimpleBatchRenderer coursePauseRingBatch;
+  rendering::SimpleBatchRenderer quickRetryFeedbackBatch;
+  std::unique_ptr<TextView> quickRetryReasonText;
   std::optional<std::uint64_t> inputLaneOrderRevision;
   [[nodiscard]] int presentationKeyMode() const;
   bool isGamePaused = false;
@@ -196,6 +198,9 @@ private:
   [[nodiscard]] lane_cover::State laneCoverState() const noexcept;
   void adjustLaneCoverFromInput(float deltaPercent);
   void configureQuickRetry();
+  void prepareQuickRetryFeedback();
+  void playQuickRetryFeedback();
+  void renderQuickRetryFeedback(RenderContext &renderContext);
   quick_retry::Projection currentQuickRetryProjection() const;
   std::optional<quick_retry::Projection> realtimeQuickRetryProjection;
   bool retryIfTargetsUnreachable();

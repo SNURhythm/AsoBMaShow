@@ -25,6 +25,30 @@ state through portable interfaces, and risky reconfiguration has rollback or
 recovery behavior. Memory-pressure handling may evict idle media and decoded
 artwork but preserves active playback resources according to their lifecycle.
 
+Gameplay and UI/skin sounds use independent submixes under `ApplicationAudio`.
+`Jukebox` borrows the gameplay processor; scenes obtain system playback through
+`context.systemAudio()`. Each processor owns its commands, voices, PCM and clock.
+Chart stop, seek, retry, pruning and unload therefore cannot erase a system
+sound or change its playback speed. Scenes still stop their own menu/preview
+loops when covered or destroyed.
+
+`SharedAudioOutput` owns one native device for these submixes. Both render in the
+same native callback; there is no intermediate audio queue, extra output period,
+or worker handoff. Gameplay writes directly into the float output buffer and an
+idle system submix does no per-sample copying. An active system submix adds its
+samples before the final clip/conversion. Native presentation timestamps and
+sample scheduling remain authoritative. Oversized callbacks without a native
+presentation timestamp use one fallback wall-clock origin plus each chunk's
+frame offset; this fallback never becomes native presentation history.
+Device reconfiguration suspends both
+processors, converts retained PCM before restarting output, and supports rollback.
+A submix stop closes its render gate and waits on the control thread for an
+already admitted callback; the callback never waits on that gate.
+
+The paged chart-preview stream and native background Music Player retain their
+existing independent lifetimes. Existing system per-source volume contracts,
+including Lua's system-volume multiplier, remain unchanged.
+
 Music Player releases fullscreen video and restores its prior visual settings
 before scene destruction while it owns those overrides. Unused and already-
 exited scenes leave shared BGA policy unchanged. This teardown does not stop
@@ -84,3 +108,14 @@ sampling, color conversion, and decoder-pool reuse after GPU completion.
 - [Gameplay and scoring](gameplay-and-scoring.md)
 - [Practice and analysis](practice-and-analysis.md)
 - [Build, release, and verification](build-release-and-verification.md)
+
+The optional optimized callback comparison can be run with:
+
+```sh
+cmake --build cmake-build-debug --target audio_render_benchmark -j 6
+cmake-build-debug/audio_render_benchmark --benchmark
+```
+
+It compares the standalone gameplay mixer with the shared output at 64/128/256
+frames and 1/32/128 simultaneous voices. It measures callback CPU time, not
+hardware latency; it is excluded from normal builds and CTest.

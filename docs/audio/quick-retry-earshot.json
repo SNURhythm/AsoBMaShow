@@ -1,0 +1,115 @@
+{
+  "earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",
+  "render": {
+    "components": [
+      {
+        "id": "mallet/celesta",
+        "seed": 1,
+        "dur_s": 0.26,
+        "peak_db": -16.0,
+        "pitch": "D6",
+        "offset_s": 0
+      },
+      {
+        "id": "mallet/celesta",
+        "seed": 1,
+        "dur_s": 0.26,
+        "peak_db": -17.0,
+        "pitch": "A6",
+        "offset_s": 0.09
+      }
+    ],
+    "duration_s": 0.35,
+    "sample_rate": 48000,
+    "peak_dbfs": -14,
+    "checks": {
+      "ok": true,
+      "warnings": [],
+      "notes": [],
+      "summary": "sound: clean",
+      "measures": {
+        "clicks": 0,
+        "edge_db": -240.0,
+        "clip_runs": 0,
+        "overs": 0,
+        "dc_db": -80.2,
+        "ring_z": 5.9,
+        "trunc_db": null,
+        "silence_ms": 0.0,
+        "bump_db": 0.0,
+        "attack_ms": 93.5,
+        "t40_ms": 220.0,
+        "crest_db": 4.6,
+        "res_db": 78.2,
+        "res_hz": 4658,
+        "peak_dbfs": -14.0,
+        "live_ms": 315.5
+      },
+      "glide": {
+        "tonal_share": 1.0,
+        "rise_st": 0.1,
+        "from_s": 0.011,
+        "to_s": 0.021
+      },
+      "layers": {
+        "attacks": [
+          0.107
+        ],
+        "count": 1,
+        "pre_swell_ms": 0.0
+      },
+      "context": {
+        "category": "mallet"
+      }
+    }
+  },
+  "feedback": {
+    "description": "0.35 s short transient, tonal, pitch ~1173 Hz (D6) (attack 11 ms, decays in 199 ms). Sounds most like: a success chime (z +3.9), a notification ding (z +2.9), a magic sparkle chime (z +2.8) [clear reading]. Other readings: a soft key release click (keyboard, z +2.3). AudioSet: Ding 0.47, Clang 0.24, Music 0.06. peak -14.0 dBFS, brightness 2.2 kHz, bandwidth 12.9 kHz, side/mid -4 dB.",
+    "measurements": {
+      "duration": 0.35,
+      "peak_dbfs": -14.0,
+      "true_peak_dbtp": -13.9,
+      "rms_dbfs": -24.9,
+      "attack_ms": 11.0,
+      "decay_ms": 199.0,
+      "brightness_hz": 2247,
+      "bandwidth_hz": 12901,
+      "flatness": 0.0,
+      "harmonic_ratio": 0.975,
+      "f0_hz": 1173.0,
+      "onset_count": 1,
+      "onsets_per_s": 2.86,
+      "width": "side/mid -4 dB",
+      "digital_silence_frac": 0.0098
+    },
+    "query": "a delicate glassy two-note interface chime",
+    "verdict": "strong",
+    "z": 4.24,
+    "alternatives": [
+      {
+        "query": "an alarm beep",
+        "p": 0.0,
+        "z": 2.09,
+        "cosine": 0.116
+      },
+      {
+        "query": "a harsh buzzer",
+        "p": 0.0,
+        "z": 0.73,
+        "cosine": -0.003
+      },
+      {
+        "query": "a cartoon boing",
+        "p": 0.0,
+        "z": 1.14,
+        "cosine": 0.024
+      },
+      {
+        "query": "a metallic impact",
+        "p": 0.0,
+        "z": 1.41,
+        "cosine": 0.08
+      }
+    ]
+  }
+}

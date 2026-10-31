@@ -142,6 +142,8 @@ class AudioWrapper;
 
 namespace audio {
 
+class ApplicationAudio;
+
 struct VoiceRestorePosition {
   long long triggerMicros;
   long long originMicros;
@@ -289,6 +291,10 @@ public:
       const std::function<audio::playback::BackendOperationResult()> &beforeDiscard = {});
 
 private:
+  friend class audio::ApplicationAudio;
+  bool restartWithLifecycleLocked(const audio::StreamRequest &request,
+                                   std::string &errorMessage);
+  audio::playback::BackendOperationResult suspendRenderingWithLifecycleLocked();
   void openRealtimeSoundGate() noexcept;
   void closeRealtimeSoundGateAndWait() noexcept;
   void releaseRealtimeSoundReservation() const noexcept;
