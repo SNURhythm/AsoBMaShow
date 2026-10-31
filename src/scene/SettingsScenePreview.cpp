@@ -157,6 +157,7 @@ SettingsScene::~SettingsScene() {
 void SettingsScene::startLanePreview() {
   activeTab = SettingsTab::Lane;
   previewActive = true;
+  if (context.requestImprovedFramePacing) context.requestImprovedFramePacing();
   previewPaused = false;
   previewPanelPage = 0;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS

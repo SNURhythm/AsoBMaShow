@@ -103,6 +103,7 @@ struct ApplicationContext {
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;
+  std::function<void()> requestImprovedFramePacing;
   std::function<void(bool)> setResponsiveMenuCanvas;
   int gameplayBgaCompositeState = 0;
   InputDeviceRegistry inputDeviceRegistry;

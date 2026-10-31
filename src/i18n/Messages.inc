@@ -1638,7 +1638,7 @@
 {"settings.display.frame_cap.label", "Frame cap", "최대 프레임", "フレームレート上限", "帧率上限", "影格率上限"},
 {"settings.display.keep.label", "Keep", "유지", "維持", "保留", "保留"},
 {"settings.display.keep_display_changes.label", "Keep display changes?", "변경한 디스플레이 설정을 유지할까요?", "変更したディスプレイ設定を維持しますか？", "保留显示设置更改？", "保留顯示設定變更？"},
-{"settings.display.metal_display_link.description", "Use enhanced frame scheduling during gameplay. Turn off if responsiveness or smoothness worsens.", "플레이 중 개선된 프레임 스케줄링을 사용합니다. 반응이 느려지거나 화면이 덜 부드러워지면 끄세요.", "プレイ中に改良されたフレームスケジューリングを使用します。反応が遅くなったり、滑らかさが低下したりする場合はオフにしてください。", "游戏过程中使用增强的帧调度。若操作响应变慢或画面不够流畅，请关闭。", "遊戲過程中使用強化的影格排程。若操作反應變慢或畫面不夠流暢，請關閉。"},
+{"settings.display.metal_display_link.description", "Use enhanced frame scheduling during gameplay, lane preview, and offset calibration. Turn off if responsiveness or smoothness worsens.", "플레이, 레인 미리보기, 오프셋 보정에서 개선된 프레임 스케줄링을 사용합니다. 반응이 느려지거나 화면이 덜 부드러워지면 끄세요.", "プレイ、レーンプレビュー、オフセット調整で改良されたフレームスケジューリングを使用します。反応が遅くなったり、滑らかさが低下したりする場合はオフにしてください。", "在游戏、轨道预览和偏移校准中使用增强的帧调度。若操作响应变慢或画面不够流畅，请关闭。", "在遊戲、軌道預覽和偏移校準中使用強化的影格排程。若操作反應變慢或畫面不夠流暢，請關閉。"},
 {"settings.display.metal_display_link.label", "Improved frame pacing", "프레임 타이밍 개선", "フレームペーシングの改善", "改善帧节奏", "改善影格節奏"},
 {"settings.display.mode.label", "Mode", "모드", "モード", "模式", "模式"},
 {"settings.display.orientation.label", "Screen orientation", "화면 방향", "画面の向き", "屏幕方向", "螢幕方向"},

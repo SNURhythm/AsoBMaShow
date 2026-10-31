@@ -12,21 +12,24 @@ struct IOSPresentationState {
   std::uint64_t generation = 0;
 };
 
-// Render-owner policy for one uninterrupted, orientation-locked gameplay span.
-// An inactive pulse retires eligibility until gameplay is left and reentered.
-class IOSGameplayMetalPolicy {
+// Render-owner policy for an uninterrupted gameplay/preview span. Inactivity
+// retires eligibility until a new span or an explicit resume/retry request.
+class IOSSceneMetalPolicy {
 public:
-  void setGameplayActive(bool active, IOSPresentationState state) {
-    if (active == gameplayActive) return;
-    gameplayActive = active;
+  void setSceneActive(bool active, IOSPresentationState state) {
+    if (active == sceneActive) return;
+    sceneActive = active;
     entryState = state;
   }
+  void requestRecovery(IOSPresentationState state) {
+    if (sceneActive) entryState = state;
+  }
   bool allows(IOSPresentationState state) const {
-    return gameplayActive && entryState.active && state.active &&
+    return sceneActive && entryState.active && state.active &&
            entryState.generation == state.generation;
   }
 private:
-  bool gameplayActive = false;
+  bool sceneActive = false;
   IOSPresentationState entryState;
 };
 
