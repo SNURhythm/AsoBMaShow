@@ -74,8 +74,8 @@ goals when auto-shift or assists make them different. Course launches keep the
 ordinary button. With no concrete chart selected (including Random entries),
 the button shows shared gauge and numeric pacemaker settings, such as
 **Keep HARD + AAA** or **Keep HARD or AAA**. When Goals is enabled, its unresolved
-conditions appear as **Chart goals**, for example **Keep (HARD + AAA) + Chart goals**
-or **Keep (HARD or AAA) or Chart goals**. Goals alone displays **Keep Chart goals**.
+conditions appear as **Chart goals**, for example **Keep HARD + AAA + Chart goals**
+or **Keep HARD or AAA or Chart goals**. Goals alone displays **Keep Chart goals**.
 Chart-specific BEST scores remain unresolved until a chart is selected.
 Selecting a chart restores the complete, filtered summary.
 The summary excludes requirements disabled by gameplay's startup eligibility

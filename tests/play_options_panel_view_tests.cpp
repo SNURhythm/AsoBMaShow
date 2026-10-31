@@ -99,7 +99,7 @@ void testQuickRetryStartButtonLayoutAndActivation() {
       root.addView(button);
       int launches = 0;
       button->setOnClickListener([&] { ++launches; });
-      const auto targets = std::string("(HARD ") + i18n::tr("menu.selector.retry.or") + " AAA) " +
+      const auto targets = std::string("HARD ") + i18n::tr("menu.selector.retry.or") + " AAA " +
           i18n::tr("menu.selector.retry.or") + " " + i18n::tr("menu.selector.retry.chart_goals");
       button->setQuickRetry(true, i18n::format("menu.selector.retry.summary", {{"targets", targets}}));
       root.applyYogaLayout();

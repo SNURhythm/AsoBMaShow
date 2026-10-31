@@ -4932,7 +4932,7 @@ void MainMenuScene::refreshQuickRetryStartButton() {
     if (context.settings.quickRetryGoals) {
       const auto goals = i18n::tr("menu.selector.retry.chart_goals");
       if (description.empty()) description = goals;
-      else description = "(" + description + ") " +
+      else description = description + " " +
           (context.settings.quickRetryAllConditionsFail ? i18n::tr("menu.selector.retry.or") : "+") +
           " " + goals;
     }
