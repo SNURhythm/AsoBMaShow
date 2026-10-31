@@ -254,6 +254,13 @@ public:
   audio::ApplicationAudio applicationAudio;
   Jukebox jukebox;
   AudioWrapper &systemAudio() noexcept { return applicationAudio.systemSounds(); }
+  // Automatic-retry feedback outlives the gameplay scene during Reshuffle.
+  // PCM is retained by the system processor until application shutdown.
+  struct {
+    std::optional<audio::SkinSoundHandle> sound;
+    bool loadAttempted = false;
+    std::optional<long long> startedMicros;
+  } quickRetryFeedback;
   audio::AudioDeviceManager audioDeviceManager;
   audio::ApplyResult audioStartupApplyResult;
   music_player::MusicPlayerService musicPlayer;

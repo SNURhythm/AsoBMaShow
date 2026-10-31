@@ -493,7 +493,13 @@ public:
   std::optional<quick_retry::Projection> realtimeQuickRetryProjection;
   std::int64_t quickRetryRemainingHellChargeTicks = 0;
   quick_retry::Projection currentQuickRetryProjection() const;
-  bool retryIfTargetsUnreachable() { return false; }
+  quick_retry::Targets quickRetryTargets;
+  bool quickRetryNewPattern = false;
+  int retryCuePlays = 0;
+  int reshuffles = 0;
+  void playQuickRetryFeedback() { ++retryCuePlays; }
+  void retryWithNewPattern() { ++reshuffles; }
+  bool retryIfTargetsUnreachable();
   void updateQuickRetryHellCharge(const bms_parser::LongNote *, long long) {}
   bool finishIfGaugeFailed();
   void updateSkinGameplayGraph(long long) {}
@@ -2696,7 +2702,30 @@ void testLegacyMineKeysoundOnlyOnDetonation() {
   }
 }
 
+void testAutomaticRetryCue() {
+  for (const bool reshuffle : {false, true}) {
+    GamePlayScene scene;
+    scene.quickRetryTargets.score = 5; // Two notes can earn at most four EX points.
+    scene.quickRetryNewPattern = reshuffle;
+    scene.queueDeferred = true;
+    scene.context.jukebox.paused = true;
+    require(!scene.retryIfTargetsUnreachable() && scene.retryCuePlays == 0,
+            "paused gameplay does not trigger automatic retry feedback");
+    scene.context.jukebox.paused = false;
+    require(scene.retryIfTargetsUnreachable() && scene.retryCuePlays == 1,
+            "automatic Keep and Reshuffle each trigger a cue immediately");
+    require(scene.retryIfTargetsUnreachable() && scene.retryCuePlays == 1,
+            "a pending retry never retriggers the cue");
+    require(reshuffle ? scene.reshuffles == 1 : scene.deferred.size() == 1,
+            "feedback preserves the existing retry scheduling");
+  }
+  GamePlayScene manual;
+  manual.restartCurrentPattern();
+  require(manual.retryCuePlays == 0, "manual retry stays silent");
+}
+
 int main(int argc, char **argv) {
+  testAutomaticRetryCue();
   testLegacyMissedHcnPreview();
   testLegacyMineKeysoundOnlyOnDetonation();
   testLegacyLongNoteTimingSamples();

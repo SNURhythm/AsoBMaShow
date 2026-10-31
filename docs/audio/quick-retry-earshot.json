@@ -1,0 +1,130 @@
+{
+  "earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",
+  "render": {
+    "base": "pro_zip/down_warm",
+    "seed": 87989972,
+    "parameters": {
+      "noise_db": -30.0,
+      "noise_ratio": 1.5,
+      "noise_q": 1.0,
+      "teeth": 0.0,
+      "teeth_hz": 120.0,
+      "shape": "down",
+      "length": 0.23,
+      "f0": 1800.0,
+      "f1": 180.0,
+      "fpk": 2586.2171579360256,
+      "pk_at": 0.4558890282740897,
+      "arc_back": 0.9839203717393936,
+      "bend": -0.2698054628054649,
+      "h2_db": -26.0,
+      "h3_db": -36.0,
+      "h5_db": -48.0,
+      "sub_db": -17.399853896247205,
+      "fm": 0.08,
+      "fm_ratio": 1.0,
+      "saw_db": -36.0,
+      "saw_lp": 2.4645697611737085,
+      "air_db": -25.0,
+      "air_q": 2.8485570306681094,
+      "detune": 3.0,
+      "att_ms": 22.0,
+      "rel_ms": 50.0,
+      "tilt_db": -5.0,
+      "verb": 0.08,
+      "width": 0.1,
+      "sat": 0.0
+    },
+    "duration_s": 0.38,
+    "sample_rate": 48000,
+    "peak_dbfs": -13,
+    "checks": {
+      "ok": true,
+      "warnings": [],
+      "notes": [],
+      "summary": "sound: clean",
+      "measures": {
+        "clicks": 0,
+        "edge_db": -240.0,
+        "clip_runs": 0,
+        "overs": 0,
+        "dc_db": -83.1,
+        "ring_z": 3.4,
+        "trunc_db": null,
+        "silence_ms": 0.0,
+        "bump_db": 0.0,
+        "attack_ms": 15.5,
+        "t40_ms": 250.0,
+        "crest_db": 4.7,
+        "res_db": 2.2,
+        "res_hz": 2468,
+        "peak_dbfs": -13.0,
+        "live_ms": 259.0
+      },
+      "glide": {
+        "tonal_share": 1.0,
+        "rise_st": 0.0,
+        "from_s": null,
+        "to_s": null
+      },
+      "layers": {
+        "attacks": [
+          0.033
+        ],
+        "count": 1,
+        "pre_swell_ms": 0.0
+      },
+      "context": {
+        "category": "pro_zip"
+      }
+    }
+  },
+  "feedback": {
+    "description": "0.38 s short transient (attack 14 ms, decays in 221 ms). Sounds most like: an error buzz (z +2.7), a digital glitch (z +2.3), a fast whoosh (z +2.3) [plausible reading]. Other readings: a cat meowing (everyday, z +2.0), a snare hit (impacts, z +2.0). AudioSet: Sound effect 0.40, Boing 0.15, Music 0.05. peak -13.0 dBFS, brightness 953 Hz, bandwidth 8.1 kHz, side/mid -21 dB.",
+    "measurements": {
+      "duration": 0.38,
+      "peak_dbfs": -13.0,
+      "true_peak_dbtp": -13.0,
+      "rms_dbfs": -22.9,
+      "attack_ms": 14.0,
+      "decay_ms": 221.0,
+      "brightness_hz": 953,
+      "bandwidth_hz": 8127,
+      "flatness": 0.0,
+      "harmonic_ratio": 0.001,
+      "onset_count": 1,
+      "onsets_per_s": 2.63,
+      "width": "side/mid -21 dB",
+      "digital_silence_frac": 0.0128
+    },
+    "query": "a soft descending sci-fi pew whoosh with a low rounded tail",
+    "verdict": "strong",
+    "z": 3.12,
+    "alternatives": [
+      {
+        "query": "a sharp laser gun blast",
+        "p": 0.99,
+        "z": 4.78,
+        "cosine": 0.325
+      },
+      {
+        "query": "a rising slide whistle",
+        "p": 0.007,
+        "z": 3.15,
+        "cosine": 0.196
+      },
+      {
+        "query": "an alarm beep",
+        "p": 0.0,
+        "z": 1.7,
+        "cosine": 0.027
+      },
+      {
+        "query": "a harsh buzzer",
+        "p": 0.0,
+        "z": 2.27,
+        "cosine": 0.083
+      }
+    ]
+  }
+}

@@ -5405,6 +5405,7 @@ void GamePlayScene::configureQuickRetry() {
   }
   quickRetryTargets = quick_retry::armReachableTargets(
       *state, chart->Meta.TotalNotes, quickRetryTargets, currentQuickRetryProjection());
+  if (!quickRetryTargets.empty()) prepareQuickRetryFeedback();
 }
 
 quick_retry::Projection GamePlayScene::currentQuickRetryProjection() const {
@@ -5445,9 +5446,56 @@ bool GamePlayScene::retryIfTargetsUnreachable() {
   quickRetryPending = true;
   state->isEnding = true;
   stopRealtimeGameplayAuthority(false);
+  playQuickRetryFeedback();
   if (quickRetryNewPattern) retryWithNewPattern();
   else restartCurrentPattern();
   return true;
+}
+
+void GamePlayScene::prepareQuickRetryFeedback() {
+  auto &feedback = context.quickRetryFeedback;
+  if (feedback.loadAttempted) return;
+  feedback.loadAttempted = true;
+  std::atomic_bool cancelled{false};
+  feedback.sound = context.systemAudio().loadSkinSound(
+      fspath_to_path_t(std::filesystem::path("assets/quick-retry.wav")),
+      cancelled, 256 * 1024, std::numeric_limits<std::size_t>::max()).handle;
+}
+
+void GamePlayScene::playQuickRetryFeedback() {
+  auto &feedback = context.quickRetryFeedback;
+  feedback.startedMicros = nowMicros();
+  if (feedback.sound) {
+    auto &audio = context.systemAudio();
+    audio.stopSkinSound(*feedback.sound);
+    audio.playSkinSound(*feedback.sound, 1.0F, false);
+  }
+}
+
+void GamePlayScene::renderQuickRetryFeedback() {
+  auto &started = context.quickRetryFeedback.startedMicros;
+  if (!started) return;
+  constexpr float durationMicros = 240'000.0F;
+  const float progress = std::clamp(float(nowMicros() - *started) / durationMicros, 0.0F, 1.0F);
+  if (progress >= 1.0F) {
+    started.reset();
+    return;
+  }
+  const float fade = (1.0F - progress) * (1.0F - progress);
+  const auto color = app_theme::withAlpha(app_theme::amber(),
+      static_cast<std::uint8_t>(70.0F * fade)).toABGR();
+  const auto clear = app_theme::withAlpha(app_theme::amber(), 0).toABGR();
+  const float width = rendering::window_width;
+  const float height = rendering::window_height;
+  const float edge = 8.0F + 10.0F * progress;
+  auto &batch = quickRetryFeedbackBatch;
+  batch.setSubmitView(rendering::ui_view);
+  batch.begin();
+  batch.addRectVerticalGradient(0, 0, width, edge, color, clear);
+  batch.addRectVerticalGradient(0, height - edge, width, edge, clear, color);
+  batch.addRectColors(0, edge, edge, height - 2 * edge, color, clear, clear, color);
+  batch.addRectColors(width - edge, edge, edge, height - 2 * edge, clear, color, color, clear);
+  batch.end();
 }
 
 void GamePlayScene::configureSkinIrTarget() {
@@ -7424,6 +7472,7 @@ void GamePlayScene::renderScene() {
 #endif
   updateSkinResetLayoutVisibility();
   renderCoursePauseHoldRing();
+  renderQuickRetryFeedback();
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }

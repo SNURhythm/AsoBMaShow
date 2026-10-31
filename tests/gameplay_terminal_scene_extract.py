@@ -53,6 +53,7 @@ def main():
         "bool GamePlayScene::drainRealtimeInputInterruption()",
         "void GamePlayScene::togglePauseMenuFromInput()",
         "void GamePlayScene::restartCurrentPattern()",
+        "bool GamePlayScene::retryIfTargetsUnreachable()",
         "void GamePlayScene::update(float dt)",
         "void GamePlayScene::completePracticeSection(",
         "void GamePlayScene::finalizePracticeRangeMisses()",
