@@ -157,7 +157,10 @@ using this feature.
 Achievement is a projection of current records, not a permanent badge. Importing
 or deleting scores can change progress. Returning to goals refreshes it. The
 first achievement date remains as history even if current records no longer
-meet the target.
+meet the target. A folder goal that becomes incomplete after adding charts can
+celebrate and earn Kombo credit again when a saved local play meets the target.
+A play while it is still achieved, an import, or retrying the same saved result
+does not grant another reward.
 
 A removed/unavailable chart keeps its stored title, subtitle, targets, and
 record-based progress. Editing and removal remain available; play and practice

@@ -1084,7 +1084,7 @@ void testFolderGoalPersistenceAndPlayCredit() {
   auto coverage=goal;coverage.id.clear();
   coverage.target={.type=folder_goals::Type::ExCoverage,.percent=10000,.scoreRank=12};
   assert(scores.SaveFolderGoal(coverage,error));
-  kombo::Config routine; routine.dailyGoal=30; // Leave room for all three simultaneous goal credits.
+  kombo::Config routine; routine.dailyGoal=20; // All three rewards persist even across the daily target.
   kombo::DayId effectiveDay=0;
   assert(scores.ConfigureKombo(routine,effectiveDay,error));
   result_persistence::PendingChartScoreWrite pending;
@@ -1112,6 +1112,23 @@ void testFolderGoalPersistenceAndPlayCredit() {
   auto changed=scores.LoadFolderGoals(error);
   assert(changed && changed->front().progress.available==2 && changed->front().progress.missing==0 && !changed->front().progress.achieved);
   assert(changed->front().goal.achievedAt>0);
+  // A new local crossing celebrates and credits again, retaining the first date.
+  const auto firstAchievement=changed->front().goal.achievedAt;
+  pending.attemptId.back()='3'; pending.score.chartSha256=std::string(64,'f');
+  pending.score.chartMd5=std::string(32,'f'); pending.score.chartPath="/charts/b";
+  assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::Inserted);
+  const auto reAchieved=scores.TakeFolderGoalAchievements(pending.attemptId);
+  assert(reAchieved.size()==2); // The 50% lamp sibling never dropped below target.
+  assert(scores.LoadFolderGoals(error)->front().goal.achievedAt==firstAchievement);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==32);
+  assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::AlreadyPresent);
+  assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
+  pending.attemptId.back()='4';
+  assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==32);
+  pending.score.chartSha256=chart.SHA256; pending.score.chartMd5=chart.MD5;
+  pending.score.chartPath=chart.BmsPath.string();
   // Imports can complete a new EX goal without local play credit.
   auto ex=goal; ex.id.clear(); ex.target={.type=folder_goals::Type::AverageEx,.percent=6000};
   auto higherEx=ex; higherEx.target.scoreRank=18; // A: exact 2/3 average EX.
@@ -1130,7 +1147,7 @@ void testFolderGoalPersistenceAndPlayCredit() {
   assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
   assert(scores.SaveProjectedScore(pending).status==result_persistence::ProjectionStatus::AlreadyPresent);
   assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
-  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==30);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==32);
   // Removing the source keeps all goals without transferring them to another table.
   assert(sqlite3_exec(db,"DELETE FROM difficulty_tables;DELETE FROM difficulty_table_entries",nullptr,nullptr,nullptr)==SQLITE_OK);
   assert(!scores.LoadFolderGoals(error)->front().progress.sourceAvailable);

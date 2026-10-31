@@ -1091,7 +1091,7 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
       folderAchievements=impl_->folderGoalsAfterPlay(folderGoalsBefore,pending.createdAt);
       std::vector<std::string> achievedGoals;
       for (const auto &goal:folderAchievements)
-        achievedGoals.push_back("folder:"+folder_goals::key(goal)+":"+std::to_string(goal.setAt)+":"+std::to_string(goal.revision));
+        achievedGoals.push_back("folder:"+folder_goals::key(goal)+":"+std::to_string(goal.setAt)+":"+std::to_string(goal.revision)+":"+pending.attemptId);
       for (const auto &goal : goalAchievements)
         achievedGoals.push_back(goal.chart.SHA256 + ":" + std::to_string(goal.longNoteMode) + ":" +
             std::to_string(goal.id) + ":" + pending.attemptId);

@@ -23,7 +23,6 @@ std::vector<folder_goals::GoalProgress> ScoreRepository::Impl::folderGoalsBefore
   auto &projection=folderProjector();
   std::map<std::string,bool> contains;
   std::erase_if(goals,[&](const auto &g) {
-    if (g.achievedAt) return true;
     auto [it,inserted]=contains.try_emplace(folder_goals::sourceKey(g.source));
     if (inserted) it->second=projection.contains(g.source,hash);
     return !it->second;
@@ -52,8 +51,10 @@ std::vector<folder_goals::Goal> ScoreRepository::Impl::folderGoalsAfterPlay(
     const auto &entry=before[i];
     if (!entry.progress.achieved && !progress[i].achieved) continue;
     auto goal=entry.goal;
-    goal.achievedAt=std::max<std::int64_t>(goal.setAt,timestamp);
-    folder_goals::save(sessionDatabase,goal);
+    if (!goal.achievedAt) {
+      goal.achievedAt=std::max<std::int64_t>(goal.setAt,timestamp);
+      folder_goals::save(sessionDatabase,goal);
+    }
     if (!entry.progress.achieved) out.push_back(std::move(goal));
   }
   return out;

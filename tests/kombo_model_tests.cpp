@@ -56,7 +56,7 @@ int main() {
       settings.assignments[0].targetLamp = initial;
       configure(state, settings, 39000);
       attempt.lamp = initial;
-      CHECK(record(state, attempt, 0) == 1);
+      CHECK(record(state, attempt, 0) == 10);
       CHECK(state.days.at(39000).assignments[0].requirement.targetLamp == harderLamp);
     }
     State retained;
@@ -111,10 +111,24 @@ int main() {
     CHECK(rejected);
     advance(goals, 44001);
     CHECK(goals.days.at(44001).assignments[0].requirement.chartCount == 3);
-    // Multiple first achievements from one result retain one shared goal budget.
+    // Multiple achievements from one pre-goal result each earn the full reward.
     attempt.day = 44001;
     attempt.achievedGoals = {"a", "b", "c", "d", "e", "f"};
-    CHECK(record(goals, attempt, 0) == 10 && goals.savings == 10);
+    CHECK(record(goals, attempt, 0) == 20 && goals.savings == 10);
+  }
+  {
+    State crossing;
+    auto routine=config(20);
+    auto second=routine.assignments.front(); second.id="b"; second.chartCount=2;
+    routine.assignments.push_back(second);
+    configure(crossing,routine,45000);
+    CHECK(record(crossing,play(45000,"first"),0)==10);
+    PlayProgress receipt;
+    CHECK(record(crossing,play(45000,"second"),0,&receipt)==20);
+    CHECK(crossing.days.at(45000).points==30 && crossing.savings==0);
+    CHECK(receipt.reachedDailyGoal && receipt.assignments.size()==2);
+    CHECK(record(crossing,play(45000,"third"),0)==2);
+    CHECK(crossing.days.at(45000).points==32 && crossing.savings==2);
   }
   State activity;
   const auto end = localDay(1735689600); // The seven slots must cross a year boundary.
@@ -321,7 +335,7 @@ int main() {
   CHECK(s.days.at(20000).assignments[0].completedRounds == 1);
   CHECK(record(s, play(20000, "one"), 0) == 0);
   record(s, play(20000, "three"), 0);
-  CHECK(record(s, play(20000, "four"), 0) == 5);
+  CHECK(record(s, play(20000, "four"), 0) == 10);
   CHECK(s.currentKombo == 1 && s.savings == 0);
   CHECK(s.days.at(20000).assignments[0].requirement.chartCount == 1);
   CHECK(record(s, play(20000, "five"), 0) == 1);
@@ -384,7 +398,7 @@ int main() {
   auto p = play(22000, "rank"); p.previousLamp = 0; p.maxScore = 100; p.score = 88;
   CHECK(record(ranks, p, 1) == 0);
   p.score = 89;
-  CHECK(record(ranks, p, 1) == 1);
+  CHECK(record(ranks, p, 1) == 10);
   CHECK(ranks.days.at(22000).assignments[0].requirement.scoreNumerator == 26);
   p.chart = "cleared-before"; p.previousLamp = 300; p.score = 100;
   CHECK(record(ranks, p, 1) == 0);
@@ -420,18 +434,18 @@ int main() {
   auto second = overlapping.assignments[0]; second.id = "b";
   overlapping.assignments.push_back(second);
   configure(bonus, overlapping, 25000);
-  CHECK(record(bonus, play(25000, "goal"), 0) == 15);
+  CHECK(record(bonus, play(25000, "goal"), 0) == 20);
   CHECK(bonus.savings == 0);
   for (int n = 0; n < 100; ++n) {
     auto extra = play(25000, "extra" + std::to_string(n)); extra.lamp = 600;
     record(bonus, extra, 0);
   }
-  CHECK(bonus.savings == 10 && bonus.days.at(25000).points == 25);
+  CHECK(bonus.savings == 10 && bonus.days.at(25000).points == 30);
   for (const auto &progress : bonus.days.at(25000).assignments)
     CHECK(progress.charts == 0);
   advance(bonus, 25001);
   CHECK(bonus.days.at(25001).assignments[0].bonusRounds == 0);
-  CHECK(record(bonus, play(25001, "goal"), 0) == 15 && bonus.savings == 10);
+  CHECK(record(bonus, play(25001, "goal"), 0) == 20 && bonus.savings == 10);
 
   State prices;
   configure(prices, config(10, 100), 26000);
@@ -471,10 +485,10 @@ int main() {
     auto a = many.assignments[0]; a.id = id; many.assignments.push_back(a);
   }
   configure(shared, many, 28000);
-  CHECK(record(shared, play(28000, "goal"), 0) == 1);
+  CHECK(record(shared, play(28000, "goal"), 0) == 30);
   for (int n = 0; n < 8; ++n) record(shared, play(28000, "bonus" + std::to_string(n)), 0);
   CHECK(bonusPoints(shared.days.at(28000)) == 10 && shared.savings == 10);
-  CHECK(shared.days.at(28000).points == 11);
+  CHECK(shared.days.at(28000).points == 40);
   const auto used = shared.days.at(28000).assignments[0].usedCharts.size();
   CHECK(record(shared, play(28000, "after-cap"), 0) == 0);
   CHECK(shared.days.at(28000).assignments[0].usedCharts.size() == used);
@@ -583,7 +597,7 @@ int main() {
   auto promoteRange = play(44000, "goal"); promoteRange.lamp = 400;
   promoteRange.nextLevels = {{{"table","0","sl0"},{"table","1","sl1"}},
                             {{"table","1","sl1"},{"table","2","sl2"}}};
-  CHECK(record(overlap, promoteRange, 1) == 1);
+  CHECK(record(overlap, promoteRange, 1) == 10);
   CHECK(overlap.days.at(44000).assignments[0].chartProgress.contains("retained"));
   CHECK(!overlap.days.at(44000).assignments[0].chartProgress.contains("removed"));
   retained.previousLamp = 300; retained.lamp = 400;
@@ -615,7 +629,7 @@ int main() {
   configure(fixed, config(5, 5, 3), 32000);
   CHECK(record(fixed, play(32000, "one"), 0) == 0);
   CHECK(record(fixed, play(32000, "two"), 0) == 0);
-  CHECK(record(fixed, play(32000, "three"), 0) == 5);
+  CHECK(record(fixed, play(32000, "three"), 0) == 10);
   CHECK(fixed.savings == 0);
   CHECK(record(fixed, play(32000, "one"), 0) == 0);
   CHECK(record(fixed, play(32000, "four"), 0) == 1);
@@ -630,7 +644,7 @@ int main() {
   auto longer = mixed.assignments[0]; longer.id = "long"; longer.chartCount = 4;
   mixed.assignments.push_back(longer);
   configure(unfinished, mixed, 33000);
-  CHECK(record(unfinished, play(33000, "goal"), 0) == 1);
+  CHECK(record(unfinished, play(33000, "goal"), 0) == 10);
   CHECK(unfinished.days.at(33000).assignments[1].charts == 0);
   CHECK(unfinished.days.at(33000).assignments[1].requirement.chartCount == 1);
   CHECK(record(unfinished, play(33000, "extra"), 0) == 2);
@@ -680,7 +694,7 @@ int main() {
   configure(raised, targets, 37000);
   retry = play(37000, "partial"); retry.lamp = 200; retry.score = 140;
   CHECK(record(raised, retry, 0) == 0);
-  CHECK(record(raised, play(37000, "goal"), 0) == 1);
+  CHECK(record(raised, play(37000, "goal"), 0) == 10);
   CHECK(raised.days.at(37000).assignments[0].requirement.scoreNumerator == 21);
   retry.lamp = 300; retry.score = 120;
   CHECK(record(raised, retry, 0) == 0);

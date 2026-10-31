@@ -420,11 +420,10 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
     completed.push_back(&progress);
     if (bonus) --remainingBonus;
   }
-  // A play that reaches the goal earns no bonus, including simultaneous
-  // completions. Allocate its remaining goal budget in stable identity order.
+  // Every round completed by a pre-goal play earns its full regular reward.
+  // Bonus mode begins on the next play; overflow is not bonus savings.
   for (auto *progress : completed) {
-    const auto reward = bonus ? 1 : std::min<std::int64_t>(
-        regularRoundPoints, day.config.dailyGoal - day.points);
+    const auto reward = bonus ? 1 : regularRoundPoints;
     progress->earnedPoints += reward;
     day.points += reward;
     if (bonus) { ++progress->bonusRounds; ++s.savings; }
