@@ -178,7 +178,8 @@ fullComboRankForPlayback(int rank, bool fullComboAchieved,
   return capRankForPlayback(rank, playback);
 }
 // Counts must describe this entire chart (or completed course), not a prefix.
-// KPOOR is deliberately excluded: empty presses do not break beatoraja combo.
+// Callers must establish combo qualification separately: KPOOR may reset combo
+// under the active ruleset/mode without contributing to comboBreak.
 [[nodiscard]] inline int completedClearRank(
     int rank, int totalNotes, int pGreat, int great, int good, int bad,
     int poor, int comboBreak, const audio::PlaybackRate &playback = {}) {

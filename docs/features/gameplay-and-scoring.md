@@ -61,8 +61,12 @@ Completed charts and courses distinguish Full Combo, Perfect (no GOOD
 judgments), and Max (all PGREATs). These achievements require a qualified clear
 and a complete, unbroken combo; assist and altered-playback restrictions still
 apply. Courses use judgments across every stage, while a stage's lamp uses
-only that stage's judgments. Empty-press KPOORs do not independently remove
-these achievements, matching beatoraja.
+only that stage's judgments and combo. In the Beatoraja ruleset, empty-press
+KPOORs reset combo in 5K, 10K, and PMS; the surviving combo must cover the
+whole chart or course for these achievements. LR2 preserves combo on KPOOR,
+as do Beatoraja 7K/14K and keyboard modes. Historical Beatoraja rows with
+KPOORs retain their recorded lamp when the saved data cannot prove combo
+qualification; their maximum combo alone cannot locate the empty press.
 
 Perfect and Max have distinct record/filter/goal choices and beatoraja skin
 IDs 9 and 10. Their native ranks are 700 and 800; existing lamp IDs retain their

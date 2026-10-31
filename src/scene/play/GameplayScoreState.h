@@ -938,7 +938,11 @@ public:
 
   [[nodiscard]] int completedClearTypeRank(
       int totalNotes, const audio::PlaybackRate &playback = {}) const {
-    if (assistClearMark || lightAssistClearMark) {
+    // Beatoraja compares the surviving combo, not just BAD/MISS counts.
+    // Empty POOR resets it in 5K/10K/PMS, including after the last note;
+    // a carried course maximum cannot establish this stage's achievement.
+    if (assistClearMark || lightAssistClearMark ||
+        (gaugeRules_.ruleset == GameplayRuleset::Beatoraja && combo < totalNotes)) {
       return clear_policy::capRankForPlayback(getClearTypeRank(), playback);
     }
     return clear_policy::completedClearRank(

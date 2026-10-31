@@ -6,8 +6,20 @@
 // canonical result payload or fingerprint.
 namespace result_clear_lamp {
 
+inline bool hasUnprovenBeatorajaCombo(
+    const result_persistence::ChartScoreWrite &score) {
+  // Historical score rows lack the ending combo and key mode. With an empty
+  // POOR, the maximum alone cannot prove a Beatoraja combo survived. A recorded
+  // FC-or-better lamp remains evidence; never rewrite authenticated facts.
+  return score.provenance.ruleset.id == "beatoraja" && score.kPoor > 0 &&
+         normalizeClearLamp(score.clearType) < kClearTypeFullComboRank;
+}
+
 inline int effectiveRank(
     const result_persistence::ChartScoreWrite &score) {
+  if (hasUnprovenBeatorajaCombo(score)) {
+    return clear_policy::capRankForPlayback(score.clearType, score.provenance.playback);
+  }
   const bool fullCombo = score.comboBreak == 0 && score.maxScore > 0 &&
       score.maxScore % 2 == 0 && score.maxCombo >= score.maxScore / 2;
   const int rank = clear_policy::fullComboRankForPlayback(
@@ -42,6 +54,7 @@ inline int effectiveRank(const result_persistence::ModernCourseResult &result) {
   long long pg = 0, gr = 0, gd = 0, notes = 0;
   for (const auto &stage : result.stages) {
     const auto &score = stage.score;
+    if (rank < kClearTypeFullComboRank && hasUnprovenBeatorajaCombo(score)) return rank;
     if (score.maxScore <= 0 || score.maxScore % 2 != 0 || score.comboBreak != 0 ||
         score.bad != 0 || score.poor != 0 || score.pGreat < 0 || score.great < 0 ||
         score.good < 0 || static_cast<long long>(score.pGreat) + score.great +

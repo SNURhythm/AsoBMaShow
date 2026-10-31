@@ -142,6 +142,7 @@ bool createScoreDatabase(const std::filesystem::path &path,
                    "combo_break INTEGER NOT NULL,"
                    "pgreat INTEGER NOT NULL DEFAULT 0,great INTEGER NOT NULL DEFAULT 0,"
                    "good INTEGER NOT NULL DEFAULT 0,bad INTEGER NOT NULL DEFAULT 0,poor INTEGER NOT NULL DEFAULT 0,"
+                   "kpoor INTEGER NOT NULL DEFAULT 0,"
                    "final_gauge REAL NOT NULL DEFAULT 0,"
                    "clear_type INTEGER NOT NULL,"
                    "ruleset_version INTEGER NOT NULL DEFAULT 0,"
@@ -232,21 +233,32 @@ int testPerfectMaxSummaryUpgrade() {
   insertScore(db, "perfect", "", "", 0, 199, 200, 100, 0, 600, "2026-01-01");
   insertScore(db, "max", "", "", 0, 200, 200, 100, 0, 600, "2026-01-01");
   insertScore(db, "missing", "", "", 0, 200, 200, 100, 0, 600, "2026-01-01");
+  insertScore(db, "broken", "", "", 0, 200, 200, 99, 0, 300, "2026-01-01");
+  insertScore(db, "ending-poor", "", "", 0, 200, 200, 100, 0, 300, "2026-01-01");
+  insertScore(db, "lr2-poor", "", "", 0, 200, 200, 100, 0, 300, "2026-01-01");
+  execOrAbort(db, R"(UPDATE score_db.scores SET pgreat=100,kpoor=1,final_gauge=100,
+      provenance_json='{"ruleset":{"id":"beatoraja"}}'
+      WHERE chart_sha256 IN ('broken','ending-poor'))");
+  execOrAbort(db, R"(UPDATE score_db.scores SET pgreat=100,kpoor=1,final_gauge=100,
+      provenance_json='{"ruleset":{"id":"lr2"}}' WHERE chart_sha256='lr2-poor')");
   execOrAbort(db, "UPDATE score_db.scores SET pgreat=99,great=1,final_gauge=100 WHERE chart_sha256='perfect'");
   execOrAbort(db, "UPDATE score_db.scores SET pgreat=100,final_gauge=100 WHERE chart_sha256='max'");
-  execOrAbort(db, "UPDATE score_db.score_summary_revisions SET revision=3 WHERE name='clear_lamp_order'");
+  execOrAbort(db, "UPDATE score_db.score_summary_revisions SET revision=4 WHERE name='clear_lamp_order'");
   ASSERT_FALSE(score_cache_queries::ensureScoreSummarySchema(db, "score_db").has_value(), "upgrade summary revision");
   const auto rank = [&](const char *hash) { return queryInt(db,
       std::string("SELECT rank FROM score_db.score_sha256_clear_rank_cache WHERE chart_sha256='") + hash + "'"); };
   ASSERT_EQ(700, rank("perfect"), "historical Perfect upgraded");
   ASSERT_EQ(800, rank("max"), "historical Max upgraded");
   ASSERT_EQ(600, rank("missing"), "absent judgments do not prove Max");
+  ASSERT_EQ(300, rank("broken"), "Beatoraja empty POOR cannot infer FC with a short combo");
+  ASSERT_EQ(300, rank("ending-poor"), "maximum combo cannot prove survival after empty POOR");
+  ASSERT_EQ(800, rank("lr2-poor"), "LR2 empty POOR retains achievement promotion");
   ASSERT_EQ(600, queryInt(db, "SELECT clear_type FROM score_db.scores WHERE chart_sha256='max'"), "original score fact preserved");
   ASSERT_FALSE(score_cache_queries::ensureScoreSummarySchema(db, "score_db").has_value(), "upgrade idempotent");
   ASSERT_EQ(800, rank("max"), "Max retained on reopen");
   const std::string course = "WITH c AS (SELECT 600 AS clear_type,0 AS combo_break,"
       "200 AS max_score,100 AS max_combo,100 AS final_gauge,100 AS pgreat,"
-      "0 AS great,0 AS good,0 AS bad,0 AS poor,200 AS score,"
+      "0 AS great,0 AS good,0 AS bad,0 AS poor,0 AS kpoor,200 AS score,"
       "2 AS total_charts,2 AS completed_charts,'{}' AS provenance_json,";
   const auto courseRank = [&](const char *assist) { return queryInt(db,
       course + "'" + assist + "' AS assist_option) SELECT " +
