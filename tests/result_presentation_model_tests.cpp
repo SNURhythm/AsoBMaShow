@@ -12,12 +12,15 @@
 #include "scene/play/GameplayGaugeTypes.h"
 #include "skin/DefaultSkin.h"
 #include "view/Button.h"
+#include "view/ImageView.h"
 #include "view/ClearLampColors.h"
 #include "view/TextView.h"
 #include "view/UiTheme.h"
 
 #include <bgfx/bgfx.h>
 
+#include <chrono>
+#include <filesystem>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -926,6 +929,39 @@ void testLongResultHeaderFits() {
   }
 }
 
+void testExportArtworkReadyBeforeFirstRender() {
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("result-artwork-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(directory);
+  const auto file = directory / "artwork.bmp";
+  auto *surface = SDL_CreateSurface(8, 8, SDL_PIXELFORMAT_RGBA32);
+  expect(surface != nullptr && SDL_SaveBMP(surface, file.string().c_str()),
+         "create uncached result artwork fixture");
+  SDL_DestroySurface(surface);
+  auto meta = localMeta();
+  meta.Folder = directory;
+  const auto model = makeLocalResultPresentation(meta, localState(), localOptions());
+  for (bool stageFile : {true, false}) {
+    ImageView::dropAllCache();
+    meta.StageFile = stageFile ? "artwork.bmp" : "";
+    meta.Banner = stageFile ? "" : "artwork.bmp";
+    ResultSkinData data{};
+    data.meta = &meta;
+    data.presentation = &model;
+    data.showControls = false;
+    data.loadArtworkSynchronously = true;
+    View root(0, 0, 1920, 1080);
+    DefaultSkin skin;
+    skin.buildLayout("Result", &root, &data);
+    const auto *artwork = dynamic_cast<ImageView *>(root.findViewByName("resultJacket"));
+    expect(artwork && artwork->imageWidth() > 0 && artwork->imageHeight() > 0,
+           "uncached export stage or banner is ready before the first render");
+  }
+  ImageView::dropAllCache();
+  std::filesystem::remove_all(directory);
+}
+
 void testDefaultSkinLocalPresentationContract() {
   auto options = localOptions();
   bms_parser::Chart chart;
@@ -1476,6 +1512,7 @@ int main() {
   testRemoteGaugeLabelAndLampFallbackSemantics();
   testLocalizedResultsKeepSemanticLayoutAndColors();
   testLongResultHeaderFits();
+  testExportArtworkReadyBeforeFirstRender();
   testDefaultSkinLocalPresentationContract();
   testPortraitResultKeepsComparisonCardsReadable();
   testPortraitResultTimingAndActionsFit();

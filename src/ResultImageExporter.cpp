@@ -619,6 +619,7 @@ ResultImageExportResult renderResultImageWithSkinData(
     resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
                                         rendering::window_height);
     resultSkinData.context = &context;
+    resultSkinData.loadArtworkSynchronously = true;
     resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
     DefaultSkin resultSkin;
     resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);

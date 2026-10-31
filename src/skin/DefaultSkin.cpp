@@ -320,7 +320,13 @@ void DefaultSkin::buildPresentationResultLayout(
     if (data->meta != nullptr) {
       const auto &meta = *data->meta;
       const auto file = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;
-      if (!file.empty()) artwork->setImageAsync(meta.Folder / file, true);
+      if (!file.empty()) {
+        if (data->loadArtworkSynchronously) {
+          artwork->setImage(meta.Folder / file);
+        } else {
+          artwork->setImageAsync(meta.Folder / file, true);
+        }
+      }
     }
     header->addView(artworkFrame);
 
