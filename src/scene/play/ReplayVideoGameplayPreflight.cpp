@@ -304,6 +304,9 @@ void applyReplayGameplayGaugeAuthority(PlayfieldAuthorityUpdate &authority,
   authority.gaugeAutoShift = replay.gaugeAutoShift;
   authority.gaugeAutoShiftLowerBound = replay.gaugeAutoShiftLowerBound;
   authority.currentGauge = currentGauge;
+  // Export's terminal failure clock includes gauge ticks and mines, which do
+  // not pass through the pacemaker's judgement-only score reducer.
+  authority.pacemakerStatus.scoreStopped |= authority.failureAnimationActive;
 }
 
 void applyReplayGameplayRuntimeAuthority(

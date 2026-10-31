@@ -4422,6 +4422,7 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
       .clubMode = context.settings.gameplayClubModeEnabled,
       .quickRetryEnabled = context.settings.quickRetryEnabled,
+      .quickRetryAllConditionsFail = context.settings.quickRetryAllConditionsFail,
       .quickRetryGauge = context.settings.quickRetryGauge,
       .quickRetryPacemaker = context.settings.quickRetryPacemaker,
       .quickRetryGoals = context.settings.quickRetryGoals,
@@ -4542,6 +4543,11 @@ void MusicSelectScene::openPlayOptions() {
          .onQuickRetrySelected = [this](bool enabled) {
            context.settings.quickRetryEnabled = enabled;
            if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry selection");
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetryFailurePolicySelected = [this](bool all) {
+           context.settings.quickRetryAllConditionsFail = all;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry failure policy");
            refreshPlayOptionsModal();
          },
          .onQuickRetryGaugeSelected = [this](bool enabled) {
