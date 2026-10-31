@@ -326,7 +326,9 @@ void DefaultSkin::buildPresentationResultLayout(
 
     auto *titleStack = new View();
     titleStack->setFlexDirection(FlexDirection::Column);
+    titleStack->setWidth(0);
     titleStack->setFlex(1);
+    titleStack->setFlexShrink(1);
     titleStack->setMinWidth(0);
     titleStack->setGap(4);
 
@@ -335,6 +337,8 @@ void DefaultSkin::buildPresentationResultLayout(
     titleRow->setAlignItems(YGAlignCenter);
     titleRow->setGap(14);
     titleRow->setHeight(58);
+    titleRow->setWidthPercent(100);
+    titleRow->setMinWidth(0);
 
     auto *titleText = new TextView(app_theme::boldFont, 46);
     titleText->setText(presentation.title);
@@ -343,7 +347,9 @@ void DefaultSkin::buildPresentationResultLayout(
     titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
     titleText->setOverflow(TextView::TextOverflow::Marquee);
     titleText->setHeight(58);
+    titleText->setWidth(0);
     titleText->setFlex(1);
+    titleText->setFlexShrink(1);
     titleText->setMinWidth(0);
     titleText->setName("title");
     titleRow->addView(titleText);

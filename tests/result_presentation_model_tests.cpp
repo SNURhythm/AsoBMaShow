@@ -902,6 +902,30 @@ void testLocalizedResultsKeepSemanticLayoutAndColors() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testLongResultHeaderFits() {
+  auto model=makeLocalResultPresentation(localMeta(),localState(),localOptions());
+  model.title=std::string(200,'W');
+  model.artist=std::string(160,'A');
+  for (int width : {720,1080,1920}) {
+    const auto root=buildPresentationLayout(model,width,1080,true);
+    const auto *header=root->findViewByName("resultHeader");
+    const auto *title=root->findViewByName("title");
+    auto *mode=root->findViewByName("playtype");
+    auto *difficulty=root->findViewByName("difficulty");
+    expect(title && mode && difficulty && title->getWidth()>0,
+           "long result header retains all identity views");
+    expect(title->getX()+title->getWidth()<=mode->getX() &&
+               difficulty->getX()+difficulty->getWidth()<=header->getX()+header->getWidth(),
+           "long result title stays bounded and leaves badges inside the header");
+    const int titleWidth=title->getWidth();
+    mode->setWidth(mode->getWidth()+20);
+    difficulty->setWidth(difficulty->getWidth()+40);
+    root->applyYogaLayout();
+    expect(std::abs(title->getWidth()-(titleWidth-60))<=1,
+           "title width follows both dynamic badge widths");
+  }
+}
+
 void testDefaultSkinLocalPresentationContract() {
   auto options = localOptions();
   bms_parser::Chart chart;
@@ -1451,6 +1475,7 @@ int main() {
   testRemoteUnknownLampDoesNotInventPresentation();
   testRemoteGaugeLabelAndLampFallbackSemantics();
   testLocalizedResultsKeepSemanticLayoutAndColors();
+  testLongResultHeaderFits();
   testDefaultSkinLocalPresentationContract();
   testPortraitResultKeepsComparisonCardsReadable();
   testPortraitResultTimingAndActionsFit();
