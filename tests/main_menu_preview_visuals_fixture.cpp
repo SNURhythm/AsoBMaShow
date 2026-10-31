@@ -131,8 +131,8 @@ struct Visuals {
   struct Result { bool success; std::string diagnostic; };
   int ratePercent = 100;
   bool setPlaybackRate(int, std::string &) { ratePercent = 100; return true; }
-  Result loadChartPreservingDevice(bms_parser::Chart &, bool, std::atomic_bool &) {
-    if (ratePercent != 100) throw std::runtime_error("chart load stops a file started at a non-neutral rate");
+  Result loadChart(bms_parser::Chart &, bool, std::atomic_bool &) {
+    ratePercent = 100; // Chart staging resets its own rate; file playback is independent.
     loaded = true;
     return {true};
   }
@@ -171,6 +171,7 @@ struct Details {
 struct Scene {
   struct Context {
     Visuals jukebox;
+    Visuals &systemAudio() { return jukebox; }
     struct Settings {
       audio::ChartPreviewMode chartPreviewMode = audio::ChartPreviewMode::Highlight;
       bool chartPreviewFallbackHighlight = true;

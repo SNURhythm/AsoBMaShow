@@ -1058,7 +1058,18 @@ Jukebox::Jukebox(Stopwatch *stopwatch)
 
 Jukebox::Jukebox(Stopwatch *stopwatch,
                  std::unique_ptr<audio::IBackendFactory> backendFactory)
-    : audio(stopwatch, std::move(backendFactory)), stopwatch(stopwatch) {
+    : stopwatch(stopwatch),
+      ownedAudio(std::make_unique<AudioWrapper>(stopwatch, std::move(backendFactory))),
+      audio(*ownedAudio) {
+  initializeBgaPrograms();
+}
+
+Jukebox::Jukebox(Stopwatch *stopwatch, AudioWrapper &gameplayAudio)
+    : stopwatch(stopwatch), audio(gameplayAudio) {
+  initializeBgaPrograms();
+}
+
+void Jukebox::initializeBgaPrograms() {
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
   skinSampling = rendering::UniformCache::getInstance().getVec4("u_skinSampling");
   bgaPlaceholderProgram = prepareGameplayBgaProgram(SHADER_SIMPLE);

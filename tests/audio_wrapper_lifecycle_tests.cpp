@@ -1,4 +1,5 @@
 #include "audio/AudioWrapper.h"
+#include "audio/ApplicationAudio.h"
 #include "audio/MusicSelectPreviewFilePlayer.h"
 #include "audio/Jukebox.h"
 #include "audio/JukeboxLifecycle.h"
@@ -51,10 +52,13 @@ struct AllocationGate {
 thread_local AllocationGate *allocationGate = nullptr;
 thread_local bool decodeMemoryFixture = false;
 thread_local std::size_t failAllocationBytes = 0;
+thread_local bool countRenderAllocations = false;
+thread_local std::size_t renderAllocations = 0;
 
 }
 
 void *operator new(std::size_t bytes) {
+  if (resampling_test::countRenderAllocations) ++resampling_test::renderAllocations;
   if (resampling_test::failAllocationBytes != 0 &&
       bytes == resampling_test::failAllocationBytes) {
     resampling_test::failAllocationBytes = 0;
@@ -124,10 +128,10 @@ bool decodeAudioBytesToPCMBounded(const path_t &,
   return false;
 }
 
-bool decodeSkinSoundBundleAware(const path_t &, std::vector<short> &, SF_INFO &,
-                                std::atomic<bool> &, AudioDecodeLimits,
+bool decodeSkinSoundBundleAware(const path_t &path, std::vector<short> &pcm, SF_INFO &info,
+                                std::atomic<bool> &cancelled, AudioDecodeLimits,
                                 std::stop_token) {
-  return false;
+  return decodeAudioBytesToPCM(path, {}, pcm, info, cancelled);
 }
 
 namespace {
@@ -3397,8 +3401,349 @@ void testOversizedCallbacksUseBoundedScratchAndPreserveScheduledOnsets() {
   stopwatch.pause();
 }
 
-int main() {
+void testChartUnloadLeavesSystemPlaybackRunning() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  audio::ApplicationAudio audio(&stopwatch,
+                               std::make_unique<FakeConfigurableFactory>(control));
+  auto &gameplay = audio.gameplay();
+  auto &system = audio.systemSounds();
+  const path_t systemPath = PATH("independent-system-loop");
+  require(system.loadGeneratedSound(systemPath, {1000, 2000, 3000, 4000}, 1, 44100),
+          "system fixture loads distinct PCM");
+  std::atomic_bool cancelled{false};
+  const auto loaded = system.loadSkinSound(systemPath, cancelled, 1024, 1024);
+  require(loaded.handle && system.playSkinSound(*loaded.handle, 1.0F, true),
+          "system loop is admitted");
+  std::array<short, 2> output{};
+  control->renderCallback(output.data(), 1, 2, control->renderUserData);
+  require(output[0] == 899, "first system frame is audible");
+  control->events.clear();
+  require(gameplay.unloadSounds().success, "chart owners can be unloaded");
+  require(control->events.empty(), "chart unload never stops the native output");
+  control->renderCallback(output.data(), 1, 2, control->renderUserData);
+  require(output[0] == 1799, "system playback continues at its next frame after chart unload");
+  require(system.playSkinSound(*loaded.handle, 1.0F, true),
+          "chart unload does not invalidate a system handle");
+}
+
+void testSystemSubmixIgnoresGameplayRateAndQueuePressure() {
+  Stopwatch clock;
+  auto control = std::make_shared<FactoryControl>();
+  audio::ApplicationAudio audio(&clock, std::make_unique<FakeConfigurableFactory>(control));
+  auto &gameplay = audio.gameplay();
+  auto &system = audio.systemSounds();
+  const path_t key = PATH("same-name-independent-owners");
+  require(gameplay.loadGeneratedSound(key, std::vector<short>(32, 0), 1, 44100) &&
+              system.loadGeneratedSound(key, {1000, 2000, 3000, 4000}, 1, 44100),
+          "identical paths can hold independent chart and system PCM");
+  require(gameplay.stopSounds().success, "gameplay can suspend independently");
+  std::string error;
+  require(gameplay.setPlaybackRate({.percent = 200}, error) &&
+              gameplay.startDevice().success, "gameplay uses double speed");
+  clock.start();
+  for (std::size_t i = 0; i < kAudioCommandQueueSize; ++i)
+    require(gameplay.playSound(key, audio::Bus::Keysound), "fill gameplay commands");
+  require(!gameplay.playSound(key, audio::Bus::Keysound), "gameplay command queue is full");
+  std::atomic_bool cancelled{false};
+  const auto sound = system.loadSkinSound(key, cancelled, 1024, 1024);
+  require(sound.handle && system.playSkinSound(*sound.handle, 1, true),
+          "gameplay command pressure cannot reject a system cue");
+  std::array<short, 4> pcm{};
+  resampling_test::renderAllocations = 0;
+  resampling_test::countRenderAllocations = true;
+  control->renderCallback(pcm.data(), 2, 2, control->renderUserData);
+  resampling_test::countRenderAllocations = false;
+  require(resampling_test::renderAllocations == 0, "shared render never allocates for queued gameplay and SFX");
+  require(pcm[0] == 899 && pcm[2] == 1799,
+          "system frames advance at normal speed during double-speed gameplay");
+  require(gameplay.pruneSounds({key}).success, "chart PCM can be pruned independently");
+  control->renderCallback(pcm.data(), 2, 2, control->renderUserData);
+  require(pcm[0] == 2699 && pcm[2] == 3599,
+          "same-path system PCM survives chart pruning at its original cursor");
+  require(control->opens.size() == 1 && control->liveStreams == 1,
+          "both domains use exactly one native output");
+}
+
+void testSharedOutputPreservesFloatHeadroomAndCallbackTiming() {
+  auto control = std::make_shared<FactoryControl>();
+  audio::SharedAudioOutput output(std::make_unique<FakeConfigurableFactory>(control));
+  struct Source {
+    float value;
+    bool additive = false;
+    std::vector<std::pair<std::int64_t, unsigned>> calls;
+    audio::RenderTiming timing;
+  } first{1.5F}, second{-1.0F, true};
+  const auto render = [](void *output, unsigned frames, int channels, void *data) {
+    auto &source = *static_cast<Source *>(data);
+    source.calls.emplace_back(source.timing.outputSteadyMicros, frames);
+    auto *samples = static_cast<float *>(output);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(frames) * channels; ++i) {
+      if (source.additive) samples[i] += source.value;
+      else samples[i] = source.value;
+    }
+  };
+  const auto timing = [](audio::RenderTiming value, void *data) {
+    static_cast<Source *>(data)->timing = value;
+  };
+  std::string error;
+  auto a = output.createSubmixFactory(0)->open({}, render, &first, error);
+  auto b = output.createSubmixFactory(1)->open({}, render, &second, error);
+  require(a && b, "software nodes attach without opening native devices");
+  a->setRenderTimingCallback(timing, &first);
+  b->setRenderTimingCallback(timing, &second);
+  require(a->start(error) && b->start(error), "software nodes start");
+  control->timingCallback({.outputSteadyMicros = 1'000'000, .outputTimestampKnown = true},
+                          control->timingUserData);
+  std::vector<short> pcm(5000 * 2);
+  control->renderCallback(pcm.data(), 5000, 2, control->renderUserData);
+  require(std::all_of(pcm.begin(), pcm.end(), [](short value) { return value == 16383; }),
+          "submix headroom is combined before a single final clip and conversion");
+  require(first.calls == std::vector<std::pair<std::int64_t, unsigned>>{
+              {1'000'000, 4096}, {1'092'879, 904}} && first.calls == second.calls,
+          "bounded submix chunks preserve each frame's native presentation time");
+  control->events.clear();
+  require(a->stop(error), "one node can stop");
+  control->renderCallback(pcm.data(), 1, 2, control->renderUserData);
+  require(pcm[0] == -32767 && control->events.empty(),
+          "stopping a node leaves the other node and native output running");
+}
+
+void testApplicationAudioReconfigurationPreservesSystemHandles() {
+  Stopwatch clock;
+  auto control = std::make_shared<FactoryControl>();
+  control->rejectConcurrentStreams = true;
+  audio::ApplicationAudio audio(&clock, std::make_unique<FakeConfigurableFactory>(control));
+  auto &system = audio.systemSounds();
+  const path_t key = PATH("device-change-system");
+  require(system.loadGeneratedSound(key, std::vector<short>(44100, 4000), 1, 44100),
+          "system PCM is retained across output changes");
+  std::atomic_bool cancelled{false};
+  const auto sound = system.loadSkinSound(key, cancelled, 1024, 200000);
+  require(sound.handle && system.playSkinSound(*sound.handle, 1, true), "system loop starts");
+  std::array<short, 4> pcm{};
+  control->renderCallback(pcm.data(), 2, 2, control->renderUserData);
+  const auto original = audio.runtimeState();
+  std::string error;
+  require(audio.restart({.deviceId = "usb", .sampleRate = 48000, .bufferFrames = 128}, error),
+          "both submixes reconfigure before native output starts: " + error);
+  control->renderCallback(pcm.data(), 2, 2, control->renderUserData);
+  require(pcm[0] == 3599 && audio.runtimeState().effectiveSampleRate == 48000,
+          "system playback survives a new output rate");
+  audio.setApplicationSuspended(true);
+  control->renderCallback(pcm.data(), 2, 2, control->renderUserData);
+  require(pcm[0] == 0 && pcm[2] == 0, "application suspension covers system playback");
+  audio.setApplicationSuspended(false);
+  control->openResults = {false, true};
+  require(!audio.restart(original.request, error), "a native open failure is reported");
+  require(audio.restore(original, error), "rollback reopens the original output");
+  control->renderCallback(pcm.data(), 2, 2, control->renderUserData);
+  require(pcm[0] == 3599 && control->liveStreams == 1,
+          "rollback resumes safe system playback on one native stream: pcm=" +
+              std::to_string(pcm[0]) + ", streams=" + std::to_string(control->liveStreams));
+  require(system.stopSkinSound(*sound.handle), "rollback retains the system identity");
+  control->startResults = {false, true};
+  require(!audio.restart({.sampleRate = 48000}, error), "a native start failure is reported");
+  require(audio.restore(original, error), "rollback also recovers native start failure");
+  require(system.playSkinSound(*sound.handle, 1, true), "start failure keeps system owners alive");
+}
+
+void testSystemLoadRevalidatesRateAfterConcurrentOutputChange() {
+  Stopwatch clock;
+  auto control = std::make_shared<FactoryControl>();
+  audio::ApplicationAudio audio(&clock, std::make_unique<FakeConfigurableFactory>(control));
+  resampling_test::AllocationGate gate;
+  std::atomic_bool cancelled{false};
+  auto loading = std::async(std::launch::async, [&] {
+    resampling_test::decodeMemoryFixture = true;
+    resampling_test::allocationGate = &gate;
+    return audio.systemSounds().loadSkinSound(PATH("concurrent-system-load"),
+        cancelled, 1024 * 1024, 1024 * 1024);
+  });
+  const bool entered = gate.waitUntilEntered();
+  std::string error;
+  const bool changed = entered && audio.restart({.sampleRate = 48000}, error);
+  gate.release();
+  const auto loaded = loading.get();
+  require(entered && changed && loaded.handle, "output changes while system PCM conversion is in flight");
+  require(audio.systemSounds().playSkinSound(*loaded.handle, 1, false), "late system load plays");
+  std::vector<short> pcm(48010 * 2);
+  control->renderCallback(pcm.data(), 48010, 2, control->renderUserData);
+  require(pcm[47998 * 2] != 0 && pcm[48001 * 2] == 0,
+          "late system load retains one-second duration at the new output sample rate");
+}
+
+void testSubmixStopWaitsForItsActiveCallbackWithoutStoppingDevice() {
+  auto control = std::make_shared<FactoryControl>();
+  audio::SharedAudioOutput output(std::make_unique<FakeConfigurableFactory>(control));
+  struct BlockingSource {
+    std::promise<void> entered, release;
+    std::shared_future<void> resume = release.get_future().share();
+  } source;
+  std::string error;
+  auto node = output.createSubmixFactory(0)->open({},
+      [](void *output, unsigned frames, int channels, void *data) {
+        auto &source = *static_cast<BlockingSource *>(data);
+        source.entered.set_value();
+        source.resume.wait();
+        std::fill_n(static_cast<float *>(output), static_cast<std::size_t>(frames) * channels, 0.5F);
+      }, &source, error);
+  auto system = output.createSubmixFactory(1)->open({},
+      [](void *output, unsigned frames, int channels, void *) {
+        auto *samples = static_cast<float *>(output);
+        for (std::size_t i = 0; i < static_cast<std::size_t>(frames) * channels; ++i)
+          samples[i] += 0.25F;
+      }, nullptr, error);
+  require(node && system && node->start(error) && system->start(error), "drain fixture starts both nodes");
+  std::array<short, 2> pcm{};
+  auto render = std::async(std::launch::async, [&] {
+    control->renderCallback(pcm.data(), 1, 2, control->renderUserData);
+  });
+  source.entered.get_future().wait();
+  std::promise<void> stopping;
+  auto stop = std::async(std::launch::async, [&] {
+    stopping.set_value();
+    return node->stop(error);
+  });
+  stopping.get_future().wait();
+  const auto pending = stop.wait_for(20ms);
+  source.release.set_value();
+  render.get();
+  require(pending == std::future_status::timeout && stop.get(),
+          "node stop waits until the already admitted render releases its PCM");
+  control->events.clear();
+  node.reset();
+  control->renderCallback(pcm.data(), 1, 2, control->renderUserData);
+  require(pcm[0] == 8191 && control->events.empty(),
+          "retired gameplay callback is never entered again while system output continues");
+}
+
+void testApplicationAudioRecoversInitialDeviceStartFailure() {
+  Stopwatch clock;
+  auto control = std::make_shared<FactoryControl>();
+  control->startResults = {false, false, true};
+  audio::ApplicationAudio audio(&clock, std::make_unique<FakeConfigurableFactory>(control));
+  std::string error;
+  require(audio.restart({.deviceId = "usb", .sampleRate = 48000}, error),
+          "saved output settings can recover an initial default-device start failure");
+  require(audio.runtimeState().request.deviceId == "usb" && control->liveStreams == 1,
+          "startup recovery selects the saved output without concurrent native streams");
+}
+
+void testSharedGameplayMatchesStandaloneSamplesAndNativeTimeline() {
+  for (const int speed : {50, 100, 200}) {
+    Stopwatch directClock, sharedClock;
+    auto directControl = std::make_shared<FactoryControl>();
+    auto sharedControl = std::make_shared<FactoryControl>();
+    AudioWrapper standalone(&directClock, std::make_unique<FakeConfigurableFactory>(directControl));
+    audio::ApplicationAudio audio(&sharedClock, std::make_unique<FakeConfigurableFactory>(sharedControl));
+    auto &shared = audio.gameplay();
+    std::vector<short> wave(20000);
+    for (std::size_t i = 0; i < wave.size(); ++i) wave[i] = static_cast<short>((i % 100) * 200 - 10000);
+    for (auto *processor : {&standalone, &shared}) {
+      require(processor->loadGeneratedSound(PATH("timing-wave"), wave, 1, 44100) &&
+                  processor->stopSounds().success, "timing fixture prepares chart PCM");
+      std::string error;
+      require(processor->setPlaybackRate({.percent = speed}, error), "timing fixture selects speed");
+      require(processor->stageScheduledSound(PATH("timing-wave"), audio::Bus::Bgm, 113) &&
+                  processor->stageScheduledSound(PATH("timing-wave"), audio::Bus::Keysound, 92'891) &&
+                  processor->startDevice().success, "onsets straddle an oversized callback chunk");
+      processor->seekClock(0);
+    }
+    directClock.start(); sharedClock.start();
+    const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const audio::RenderTiming timing{.outputSteadyMicros = now + 10000, .outputTimestampKnown = true};
+    directControl->timingCallback(timing, directControl->timingUserData);
+    sharedControl->timingCallback(timing, sharedControl->timingUserData);
+    std::vector<short> expected(5000 * 2), actual(5000 * 2);
+    directControl->renderCallback(expected.data(), 5000, 2, directControl->renderUserData);
+    sharedControl->renderCallback(actual.data(), 5000, 2, sharedControl->renderUserData);
+    require(actual == expected, "shared output does not add, drop, delay or change gameplay samples");
+    for (const long long offset : {0LL, 1000LL, 92880LL, 100000LL}) {
+      const auto directTime = standalone.songTimeMicrosAtSteadyMicros(timing.outputSteadyMicros + offset);
+      const auto sharedTime = shared.songTimeMicrosAtSteadyMicros(timing.outputSteadyMicros + offset);
+      require(directTime && sharedTime && std::abs(*directTime - *sharedTime) <= 2,
+              "shared output preserves native chart-time mapping within integer microsecond rounding");
+    }
+  }
+}
+
+int runRenderBenchmark() {
+  using Clock = std::chrono::steady_clock;
+  struct Renderer {
+    Stopwatch clock;
+    std::shared_ptr<FactoryControl> control = std::make_shared<FactoryControl>();
+    std::unique_ptr<AudioWrapper> standalone;
+    std::unique_ptr<audio::ApplicationAudio> shared;
+    AudioWrapper *gameplay = nullptr;
+    explicit Renderer(bool split) {
+      if (split) {
+        shared = std::make_unique<audio::ApplicationAudio>(
+            &clock, std::make_unique<FakeConfigurableFactory>(control));
+        gameplay = &shared->gameplay();
+      } else {
+        standalone = std::make_unique<AudioWrapper>(
+            &clock, std::make_unique<FakeConfigurableFactory>(control));
+        gameplay = standalone.get();
+      }
+      require(gameplay->loadGeneratedSound(PATH("benchmark"),
+          std::vector<short>(600000, 100), 1, 44100), "benchmark PCM loads");
+    }
+    double measure(unsigned frames, unsigned voices) {
+      clock.pause();
+      require(gameplay->stopSounds().success, "benchmark playback resets");
+      for (unsigned i = 0; i < voices; ++i)
+        require(gameplay->stageScheduledSound(PATH("benchmark"), audio::Bus::Bgm, 0),
+                "benchmark stages simultaneous voices");
+      require(gameplay->startDevice().success, "benchmark playback starts");
+      gameplay->seekClock(0);
+      clock.start();
+      std::array<short, 512> pcm{};
+      for (unsigned i = 0; i < 128; ++i)
+        control->renderCallback(pcm.data(), frames, 2, control->renderUserData);
+      const auto begin = Clock::now();
+      for (unsigned i = 0; i < 2000; ++i)
+        control->renderCallback(pcm.data(), frames, 2, control->renderUserData);
+      const auto end = Clock::now();
+      require(pcm[0] > 0, "benchmark retains active voices throughout measurement");
+      return std::chrono::duration<double, std::micro>(end - begin).count() / 2000;
+    }
+  };
+  Renderer direct(false), shared(true);
+  std::cout << "frames,voices,standalone_us,shared_us,ratio\n";
+  for (const unsigned frames : {64, 128, 256}) {
+    for (const unsigned voices : {1, 32, 128}) {
+      std::array<double, 5> baseline{}, split{};
+      for (unsigned run = 0; run < baseline.size(); ++run) {
+        if (run % 2) {
+          split[run] = shared.measure(frames, voices);
+          baseline[run] = direct.measure(frames, voices);
+        } else {
+          baseline[run] = direct.measure(frames, voices);
+          split[run] = shared.measure(frames, voices);
+        }
+      }
+      std::sort(baseline.begin(), baseline.end());
+      std::sort(split.begin(), split.end());
+      std::cout << frames << ',' << voices << ',' << baseline[2] << ','
+                << split[2] << ',' << split[2] / baseline[2] << '\n';
+    }
+  }
+  return 0;
+}
+
+int main(int argc, char **argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--benchmark") return runRenderBenchmark();
+    testApplicationAudioRecoversInitialDeviceStartFailure();
+    testSharedGameplayMatchesStandaloneSamplesAndNativeTimeline();
+    testSystemLoadRevalidatesRateAfterConcurrentOutputChange();
+    testSubmixStopWaitsForItsActiveCallbackWithoutStoppingDevice();
+    testChartUnloadLeavesSystemPlaybackRunning();
+    testSystemSubmixIgnoresGameplayRateAndQueuePressure();
+    testSharedOutputPreservesFloatHeadroomAndCallbackTiming();
+    testApplicationAudioReconfigurationPreservesSystemHandles();
     testMonoAudioFoldsFinalOutputAndCanReturnToStereo();
     testApplicationSuspensionSilencesEveryBusWithoutConsumingPcm();
     testApplicationSuspensionKeepsNewVoicesSilentAndDrainsStops();

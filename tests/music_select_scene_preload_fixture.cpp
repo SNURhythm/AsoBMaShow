@@ -65,7 +65,7 @@ struct Jukebox {
   bool success = true;
   std::shared_ptr<audio::DecodedAssetCache> cache;
   void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> value) { cache = std::move(value); }
-  Result loadChartPreservingDevice(Chart &, bool, std::atomic_bool &) { assert(cache); return {success}; }
+  Result loadChart(Chart &, bool, std::atomic_bool &) { assert(cache); return {success}; }
 };
 struct Scene {
   struct Context {

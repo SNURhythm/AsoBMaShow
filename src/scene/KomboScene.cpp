@@ -542,7 +542,7 @@ void KomboScene::dashboard(View *body) {
       std::string error;
       const bool bought = context.scoreRepository.BuyKomboFreeze(error);
       message_ = bought ? i18n::tr("kombo.ui.freeze_bought") : error;
-      if (bought) komboSounds_.play(context.jukebox.audioRuntime(), kombo::Sound::Freeze);
+      if (bought) komboSounds_.play(context.systemAudio(), kombo::Sound::Freeze);
       reload();
     });
   }, app_theme::ActionCategory::Information, ui_icons::kSnowflake)->setEnabled(kombo::canBuyFreeze(state_));
@@ -1002,10 +1002,10 @@ void KomboScene::update(float dt) {
   if (page_ == Page::Dashboard && goalIgnitionSoundPending_) {
     goalIgnitionSoundPending_ = false;
     if (SDL_GetTicks() - komboProgressStartedAt_ < 750)
-      komboSounds_.play(context.jukebox.audioRuntime(), kombo::Sound::Complete);
+      komboSounds_.play(context.systemAudio(), kombo::Sound::Complete);
   }
   if (page_ == Page::Dashboard && roundCue_.consume(SDL_GetTicks()))
-    komboSounds_.play(context.jukebox.audioRuntime(), kombo::Sound::RoundAdvance);
+    komboSounds_.play(context.systemAudio(), kombo::Sound::RoundAdvance);
   elapsed_ += dt;
   if (profileId_ != context.profileManager.activeProfile().id) {
     page_ = Page::Dashboard; message_.clear(); reload(); build();

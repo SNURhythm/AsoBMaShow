@@ -478,12 +478,15 @@ long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
   return bufferStartMicros;
 }
 
-void fillSilence(void *pOutput, ma_uint32 frameCount, int outputChannels) {
-  std::fill_n((ma_int16 *)pOutput, frameCount * outputChannels, 0);
+template <bool Additive, typename Sample>
+void fillSilence(Sample *pOutput, ma_uint32 frameCount, int outputChannels) {
+  if constexpr (!Additive)
+    std::fill_n(pOutput, static_cast<size_t>(frameCount) * outputChannels, Sample{0});
 }
 
 // Mixing logic extracted to be backend-agnostic
-void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
+template <typename Sample, bool Additive>
+void mixAudio(Sample *pOutput, ma_uint32 frameCount, int outputChannels,
               UserData *userData) {
   if (userData == nullptr || userData->callbackState == nullptr) {
     return;
@@ -499,7 +502,10 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   audio::playback::DrainCommands(state);
 
   if (userData->applicationSuspended.load(std::memory_order_acquire)) {
-    fillSilence(pOutput, frameCount, outputChannels);
+    fillSilence<Additive>(pOutput, frameCount, outputChannels);
+    if constexpr (Additive)
+      userData->outputMeter.pushSilence(frameCount, outputChannels,
+          userData->sampleRate->load(std::memory_order_relaxed));
     return;
   }
 
@@ -507,7 +513,10 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
       userData->monoAudio->load(std::memory_order_acquire);
   const bool clockRunning = userData->stopwatch->isRunning();
   if (!clockRunning && state.playingSoundCount == 0) {
-    fillSilence(pOutput, frameCount, outputChannels);
+    fillSilence<Additive>(pOutput, frameCount, outputChannels);
+    if constexpr (Additive)
+      userData->outputMeter.pushSilence(frameCount, outputChannels,
+          userData->sampleRate->load(std::memory_order_relaxed));
     return;
   }
 
@@ -536,7 +545,10 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   // with an unusually large callback is rendered completely in bounded chunks.
   const auto scratchFrames = static_cast<ma_uint32>(userData->mixBuffer->size() / 2);
   if (scratchFrames == 0) {
-    fillSilence(pOutput, frameCount, outputChannels);
+    fillSilence<Additive>(pOutput, frameCount, outputChannels);
+    if constexpr (Additive)
+      userData->outputMeter.pushSilence(frameCount, outputChannels,
+          userData->sampleRate->load(std::memory_order_relaxed));
     return;
   }
   for (ma_uint32 offset = 0; offset < frameCount;) {
@@ -546,14 +558,20 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
           sampleRate, chunkFrames, playbackRatePercent, offset, bufferStartFrame);
     }
     if (state.playingSoundCount == 0 && !state.scheduledMixPending) {
-      fillSilence(static_cast<ma_int16 *>(pOutput) +
+      fillSilence<Additive>(pOutput +
                       static_cast<size_t>(offset) * outputChannels,
                   chunkFrames, outputChannels);
+      if constexpr (Additive)
+        userData->outputMeter.pushSilence(chunkFrames, outputChannels, sampleRate);
       offset += chunkFrames;
       continue;
     }
     const size_t requiredSamples = static_cast<size_t>(chunkFrames) * outputChannels;
-    float *mixBuffer = userData->mixBuffer->data();
+    float *mixBuffer;
+    if constexpr (std::is_same_v<Sample, float> && !Additive)
+      mixBuffer = pOutput + static_cast<size_t>(offset) * outputChannels;
+    else
+      mixBuffer = userData->mixBuffer->data();
     std::fill_n(mixBuffer, requiredSamples, 0.0f);
 
     const float bgmGain = userData->bgmGain
@@ -591,18 +609,16 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
       }
     }
 
-    // Convert back to int16
-    ma_int16 *outPtr = (ma_int16 *)pOutput + static_cast<size_t>(offset) * outputChannels;
-    for (size_t i = 0; i < requiredSamples; ++i) {
-      float sample = mixBuffer[i];
-
-      // Hard clip
-      if (sample > 1.0f)
-        sample = 1.0f;
-      if (sample < -1.0f)
-        sample = -1.0f;
-
-      outPtr[i] = (ma_int16)(sample * 32767.0f);
+    // The primary float submix renders directly into the output graph's
+    // buffer. Only an audible secondary submix needs an addition pass.
+    Sample *outPtr = pOutput + static_cast<size_t>(offset) * outputChannels;
+    if constexpr (Additive) {
+      userData->outputMeter.push(mixBuffer, chunkFrames, outputChannels, sampleRate);
+      for (size_t i = 0; i < requiredSamples; ++i) outPtr[i] += mixBuffer[i];
+    } else if constexpr (!std::is_same_v<Sample, float>) {
+      for (size_t i = 0; i < requiredSamples; ++i)
+        outPtr[i] = static_cast<Sample>(
+            std::clamp(mixBuffer[i], -1.0F, 1.0F) * 32767.0F);
     }
     offset += chunkFrames;
   }
@@ -655,14 +671,23 @@ private:
   std::unique_ptr<audio::IBackend> backend_;
 };
 
+template <typename Sample, bool Additive = false>
 void configurableBackendRender(void *output, std::uint32_t frameCount,
                                int outputChannels, void *userData) {
-  mixAudio(output, static_cast<ma_uint32>(frameCount), outputChannels,
+  mixAudio<Sample, Additive>(static_cast<Sample *>(output), static_cast<ma_uint32>(frameCount), outputChannels,
            static_cast<UserData *>(userData));
-  if (output && frameCount && outputChannels == 2 && userData) {
+  if (!Additive && output && frameCount && outputChannels == 2 && userData) {
     auto &data = *static_cast<UserData *>(userData);
-    data.outputMeter.push(static_cast<const short *>(output), frameCount,
+    data.outputMeter.push(static_cast<const Sample *>(output), frameCount,
                           outputChannels, data.sampleRate->load(std::memory_order_relaxed));
+  }
+}
+
+audio::RenderCallback renderCallbackFor(audio::RenderFormat format) {
+  switch (format) {
+  case audio::RenderFormat::Float32: return configurableBackendRender<float>;
+  case audio::RenderFormat::Float32Additive: return configurableBackendRender<float, true>;
+  default: return configurableBackendRender<short>;
   }
 }
 
@@ -732,7 +757,8 @@ AudioWrapper::AudioWrapper(
 
   std::string openError;
   auto opened = backendFactory != nullptr
-                    ? backendFactory->open({}, configurableBackendRender,
+                    ? backendFactory->open({},
+                        renderCallbackFor(backendFactory->renderFormat()),
                                            &userData, openError)
                     : nullptr;
   if (!opened) {
@@ -1270,9 +1296,12 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
 
     std::shared_ptr<SoundData> privateSound;
     std::size_t remainingDecodedSamples = 0;
+    int preparedSampleRate = 0;
+    std::uint64_t loadGeneration = 0;
     {
       std::lock_guard<std::mutex> lock(soundDataListMutex);
       cleanupRetiredSkinSoundsLocked();
+      loadGeneration = soundLoadGeneration;
       if (skinSoundDecodedBytes > maximumTotalDecodedBytes) {
         return {};
       }
@@ -1309,6 +1338,7 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
         privateSound->outputData = source->outputData;
         privateSound->sourceFrameCount = source->sourceFrameCount;
         privateSound->outputFrameCount = source->outputFrameCount;
+        preparedSampleRate = currentSampleRate.load(std::memory_order_acquire);
       }
     }
 
@@ -1333,6 +1363,7 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
           static_cast<std::size_t>(privateSound->channels);
       const int targetSampleRate =
           currentSampleRate.load(std::memory_order_acquire);
+      preparedSampleRate = targetSampleRate;
       if (!audio::ResampledPcmFitsSampleBudget(
               privateSound->sourceData.size(), privateSound->channels,
               privateSound->sourceSampleRate, targetSampleRate,
@@ -1352,41 +1383,63 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
           static_cast<std::size_t>(privateSound->channels);
     }
 
-    if (privateSound->sourceData.size() >
-        std::numeric_limits<std::size_t>::max() -
-            privateSound->outputData.size()) {
-      return {};
-    }
-    const std::size_t sampleCount = privateSound->sourceData.size() +
-                                    privateSound->outputData.size();
-    if (sampleCount >
-        std::numeric_limits<std::size_t>::max() / sizeof(short)) {
-      return {};
-    }
-    const std::size_t decodedBytes = sampleCount * sizeof(short);
+    for (;;) {
+      // Decode/conversion can overlap device configuration. Publish only PCM
+      // prepared for the rate that is still current under the owner lock.
+      const int targetSampleRate = currentSampleRate.load(std::memory_order_acquire);
+      if (preparedSampleRate != targetSampleRate) {
+        if (!audio::ResampledPcmFitsSampleBudget(
+                privateSound->sourceData.size(), privateSound->channels,
+                privateSound->sourceSampleRate, targetSampleRate,
+                remainingDecodedSamples)) return {};
+        privateSound->outputData = audio::ResamplePcm(
+            privateSound->sourceData, privateSound->channels,
+            privateSound->sourceSampleRate, targetSampleRate, &isCancelled);
+        if ((!privateSound->sourceData.empty() && privateSound->outputData.empty()) ||
+            isCancelled || stop.stop_requested()) return {};
+        privateSound->outputFrameCount =
+            privateSound->outputData.size() / static_cast<std::size_t>(privateSound->channels);
+        preparedSampleRate = targetSampleRate;
+      }
+      if (privateSound->sourceData.size() >
+          std::numeric_limits<std::size_t>::max() -
+              privateSound->outputData.size()) {
+        return {};
+      }
+      const std::size_t sampleCount = privateSound->sourceData.size() +
+                                      privateSound->outputData.size();
+      if (sampleCount >
+          std::numeric_limits<std::size_t>::max() / sizeof(short)) {
+        return {};
+      }
+      const std::size_t decodedBytes = sampleCount * sizeof(short);
 
-    std::lock_guard<std::mutex> lock(soundDataListMutex);
-    cleanupRetiredSkinSoundsLocked();
-    if (isCancelled || decodedBytes > maximumTotalDecodedBytes ||
-        skinSoundDecodedBytes > maximumTotalDecodedBytes - decodedBytes ||
-        skinSounds.size() + retiredSkinSounds.size() >=
-            kOwnerControlCommandQueueSize) {
-      return {};
+      std::lock_guard<std::mutex> lock(soundDataListMutex);
+      cleanupRetiredSkinSoundsLocked();
+      if (isCancelled || stop.stop_requested() || soundLoadGeneration != loadGeneration ||
+          decodedBytes > maximumTotalDecodedBytes ||
+          skinSoundDecodedBytes > maximumTotalDecodedBytes - decodedBytes ||
+          skinSounds.size() + retiredSkinSounds.size() >=
+              kOwnerControlCommandQueueSize) {
+        return {};
+      }
+      if (currentSampleRate.load(std::memory_order_acquire) != preparedSampleRate)
+        continue;
+      audio::SkinSoundHandle handle{.value = ++nextSkinSoundHandle};
+      if (!handle) {
+        handle.value = ++nextSkinSoundHandle;
+      }
+      auto [unused, inserted] = skinSounds.emplace(
+          handle.value,
+          SkinSoundRecord{.soundData = std::move(privateSound),
+                          .decodedBytes = decodedBytes});
+      (void)unused;
+      if (!inserted) {
+        return {};
+      }
+      skinSoundDecodedBytes += decodedBytes;
+      return {.handle = handle, .decodedBytes = decodedBytes};
     }
-    audio::SkinSoundHandle handle{.value = ++nextSkinSoundHandle};
-    if (!handle) {
-      handle.value = ++nextSkinSoundHandle;
-    }
-    auto [unused, inserted] = skinSounds.emplace(
-        handle.value,
-        SkinSoundRecord{.soundData = std::move(privateSound),
-                        .decodedBytes = decodedBytes});
-    (void)unused;
-    if (!inserted) {
-      return {};
-    }
-    skinSoundDecodedBytes += decodedBytes;
-    return {.handle = handle, .decodedBytes = decodedBytes};
   } catch (...) {
     return {};
   }
@@ -1878,6 +1931,15 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
   backendState.store(observed.state, std::memory_order_release);
   if (observed.state == audio::playback::BackendRunState::Running &&
       currentSampleRate.load(std::memory_order_acquire) == targetSampleRate) {
+    // A software node can remain enabled while the native device has stopped
+    // externally. Its idempotent start also recovers that shared output.
+    if (backendFactory && backendFactory->renderFormat() != audio::RenderFormat::Signed16) {
+      const auto started = backend->start();
+      if (!started.success) {
+        closeRealtimeSoundGateAndWait();
+        return started;
+      }
+    }
     openRealtimeSoundGate();
     return {.success = true};
   }
@@ -2076,10 +2138,23 @@ audio::RuntimeState AudioWrapper::runtimeState() const {
   return runtimeState_;
 }
 
+audio::playback::BackendOperationResult
+AudioWrapper::suspendRenderingWithLifecycleLocked() {
+  closeRealtimeSoundGateAndWait();
+  if (!backend) return {.success = true};
+  return audio::playback::ConfirmBackendStopped(
+      *backend, backend->observeState(), backendState);
+}
+
 bool AudioWrapper::restart(const audio::StreamRequest &request,
                            std::string &errorMessage) {
-  errorMessage.clear();
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  return restartWithLifecycleLocked(request, errorMessage);
+}
+
+bool AudioWrapper::restartWithLifecycleLocked(const audio::StreamRequest &request,
+                                               std::string &errorMessage) {
+  errorMessage.clear();
   if (backendFactory == nullptr) {
     errorMessage = "Injected audio backend does not support reconfiguration";
     return false;
@@ -2096,7 +2171,8 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
                        std::memory_order_release);
   }
 
-  auto candidate = backendFactory->open(request, configurableBackendRender,
+  auto candidate = backendFactory->open(request,
+                      renderCallbackFor(backendFactory->renderFormat()),
                                         &userData, errorMessage);
   if (!candidate) {
     if (errorMessage.empty()) {

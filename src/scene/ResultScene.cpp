@@ -759,7 +759,7 @@ bool ResultScene::startSelectedResultSkin() {
        .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
        .builtinImageReader = archive_file::readFileBounded,
        .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-           context.jukebox.audioRuntime(), [this] {
+           context.systemAudio(), [this] {
              return context.settings.audioVideo.audio.masterVolume;
            }, {}, context.skinLiveResourceCounters),
        .liveResourceCounters = context.skinLiveResourceCounters,
@@ -4723,7 +4723,7 @@ void ResultScene::updateGoalAchievement() {
   const auto now = SDL_GetTicks();
   if (goalPresentation_.start(now, komboPresentation_.active() || persistenceDecisionRequired())) {
     buildGoalAchievement();
-    komboSounds_.play(context.jukebox.audioRuntime(), kombo::Sound::GoalAchieved);
+    komboSounds_.play(context.systemAudio(), kombo::Sound::GoalAchieved);
   }
   if (goalPresentation_.finish(now)) {
     if (goalAchievementView_) goalAchievementView_->setVisible(false);
@@ -4860,13 +4860,13 @@ void ResultScene::updateKomboProgress() {
     if (komboProgress_) komboRoundCue_.start(*komboProgress_, komboProgressStartedAt_);
     buildKomboProgress(true);
     if (komboSnapshot_ && komboPresentation_.visible()) {
-      komboSounds_.play(context.jukebox.audioRuntime(), komboProgress_ && komboProgress_->reachedDailyGoal
+      komboSounds_.play(context.systemAudio(), komboProgress_ && komboProgress_->reachedDailyGoal
           ? kombo::Sound::Complete : kombo::Sound::Progress);
     }
   }
   if (!komboPresentation_.visible() || !komboOverlay_ || !komboPanel_) return;
   if (komboRoundCue_.consume(SDL_GetTicks()))
-    komboSounds_.play(context.jukebox.audioRuntime(), kombo::Sound::RoundAdvance);
+    komboSounds_.play(context.systemAudio(), kombo::Sound::RoundAdvance);
   const auto safe = rendering::uiSafeAreaInsets();
   const auto metrics = kombo::resultOverlayMetrics(rendering::window_width, rendering::window_height,
       rendering::displayPixelScale, rendering::ui_scale_x, safe.top, safe.right, safe.bottom, safe.left);

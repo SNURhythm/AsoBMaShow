@@ -336,7 +336,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
 
   const auto model = BuildAudioControlModel(
       audioDraft, context.audioDeviceManager.capabilities(),
-      context.jukebox.audioRuntime().runtimeState());
+      context.applicationAudio.runtimeState());
 
   auto *streamControls = new View();
   streamControls->setFlexDirection(FlexDirection::Column);
@@ -736,7 +736,7 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
 
 void SettingsScene::refreshAudioDiagnostics(bool force) {
   if (audioEffectiveText == nullptr) return;
-  const auto state = context.jukebox.audioRuntime().runtimeState();
+  const auto state = context.applicationAudio.runtimeState();
   if (!force && displayedAudioState &&
       displayedAudioState->request == state.request &&
       displayedAudioState->effectiveSampleRate == state.effectiveSampleRate &&
@@ -785,7 +785,7 @@ void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
   }
   const auto audioModel = BuildAudioControlModel(
       audioDraft, context.audioDeviceManager.capabilities(),
-      context.jukebox.audioRuntime().runtimeState());
+      context.applicationAudio.runtimeState());
   LayoutMetrics metrics = resolveLayoutMetrics();
   const int tabColumnWidth = std::min(
       metrics.contentWidth,
@@ -1018,7 +1018,7 @@ void SettingsScene::adjustVolume(int busIndex, int deltaPercent) {
 }
 
 bool SettingsScene::playSettingsTestSound() {
-  auto &runtime = context.jukebox.audioRuntime();
+  auto &runtime = context.systemAudio();
   return PlaySettingsTestSound(
       {.loadGeneratedSound =
            [&](const path_t &key, std::vector<short> pcm, int channels,

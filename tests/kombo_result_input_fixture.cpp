@@ -85,7 +85,7 @@ struct Local {
 };
 struct ResultScene {
   struct {
-    struct { int audioRuntime() { return 0; } } jukebox;
+    int systemAudio() { return 0; }
     struct { struct Profile { std::string id="one"; } profile;
       const Profile &activeProfile() const { return profile; } } profileManager;
     std::uint64_t currentFrame = 11;

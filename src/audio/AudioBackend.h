@@ -45,6 +45,11 @@ struct RuntimeState {
 };
 
 using RenderCallback = void (*)(void *, std::uint32_t, int, void *);
+// Native backends consume signed 16-bit PCM. Software submixes retain float
+// headroom so the output graph can sum them before clipping and conversion.
+// Float32Additive adds to the supplied buffer and leaves it untouched for
+// silence. This lets an idle secondary submix cost no per-sample work.
+enum class RenderFormat { Signed16, Float32, Float32Additive };
 // Timestamp of the first output frame, supplied by the native audio API.
 // A missing timestamp is not replaced with a latency estimate.
 struct RenderTiming {
@@ -84,6 +89,7 @@ public:
 class IBackendFactory {
 public:
   virtual ~IBackendFactory() = default;
+  [[nodiscard]] virtual RenderFormat renderFormat() const { return RenderFormat::Signed16; }
   [[nodiscard]] virtual Capabilities capabilities() const = 0;
   virtual std::unique_ptr<IBackend> open(const StreamRequest &request,
                                          RenderCallback renderCallback,

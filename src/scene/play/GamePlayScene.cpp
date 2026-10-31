@@ -284,7 +284,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
             return skin::createLuaSkinProductionHttpTransport(stop);
           },
           .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-              context.jukebox.audioRuntime(), [&context] {
+              context.systemAudio(), [&context] {
                 return context.settings.audioVideo.audio.masterVolume;
               }, {}, context.skinLiveResourceCounters),
           .captureLegacyInputGeneration = [&context] {
@@ -4163,20 +4163,20 @@ bool GamePlayScene::reset() {
 
 void GamePlayScene::prepareGuidedAccessChime() {
   std::atomic<bool> cancelled{false};
-  guidedAccessChime = context.jukebox.audioRuntime().loadSkinSound(
+  guidedAccessChime = context.systemAudio().loadSkinSound(
       fspath_to_path_t(std::filesystem::path("assets/guided-access-enabled.wav")),
       cancelled, 256 * 1024, std::numeric_limits<std::size_t>::max()).handle;
 }
 
 void GamePlayScene::playGuidedAccessChime() {
   if (guidedAccessChime) {
-    context.jukebox.audioRuntime().playSkinSound(*guidedAccessChime, 1.0F, false);
+    context.systemAudio().playSkinSound(*guidedAccessChime, 1.0F, false);
   }
 }
 
 void GamePlayScene::stopGuidedAccessChime(bool release) {
   if (!guidedAccessChime) return;
-  auto &audio = context.jukebox.audioRuntime();
+  auto &audio = context.systemAudio();
   audio.stopSkinSound(*guidedAccessChime);
   if (release) {
     audio.disposeSkinSound(*guidedAccessChime);
