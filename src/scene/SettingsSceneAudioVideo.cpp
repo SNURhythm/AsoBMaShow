@@ -503,7 +503,7 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
         .selected = context.settings.iosMetalDisplayLink,
         .action = [applyMetalDisplayLink] { applyMetalDisplayLink(true); }}}, true);
   cardsColumn->addView(makeCard(
-      metrics, "CAMetalDisplayLink",
+      metrics, i18n::message("settings.display.metal_display_link.label"),
       i18n::message("settings.display.metal_display_link.description"),
       metalDisplayLinkControl, metrics.modeCardHeight, metrics.cardsWidth));
 #endif
