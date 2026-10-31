@@ -129,6 +129,10 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                    .keyMode = definition.metadata().keyMode}),
       noteStates_(definition.noteCount()),
       hellChargeBalanceMicros_(definition.noteCount()) {
+  if (config_.trackQuickRetry) {
+    quickRetryCache_.reset(definition.noteCount());
+    for (const NoteId id : definition.hellChargeHeads()) updateQuickRetryHellCharge(id, 0);
+  }
   eligibleHellChargeHeads_.reserve(definition.hellChargeHeads().size());
   mutedHeadVoices_.resize(definition.noteCount());
   triggeredHeadVoices_.resize(definition.noteCount());
@@ -287,26 +291,23 @@ GameplaySimulation::hellChargeBalances() const noexcept {
   return hellChargeBalanceMicros_;
 }
 
-quick_retry::Projection GameplaySimulation::quickRetryProjection() const {
-  quick_retry::Projection result;
-  for (const auto &lane : laneStates_) {
-    const NoteId tailId = lane.heldTailId != kInvalidNoteId
-                              ? lane.heldTailId : lane.pendingReleaseTailId;
-    if (tailId == kInvalidNoteId || noteStates_[tailId].played) continue;
-    const auto &tail = definition_.note(tailId);
-    if (tail.longNoteRule == LongNoteRule::Classic && tail.pairId != kInvalidNoteId)
-      result.acceptClassicHead(noteStates_[tail.pairId].acceptedHeadJudge.judgement);
-  }
-  for (const auto headId : definition_.hellChargeHeads()) {
-    const auto &head = definition_.note(headId);
-    if (!noteAllowed(headId) || head.pairId == kInvalidNoteId) continue;
-    const auto &tail = definition_.note(head.pairId);
-    const auto &tailState = noteStates_[head.pairId];
-    if (tailState.dead && !(tailState.played && tailState.playedTimeMicros < tail.timingMicros)) continue;
-    result.hellChargeTicks += quick_retry::remainingHellChargeTicks(
-        head.timingMicros, tail.timingMicros, lastAdvancedMicros_, hellChargeBalanceMicros_[headId]);
-  }
-  return result;
+const quick_retry::Projection &GameplaySimulation::quickRetryProjection() const noexcept {
+  return quickRetryCache_.get();
+}
+
+void GameplaySimulation::updateQuickRetryHellCharge(NoteId id, std::int64_t time) {
+  if (!quickRetryCache_.enabled() || id == kInvalidNoteId) return;
+  const auto &note = definition_.note(id);
+  if (note.longNoteRule != LongNoteRule::HellCharge) return;
+  const NoteId headId = note.kind == NoteKind::LongTail ? note.pairId : id;
+  if (headId == kInvalidNoteId) return;
+  const auto &head = definition_.note(headId);
+  if (!noteAllowed(headId) || head.pairId == kInvalidNoteId) return;
+  const auto &tail = definition_.note(head.pairId);
+  const auto &tailState = noteStates_[head.pairId];
+  const bool dead = tailState.dead && !(tailState.played && tailState.playedTimeMicros < tail.timingMicros);
+  quickRetryCache_.setHellCharge(headId, dead ? 0 : quick_retry::remainingHellChargeTicks(
+      head.timingMicros, tail.timingMicros, time, hellChargeBalanceMicros_[headId]));
 }
 
 GameplayTerminalReason GameplaySimulation::terminalReason() const noexcept {
@@ -494,6 +495,8 @@ void GameplaySimulation::markMissed(NoteId id, std::int64_t judgeTimeMicros,
   if (id == kInvalidNoteId || id >= noteStates_.size()) {
     return;
   }
+  const auto &note = definition_.note(id);
+  quickRetryCache_.resolveClassic(note.kind == NoteKind::LongHead ? note.pairId : id);
   markIdentityResolved(id);
   auto &state = noteStates_[id];
   noteChanges_.record(id);
@@ -501,9 +504,14 @@ void GameplaySimulation::markMissed(NoteId id, std::int64_t judgeTimeMicros,
   state.dead = dead;
   state.playedTimeMicros = judgeTimeMicros;
   state.holding = false;
+  updateQuickRetryHellCharge(id, judgeTimeMicros);
 }
 
 void GameplaySimulation::clearPairHolding(NoteId id) {
+  if (id != kInvalidNoteId && id < noteStates_.size()) {
+    const auto &note = definition_.note(id);
+    quickRetryCache_.resolveClassic(note.kind == NoteKind::LongHead ? note.pairId : id);
+  }
   if (id == kInvalidNoteId || id >= noteStates_.size()) {
     return;
   }
@@ -641,6 +649,7 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
       ? chart_timing::add(tail.timingMicros, releaseJudge->Diff) : songTimeMicros;
   tailState.releaseTimeMicros = releaseTime;
   clearPairHolding(tailId);
+  updateQuickRetryHellCharge(tailId, songTimeMicros);
 
   const JudgeResult tailJudge = config_.judge.judgeAt(
       judgeRoleFor(tail), tail.timingMicros, songTimeMicros);
@@ -772,6 +781,8 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   state.playedTimeMicros = songTimeMicros;
   if (note.kind == NoteKind::LongHead) {
     state.acceptedHeadJudge = JudgeResult(PGreat, 0);
+    if (note.longNoteRule == LongNoteRule::Classic)
+      quickRetryCache_.setClassic(note.pairId, PGreat);
     state.holding = true;
     if (note.pairId != kInvalidNoteId) {
       noteChanges_.record(note.pairId);
@@ -946,6 +957,7 @@ void GameplaySimulation::integrateHellChargeInterval(
     if (!hellChargeActiveAt(headId, fromMicros)) {
       hellChargeBalanceMicros_[headId] = 0;
     }
+    updateQuickRetryHellCharge(headId, fromMicros);
     return definition_.note(definition_.note(headId).pairId).timingMicros <=
            fromMicros;
   });
@@ -985,6 +997,7 @@ void GameplaySimulation::integrateHellChargeInterval(
     for (const NoteId headId : heads) {
       ++lastAdvanceStats_.hellChargeHeadsExamined;
       if (!hellChargeActiveAt(headId, currentMicros)) {
+        updateQuickRetryHellCharge(headId, intervalEnd);
         continue;
       }
       const auto &head = definition_.note(headId);
@@ -997,6 +1010,7 @@ void GameplaySimulation::integrateHellChargeInterval(
                            config_.attempt.autoPlay;
       hellChargeBalanceMicros_[headId] +=
           gaining ? activeDelta : -activeDelta;
+      updateQuickRetryHellCharge(headId, intervalEnd);
     }
     currentMicros = intervalEnd;
     (void)skinGameplayGraph_.advanceGaugeHistoryTo(currentMicros);
@@ -1027,6 +1041,7 @@ void GameplaySimulation::integrateHellChargeInterval(
         hellChargeBalanceMicros_[nextHeadId] +=
             kHellChargeGaugeTickMicros;
       }
+      updateQuickRetryHellCharge(nextHeadId, currentMicros);
       commitGaugeTick(nextJudgement, currentMicros);
       if (terminal()) {
         return;
@@ -1062,6 +1077,12 @@ void GameplaySimulation::beginLr2Update(std::int64_t songTimeMicros,
     const auto &note = definition_.note(id);
     if (note.timingMicros > lastAdvancedMicros_) {
       passingUpdateNotes_.push_back(id);
+    } else if (config_.trackQuickRetry && note.kind == NoteKind::LongHead &&
+               note.longNoteRule == LongNoteRule::HellCharge) {
+      // The LR2 passing phase excludes an initial head at zero. Its remaining
+      // potential still ages; piggyback that update on this lane's normal tick.
+      if (auto *lane = findLane(note.lane)) lane->quickRetrySkippedHellChargeHeadId = id;
+      updateQuickRetryHellCharge(id, songTimeMicros);
     } else if (note.kind == NoteKind::Landmine && note.inActiveSlot &&
                noteAllowed(id) && !noteStates_[id].played && !noteStates_[id].dead) {
       // Ignored mines still leave the native identity graph at their passage;
@@ -1094,6 +1115,7 @@ void GameplaySimulation::beginLr2Update(std::int64_t songTimeMicros,
           lane->hellChargeBalanceMicros = 0;
         }
       }
+      updateQuickRetryHellCharge(id, songTimeMicros);
     }
     // Classic LN completion is after input and strictly after its tail time.
     if (note.kind != NoteKind::LongTail ||
@@ -1104,8 +1126,19 @@ void GameplaySimulation::beginLr2Update(std::int64_t songTimeMicros,
   }
   const auto delta = chart_timing::subtract(songTimeMicros, lastAdvancedMicros_);
   for (auto &lane : laneStates_) {
+    if (lane.quickRetrySkippedHellChargeHeadId != kInvalidNoteId) {
+      const auto skipped = lane.quickRetrySkippedHellChargeHeadId;
+      updateQuickRetryHellCharge(skipped, songTimeMicros);
+      const auto tail = definition_.note(skipped).pairId;
+      if (tail == kInvalidNoteId || definition_.note(tail).timingMicros <= songTimeMicros)
+        lane.quickRetrySkippedHellChargeHeadId = kInvalidNoteId;
+    }
     const NoteId id = lane.passingHellChargeHeadId;
-    if (id == kInvalidNoteId || !noteStates_[id].played) continue;
+    if (id == kInvalidNoteId) continue;
+    if (!noteStates_[id].played) {
+      updateQuickRetryHellCharge(id, songTimeMicros);
+      continue;
+    }
     const auto &head = definition_.note(id);
     const bool completed = head.pairId != kInvalidNoteId &&
         noteStates_[head.pairId].played &&
@@ -1131,6 +1164,7 @@ void GameplaySimulation::beginLr2Update(std::int64_t songTimeMicros,
       commitGaugeTick(Bad, songTimeMicros);
     }
     hellChargeBalanceMicros_[id] = lane.hellChargeBalanceMicros;
+    updateQuickRetryHellCharge(id, songTimeMicros);
     if (terminal()) return;
   }
   lastAdvancedMicros_ = songTimeMicros;
@@ -2101,6 +2135,8 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
       state.playedTimeMicros = judgedTime;
       if (note.kind == NoteKind::LongHead) {
         state.acceptedHeadJudge = judge;
+        if (note.longNoteRule == LongNoteRule::Classic)
+          quickRetryCache_.setClassic(note.pairId, judge.judgement);
         state.holding = true;
         if (note.pairId != kInvalidNoteId) {
           noteChanges_.record(note.pairId);
@@ -2282,6 +2318,8 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   tailState.releaseTimeMicros = judgedTime;
   tailState.holding = false;
   headState.holding = false;
+  quickRetryCache_.resolveClassic(selected);
+  updateQuickRetryHellCharge(selected, judgedTime);
 
   tailState.acceptedHeadJudge = applied;
   result.soundNoteId = selected;

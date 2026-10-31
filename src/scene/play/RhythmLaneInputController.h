@@ -72,14 +72,15 @@ public:
   std::span<const Result> advanceHellChargeVoices(long long songTimeMicros);
   Result onMissedNote(bms_parser::Note *note, long long songTimeMicros);
   void resetLaneStates();
-  [[nodiscard]] quick_retry::Projection quickRetryProjection() const;
+  [[nodiscard]] const quick_retry::Projection &quickRetryProjection() const noexcept;
+  void resolveQuickRetryNote(const bms_parser::Note *note);
   [[nodiscard]] bool chargeTailJudgedSuccessfully(
       const bms_parser::LongNote *tail) const;
 
 private:
   struct AcceptedLongHeadJudge {
-    bms_parser::LongNote *head = nullptr;
     JudgeResult judge = JudgeResult(None, 0);
+    bool pending = false;
   };
 
   bms_parser::Chart *chart = nullptr;
@@ -96,7 +97,8 @@ private:
   std::vector<bms_parser::Note *> judgeCandidateNotes;
   std::vector<gameplay::JudgeCandidateDescriptor> judgeCandidates;
   std::vector<std::size_t> multiBadSourceIndices;
-  std::vector<AcceptedLongHeadJudge> acceptedLongHeadJudges;
+  std::unordered_map<const bms_parser::LongNote *, AcceptedLongHeadJudge> acceptedLongHeadJudges;
+  quick_retry::Projection quickRetryProjection_;
   std::unordered_map<const bms_parser::LongNote *, Judgement>
       acceptedChargeTailJudges;
   std::unordered_map<int, long long> suppressedBackspinPressMicros;

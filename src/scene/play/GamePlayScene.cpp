@@ -2375,7 +2375,7 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       .inputMaintenance = {.context = session.get(),
                             .run = &RealtimeGameplaySession::maintainTouchInput},
       .inputTriggeredKeysounds = !options.autoKeySound,
-      .publishQuickRetryProjection = !quickRetryConditions.empty(),
+      .publishQuickRetryProjection = !quickRetryTargets.empty(),
       .activationSongTimeMicros = policy.activationSongTimeMicros,
       .practiceCompletionSongTimeMicros =
           policy.practiceCompletionSongTimeMicros,
@@ -5347,8 +5347,9 @@ void GamePlayScene::configurePacemakerTarget() {
 }
 
 void GamePlayScene::configureQuickRetry() {
-  quickRetryConditions.clear();
-  quickRetryHellChargeHeads.clear();
+  quickRetryTargets = {};
+  quickRetryHellChargeTicks.clear();
+  quickRetryRemainingHellChargeTicks = 0;
   realtimeQuickRetryProjection = {};
   quickRetryNewPattern = context.settings.quickRetryNewPattern;
   if (!context.settings.quickRetryEnabled || chart == nullptr || state == nullptr ||
@@ -5370,16 +5371,16 @@ void GamePlayScene::configureQuickRetry() {
       if (!entry.progress.scoreMet && target.scoreNumerator > 0 && target.scoreDenominator > 0) {
         const auto required = (2LL * chart->Meta.TotalNotes * target.scoreNumerator +
                                target.scoreDenominator - 1) / target.scoreDenominator;
-        quickRetryConditions.push_back({.score = static_cast<int>(required)});
+        quickRetryTargets.add({.score = static_cast<int>(required)});
       }
       if (!entry.progress.lampMet && target.lamp >= 0)
-        quickRetryConditions.push_back({.lamp = target.lamp});
+        quickRetryTargets.add({.lamp = target.lamp});
     }
   } else if (activePacemakerTarget.enabled) {
-    quickRetryConditions.push_back({.score = activePacemakerTarget.finalScore});
+    quickRetryTargets.add({.score = activePacemakerTarget.finalScore});
   }
-  if (quickRetryConditions.empty()) return;
-  if (std::ranges::any_of(quickRetryConditions, [](const auto &condition) { return condition.lamp >= 0; })) {
+  if (quickRetryTargets.empty()) return;
+  if (quickRetryTargets.lamp >= 0) {
     for (auto *measure : chart->Measures) {
       if (measure == nullptr) continue;
       for (auto *timeline : measure->TimeLines) {
@@ -5388,43 +5389,53 @@ void GamePlayScene::configureQuickRetry() {
           if (note == nullptr || !note->IsLongNote()) continue;
           auto *head = static_cast<bms_parser::LongNote *>(note);
           if (!head->IsTail() && head->Tail && head->Timeline && head->Tail->Timeline &&
-              effectiveLongNoteIsHellCharge(head, chart, options.longNoteMode))
-            quickRetryHellChargeHeads.push_back(head);
+              effectiveLongNoteIsHellCharge(head, chart, options.longNoteMode)) {
+            const auto ticks = quick_retry::remainingHellChargeTicks(
+                head->Timeline->Timing, head->Tail->Timeline->Timing, 0, 0);
+            quickRetryHellChargeTicks.emplace(head, ticks);
+            quickRetryRemainingHellChargeTicks += ticks;
+          }
         }
       }
     }
   }
   // An incompatible gauge/assist setting must not create an endless restart
   // loop before the player has any opportunity to change it.
-  if (quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryConditions,
-                              currentQuickRetryProjection(0)))
-    quickRetryConditions.clear();
+  if (quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryTargets,
+                              currentQuickRetryProjection()))
+    quickRetryTargets = {};
 }
 
-quick_retry::Projection GamePlayScene::currentQuickRetryProjection(long long timeMicros) const {
+quick_retry::Projection GamePlayScene::currentQuickRetryProjection() const {
   // The worker publishes projection and score atomically. Never combine an
   // older gauge with a newer presentation clock at an HCN tail boundary.
   if (realtimeGameplayAuthorityActive()) return realtimeQuickRetryProjection;
   auto result = laneInputController != nullptr ? laneInputController->quickRetryProjection()
                                                : quick_retry::Projection{};
-  for (auto *head : quickRetryHellChargeHeads) {
-    const auto end = head->Tail->Timeline->Timing;
-    if (head->Tail->IsDead && !(head->Tail->IsPlayed && head->Tail->PlayedTime < end)) continue;
-    const auto balance = hellChargeGaugeBalanceMicros.find(head);
-    result.hellChargeTicks += quick_retry::remainingHellChargeTicks(
-        head->Timeline->Timing, end, timeMicros,
-        balance == hellChargeGaugeBalanceMicros.end() ? 0 : balance->second);
-  }
+  result.hellChargeTicks = quickRetryRemainingHellChargeTicks;
   return result;
 }
 
-bool GamePlayScene::retryIfTargetsUnreachable(long long timeMicros) {
+void GamePlayScene::updateQuickRetryHellCharge(const bms_parser::LongNote *head, long long timeMicros) {
+  const auto found = quickRetryHellChargeTicks.find(head);
+  if (found == quickRetryHellChargeTicks.end()) return;
+  const auto end = head->Tail->Timeline->Timing;
+  const bool dead = head->Tail->IsDead && !(head->Tail->IsPlayed && head->Tail->PlayedTime < end);
+  const auto balance = hellChargeGaugeBalanceMicros.find(const_cast<bms_parser::LongNote *>(head));
+  const auto ticks = dead ? 0 : quick_retry::remainingHellChargeTicks(
+      head->Timeline->Timing, end, timeMicros,
+      balance == hellChargeGaugeBalanceMicros.end() ? 0 : balance->second);
+  quickRetryRemainingHellChargeTicks += ticks - found->second;
+  found->second = ticks;
+}
+
+bool GamePlayScene::retryIfTargetsUnreachable() {
   if (quickRetryPending) return true;
-  if (quickRetryConditions.empty() || state == nullptr || state->isEnding ||
+  if (quickRetryTargets.empty() || state == nullptr || state->isEnding ||
       !state->isPlaying || advancingGameplayInBackground || context.jukebox.isPaused())
     return false;
-  if (!quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryConditions,
-                               currentQuickRetryProjection(timeMicros)))
+  if (!quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryTargets,
+                               currentQuickRetryProjection()))
     return false;
   quickRetryPending = true;
   state->isEnding = true;
@@ -7034,7 +7045,7 @@ bool GamePlayScene::finishIfGaugeFailed() {
 
   const long long finalGameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
-  if (retryIfTargetsUnreachable(finalGameplayTimeMicros)) return true;
+  if (retryIfTargetsUnreachable()) return true;
   updateSkinGameplayGraph(finalGameplayTimeMicros);
 
   SDL_Log("Active survival gauge failed");
@@ -7196,7 +7207,7 @@ void GamePlayScene::update(float dt) {
     if ((terminalAction == gameplay::RealtimeGameplayTerminalAction::Wait ||
          terminalAction == gameplay::RealtimeGameplayTerminalAction::SurvivalGaugeFailed ||
          terminalAction == gameplay::RealtimeGameplayTerminalAction::CompleteChart) &&
-        retryIfTargetsUnreachable(gameplayTimeMicros)) return;
+        retryIfTargetsUnreachable()) return;
     if (terminalAction == gameplay::RealtimeGameplayTerminalAction::Wait) {
       return;
     }
@@ -7250,7 +7261,7 @@ void GamePlayScene::update(float dt) {
       return;
     }
   }
-  if (retryIfTargetsUnreachable(gameplayTimeMicros)) return;
+  if (retryIfTargetsUnreachable()) return;
   if (practiceSectionComplete) {
     completePracticeSection(false);
     return;
@@ -8119,6 +8130,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                                 judgedTime, poorResult);
               continue;
             } else if (longNote->IsTail()) {
+              if (laneInputController != nullptr) laneInputController->resolveQuickRetryNote(longNote);
               markLongNoteMissed(longNote, judgedTime);
               continue;
             } else {
@@ -8515,6 +8527,9 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
           continue;
         }
 
+        const auto updateRetryRecovery = makeScopeExit([&] {
+          updateQuickRetryHellCharge(longNote, gameplayTimeMicros);
+        });
         const long long headTime = longNote->Timeline->Timing;
         const long long tailTime = longNote->Tail->Timeline->Timing;
         const bool tailJudgedBeforeTiming =
@@ -8569,6 +8584,9 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
     std::ranges::sort(activeHellChargeNotes, {},
                        [](const auto *note) { return note->Lane; });
     for (auto *longNote : activeHellChargeNotes) {
+      const auto updateRetryRecovery = makeScopeExit([&] {
+        updateQuickRetryHellCharge(longNote, gameplayTimeMicros);
+      });
       long long &balance = hellChargeGaugeBalanceMicros[longNote];
       const bool gaining =
           laneIsPressed(lanePressed, longNote->Lane) || options.autoPlay ||
@@ -8663,6 +8681,13 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
     attemptProvenance.eligibility = ScoreEligibility::Modified;
     recordedReplay.provenance = attemptProvenance;
     analyticsReplay.provenance = attemptProvenance;
+  }
+  if (const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(graphNote)) {
+    if (laneInputController != nullptr &&
+        ((longNote->IsTail() && longNote->IsPlayed) ||
+         (longNote->Tail != nullptr && longNote->Tail->IsPlayed)))
+      laneInputController->resolveQuickRetryNote(longNote);
+    updateQuickRetryHellCharge(longNote->IsTail() ? longNote->Head : longNote, clock.songTimeMicros);
   }
   const int previousCount = state->judgeCount[judgeResult.judgement];
   state->commitJudge(judgeResult);

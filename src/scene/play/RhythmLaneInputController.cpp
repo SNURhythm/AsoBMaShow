@@ -376,6 +376,7 @@ RhythmLaneInputController::Result RhythmLaneInputController::resolveRelease(
     long long releasedTime, long long songTime, bool mute) {
   Result result;
   result.note = tail;
+  resolveQuickRetryNote(tail);
   tail->Release(releasedTime);
   result.keySoundNote = tail;
   if (mute) setHeadVoiceGain(result, tail->Head, true);
@@ -768,6 +769,7 @@ bool RhythmLaneInputController::chargeTailJudgedSuccessfully(
 void RhythmLaneInputController::resetLaneStates() {
   lanePressed.clear();
   acceptedLongHeadJudges.clear();
+  quickRetryProjection_ = {};
   acceptedChargeTailJudges.clear();
   suppressedBackspinPressMicros.clear();
   pendingReleases.clear();
@@ -808,37 +810,36 @@ RhythmLaneInputController::resultBatch(const Result &selected) const {
   return result;
 }
 
-quick_retry::Projection RhythmLaneInputController::quickRetryProjection() const {
-  quick_retry::Projection result;
-  for (const auto &entry : acceptedLongHeadJudges) {
-    if (entry.head->Tail != nullptr && !entry.head->Tail->IsPlayed &&
-        effectiveLongNoteIsClassic(entry.head, chart, longNoteModeOverride))
-      result.acceptClassicHead(entry.judge.judgement);
-  }
-  return result;
+const quick_retry::Projection &RhythmLaneInputController::quickRetryProjection() const noexcept {
+  return quickRetryProjection_;
+}
+
+void RhythmLaneInputController::resolveQuickRetryNote(const bms_parser::Note *note) {
+  const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
+  if (longNote == nullptr) return;
+  const auto *head = longNote->IsTail() ? longNote->Head : longNote;
+  const auto found = acceptedLongHeadJudges.find(head);
+  if (found == acceptedLongHeadJudges.end() || !found->second.pending) return;
+  const auto judgement = found->second.judge.judgement;
+  const auto normalized = judgement == None || judgement == Kpoor || judgement == Poor ? Bad : judgement;
+  --quickRetryProjection_.pendingClassicJudgements[normalized];
+  found->second.pending = false;
 }
 
 void RhythmLaneInputController::rememberAcceptedLongHeadJudge(
     bms_parser::LongNote *head, const JudgeResult &judgeResult) {
-  const auto found = std::ranges::find(acceptedLongHeadJudges, head,
-                                       &AcceptedLongHeadJudge::head);
-  if (found != acceptedLongHeadJudges.end()) {
-    found->judge = judgeResult;
-    return;
-  }
-  acceptedLongHeadJudges.push_back({head, judgeResult});
+  resolveQuickRetryNote(head);
+  const bool pending = head->Tail != nullptr && !head->Tail->IsPlayed &&
+                       effectiveLongNoteIsClassic(head, chart, longNoteModeOverride);
+  acceptedLongHeadJudges.insert_or_assign(head, AcceptedLongHeadJudge{judgeResult, pending});
+  if (pending) quickRetryProjection_.acceptClassicHead(judgeResult.judgement);
 }
 
 JudgeResult RhythmLaneInputController::acceptedLongHeadJudge(
     const bms_parser::LongNote *tail) const {
-  if (tail == nullptr || tail->Head == nullptr) {
-    return JudgeResult(None, 0);
-  }
-  const auto found = std::ranges::find(acceptedLongHeadJudges, tail->Head,
-                                       &AcceptedLongHeadJudge::head);
-  if (found != acceptedLongHeadJudges.end()) {
-    return found->judge;
-  }
+  if (tail == nullptr || tail->Head == nullptr) return JudgeResult(None, 0);
+  const auto found = acceptedLongHeadJudges.find(tail->Head);
+  if (found != acceptedLongHeadJudges.end()) return found->second.judge;
   return judge.judgeAt(
       gameplay::judgeRoleFor(tail->Head, chart->Meta, longNoteModeOverride),
       noteTimingMicros(tail->Head), tail->Head->PlayedTime);

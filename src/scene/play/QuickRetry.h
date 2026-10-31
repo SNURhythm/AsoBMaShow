@@ -2,7 +2,6 @@
 
 #include "GameplayScoreState.h"
 #include "QuickRetryProjection.h"
-#include <cmath>
 #include <limits>
 #include <span>
 
@@ -12,6 +11,23 @@ struct Condition {
   int score = -1;
   int lamp = -1;
 };
+
+struct Targets {
+  int score = -1;
+  int lamp = -1;
+  bool empty() const noexcept { return score < 0 && lamp < 0; }
+  void add(Condition condition) {
+    if (condition.score >= 0 && (score < 0 || condition.score < score)) score = condition.score;
+    if (condition.lamp >= 0 && (lamp < 0 || clearLampOrder(condition.lamp) < clearLampOrder(lamp)))
+      lamp = normalizeClearLamp(condition.lamp);
+  }
+};
+
+inline Targets compileTargets(std::span<const Condition> conditions) {
+  Targets targets;
+  for (const auto &condition : conditions) targets.add(condition);
+  return targets;
+}
 
 inline int maximumClear(const GameplayScoreState &state, int remaining,
                         const Projection &projection = {}) {
@@ -38,26 +54,15 @@ inline int maximumClear(const GameplayScoreState &state, int remaining,
     const float hcnDelta = rules.delta(type, Great, state.gaugeValues[i], 0.5F);
     double value = state.gaugeValues[i] + double(delta) * remaining +
                    double(hcnDelta) * projection.hellChargeTicks;
-    int pending = 0;
     for (int j = Great; j <= Bad; ++j) {
       const int count = projection.pendingClassicJudgements[j];
-      pending += count;
       value += count * double(rules.delta(type, static_cast<Judgement>(j),
                                          0) - delta);
     }
-    // Resolve ordinary near-border cases with the scorer's float additions.
-    // For mixed HCN/deferred outcomes, retain an optimistic rounding bound.
-    const double error = (remaining + projection.hellChargeTicks) *
-                         std::numeric_limits<float>::epsilon() * definition.maximum;
-    if (projection.hellChargeTicks == 0 && pending == 0 &&
-        std::abs(value - definition.clearBorder) <= error) {
-      float exact = state.gaugeValues[i];
-      for (int n = 0; n < remaining; ++n)
-        exact = std::clamp(exact + delta, definition.minimum, definition.maximum);
-      value = exact;
-    } else if (projection.hellChargeTicks > 0 || pending > 0) {
-      value += error;
-    }
+    // A conservative float accumulation bound avoids replaying every remaining
+    // judgement near the border. Work is bounded by the fixed gauge table.
+    value += (remaining + projection.hellChargeTicks) *
+             std::numeric_limits<float>::epsilon() * definition.maximum;
     value = std::min<double>(definition.maximum, value);
     if (value > 0 && value >= definition.clearBorder) {
       best = gaugeTypeToClearRank(gaugeClearTypeForProfile(type, state.gaugeProfile));
@@ -75,9 +80,9 @@ inline int maximumClear(const GameplayScoreState &state, int remaining,
 }
 
 inline bool shouldRetry(const GameplayScoreState &state, int totalNotes,
-                        std::span<const Condition> conditions,
+                        const Targets &targets,
                         const Projection &projection = {}) {
-  if (conditions.empty() || totalNotes <= 0) return false;
+  if (targets.empty() || totalNotes <= 0) return false;
   const int remaining = state.activeGaugeFailed() ? 0 :
       std::max(0, totalNotes - state.stagePassedNotes);
   auto maximumScore = std::int64_t(state.getScore()) + 2LL * remaining;
@@ -85,14 +90,9 @@ inline bool shouldRetry(const GameplayScoreState &state, int totalNotes,
     maximumScore -= projection.pendingClassicJudgements[Great] +
         2LL * (projection.pendingClassicJudgements[Good] + projection.pendingClassicJudgements[Bad]);
   }
-  std::optional<int> lamp;
-  for (const auto &condition : conditions) {
-    if (condition.score >= 0 && maximumScore >= condition.score) return false;
-    if (condition.lamp >= 0) {
-      if (!lamp) lamp = maximumClear(state, remaining, projection);
-      if (clearLampOrder(*lamp) >= clearLampOrder(condition.lamp)) return false;
-    }
-  }
+  if (targets.score >= 0 && maximumScore >= targets.score) return false;
+  if (targets.lamp >= 0 && clearLampOrder(maximumClear(state, remaining, projection)) >=
+                              clearLampOrder(targets.lamp)) return false;
   return true;
 }
 } // namespace quick_retry

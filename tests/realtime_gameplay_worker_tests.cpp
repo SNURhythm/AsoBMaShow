@@ -21,6 +21,7 @@
 #include <iostream>
 #include <new>
 #include <thread>
+#include <type_traits>
 
 namespace rendering {
 int render_width = 1000, render_height = 500;
@@ -3345,6 +3346,10 @@ void testWorkerMissedHcnControlsPreviewVoice() {
               "captured missed-HCN replay follows live preview mute/rehold PCM");
   }
 }
+
+static_assert(std::is_same_v<decltype(std::declval<const gameplay::GameplaySimulation &>().quickRetryProjection()),
+                             const quick_retry::Projection &>,
+              "snapshot publication reads an already maintained projection");
 
 void testQuickRetrySnapshotKeepsLongNoteBoundsWithScore() {
   for (int type : {1, 3}) {

@@ -1324,6 +1324,85 @@ void testReferenceLongNoteReleaseFairness() {
   }
 }
 
+void testQuickRetryCacheTracksUnpassedZeroTimeHellCharge() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 3;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 0, 2'000'000, 0, bms_parser::LongNoteType::HellChargeNote);
+  addTimeline(*measure, 3'000'000)->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {
+      .judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 3)),
+      .trackQuickRetry = true});
+  simulation.pressLane(0, {.songTimeMicros = 0});
+  simulation.advanceTo(500'000, 500'000);
+  require(simulation.quickRetryProjection().hellChargeTicks == 7,
+          "LR2 zero-time HCN potential expires even when passing phase skips its head");
+  simulation.advanceTo(2'000'000, 2'000'000);
+  require(simulation.quickRetryProjection().hellChargeTicks == 0,
+          "skipped zero-time HCN contributes nothing after its tail");
+}
+
+void testQuickRetryCacheResolvesManualClassicRelease() {
+  for (auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    auto chart = bmsonReleaseFixture(1, 1, false);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    gameplay::GameplaySimulation simulation(definition, {
+        .judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(ruleset, 3)),
+        .trackQuickRetry = true});
+    simulation.advanceTo(1'050'000, 1'050'000);
+    simulation.pressLane(0, {.songTimeMicros = 1'050'000});
+    const auto accepted = simulation.noteState(0).acceptedHeadJudge.judgement;
+    require(accepted != PGreat && simulation.quickRetryProjection().pendingClassicJudgements[accepted] == 1,
+            "imperfect classic head is pending before manual release");
+    const auto release = simulation.releaseLane(0, {.songTimeMicros = 2'000'000});
+    require(release.hasJudge && simulation.quickRetryProjection().pendingClassicJudgements[accepted] == 0,
+            "manual classic release removes the already committed EX loss from projection");
+  }
+}
+
+void testQuickRetryCacheMatchesLongNoteTransitions() {
+  for (auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    auto chart = bmsonAdjacentHcnFixture(true);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    gameplay::GameplaySimulation simulation(definition, {
+        .judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(ruleset, 3)),
+        .trackQuickRetry = true});
+    const auto check = [&](long long time) {
+      std::int64_t expected = 0;
+      for (auto id : definition.hellChargeHeads()) {
+        const auto &head = definition.note(id);
+        const auto &tail = definition.note(head.pairId);
+        const auto &state = simulation.noteState(head.pairId);
+        if (tail.timingMicros <= time ||
+            (state.dead && !(state.played && state.playedTimeMicros < tail.timingMicros))) continue;
+        const auto balance = time < head.timingMicros ? 0 : simulation.hellChargeBalances()[id];
+        expected += std::max<std::int64_t>(0,
+            (tail.timingMicros - std::max<std::int64_t>(head.timingMicros, time) + balance - 1) / 200'000);
+      }
+      require(simulation.quickRetryProjection().hellChargeTicks == expected,
+              "incremental HCN projection matches future, active, released and expired notes");
+    };
+    const auto advance = [&](long long time) { simulation.advanceTo(time, time); check(time); };
+    advance(0);
+    advance(1'000'000);
+    simulation.pressLane(0, {.songTimeMicros = 1'000'000});
+    check(1'000'000);
+    advance(1'200'001);
+    simulation.releaseLane(0, {.songTimeMicros = 1'300'000});
+    check(1'300'000);
+    advance(1'400'001);
+    simulation.pressLane(0, {.songTimeMicros = 1'500'000});
+    check(1'500'000);
+    advance(2'000'000);
+    advance(2'100'000);
+    advance(2'400'001);
+    advance(2'600'000);
+  }
+}
+
 void testReferenceHellChargeStartsAfterHeadJudgement() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -3616,6 +3695,9 @@ int main(int argc, char **argv) {
     else return 2;
     return 0;
   }
+  testQuickRetryCacheTracksUnpassedZeroTimeHellCharge();
+  testQuickRetryCacheResolvesManualClassicRelease();
+  testQuickRetryCacheMatchesLongNoteTransitions();
   testLegacyAdjacentHcnAudio();
   testLr2SkippedInitialMineStillAllowsCompletion();
   testDefinitionUsesDemotedNormalNote();

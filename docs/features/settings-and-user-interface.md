@@ -59,6 +59,15 @@ a restart loop caused by incompatible settings. Replay, autoplay, practice, cour
 and mid-chart starts do not use Quick Retry. Automatic retries follow the same
 attempt reset behavior as manual retries and do not save discarded attempts.
 
+Goal conditions compile once per attempt to the lowest unfinished EX target and
+lamp rank. Runtime checks do not iterate goals or remaining notes: they compare
+those two thresholds using the fixed gauge table. Pending classic-LN judgements
+and remaining HCN recovery are maintained as per-note contributions during the
+existing judgement/gauge updates. Snapshot publication only copies their cached
+aggregate; it does not rescan the chart on input. The fallback controller also
+keeps cached totals. Gauge prediction uses a conservative rounding bound instead
+of simulating every remaining perfect hit near a clear border.
+
 ## Audio timing profiles
 
 Audio offset, visual offset, and the Input Trigger / Auto Timed keysound rule
