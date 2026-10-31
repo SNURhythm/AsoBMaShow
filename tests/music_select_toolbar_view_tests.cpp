@@ -59,6 +59,32 @@ MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
   };
 }
 
+void testQuickRetryWarningSurvivesRebuilds() {
+  std::vector<std::string> actions;
+  std::vector<MusicSelectToolbarState> saved;
+  auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved), 360, 300);
+  toolbar->setQuickRetryEnabled(true);
+  for (int width : {360, 800, 360}) {
+    toolbar->setViewportSize(width, 300);
+    toolbar->applyYogaLayout();
+    for (const auto &control : toolbar->controls()) {
+      if (control.control != MusicSelectToolbarControl::PlayOptions) continue;
+      expect(control.icon && control.icon->getText() == ui_icons::textForCodepoint(0xf071),
+             "Quick Retry adds the warning glyph beside Play Options");
+      expect(control.label && !control.label->getText().empty() && control.label->getWidth() > 0,
+             "warning preserves the readable Play Options label");
+      expect(control.button->getX() + control.button->getWidth() <= toolbar->getX() + toolbar->getWidth(),
+             "warning button remains within the wrapped toolbar");
+    }
+  }
+  toolbar->activateControl(MusicSelectToolbarControl::PlayOptions);
+  expect(actions == std::vector<std::string>{"play-options"}, "warning keeps the options action");
+  toolbar->setQuickRetryEnabled(false);
+  for (const auto &control : toolbar->controls())
+    if (control.control == MusicSelectToolbarControl::PlayOptions)
+      expect(!control.icon && control.label, "disabling Quick Retry removes its warning");
+}
+
 void testExpandedShowsLabeledMenuEntrypoints() {
   std::vector<std::string> actions;
   std::vector<MusicSelectToolbarState> saved;
@@ -429,6 +455,7 @@ int main() {
     std::cerr << "FAIL: bgfx noop initialization failed\n";
     return 1;
   }
+  testQuickRetryWarningSurvivesRebuilds();
   testExpandedShowsLabeledMenuEntrypoints();
   testUnavailableCallbacksDisableButtons();
   testDisabledActionsStayDisabledAcrossRebuilds();

@@ -4,6 +4,7 @@
 #include "GameplayCandidateRules.h"
 #include "GameplayDefinition.h"
 #include "GameplayScoreState.h"
+#include "QuickRetryProjection.h"
 #include "SkinGameplayGraphState.h"
 #include "../../AppSettings.h"
 
@@ -138,6 +139,7 @@ struct GameplaySimulationConfig {
       AppSettings::NotePriorityMode::Lowest;
   std::optional<GameplayTimeRange> allowedNoteRange;
   GameplayAttemptOptions attempt;
+  bool trackQuickRetry = false;
 };
 
 struct GameplayInputContext {
@@ -279,6 +281,7 @@ public:
   [[nodiscard]] bool automaticResultOverflowed() const noexcept;
   [[nodiscard]] std::span<const std::int64_t>
   hellChargeBalances() const noexcept;
+  [[nodiscard]] const quick_retry::Projection &quickRetryProjection() const noexcept;
   [[nodiscard]] GameplayTerminalReason terminalReason() const noexcept;
   [[nodiscard]] bool terminal() const noexcept;
   [[nodiscard]] GameplayAttemptSnapshot terminalSnapshot() const noexcept;
@@ -297,6 +300,7 @@ private:
     std::int64_t pendingReleaseDeadline = 0;
     JudgeResult pendingReleaseJudge = JudgeResult(None, 0);
     NoteId passingHellChargeHeadId = kInvalidNoteId;
+    NoteId quickRetrySkippedHellChargeHeadId = kInvalidNoteId;
     std::vector<NoteId> hellChargeHeads;
     std::int64_t hellChargeBalanceMicros = 0;
     std::size_t missCursor = 0;
@@ -376,6 +380,8 @@ private:
   std::vector<NoteRuntimeState> noteStates_;
   NoteStateChanges noteChanges_;
   std::vector<std::int64_t> hellChargeBalanceMicros_;
+  quick_retry::ProjectionCache quickRetryCache_;
+  void updateQuickRetryHellCharge(NoteId id, std::int64_t time);
   std::size_t hellChargeAdmissionCursor_ = 0;
   std::vector<NoteId> eligibleHellChargeHeads_;
   std::vector<LaneRuntimeState> laneStates_;

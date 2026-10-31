@@ -573,6 +573,10 @@ private:
   currentCourseSelectionFor(
       const result_persistence::ModernCourseResult &result);
   void refreshStartButtonForActiveFolder();
+  void refreshQuickRetryStartButton();
+  std::optional<std::tuple<std::string, std::string, std::uint64_t>> quickRetryGoalsKey_;
+  std::vector<chart_goals::GoalProgress> quickRetryGoals_;
+  bool quickRetryGoalsLoaded_ = false;
   void startSelectedCourse();
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);
   void openChartViewerForSelection();

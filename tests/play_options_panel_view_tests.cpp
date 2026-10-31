@@ -1,7 +1,9 @@
 #include "view/Button.h"
+#include "view/PlayStartButton.h"
 #include "PlayOptionUtils.h"
 #include "scene/PracticePanelView.h"
 #include "view/ToggleButtonContent.h"
+#include "view/CheckboxButtonContent.h"
 #include "view/ClearLampColors.h"
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -85,6 +87,43 @@ void click(Button &button) {
   up.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
   button.handleEvents(down);
   button.handleEvents(up);
+}
+
+void testQuickRetryStartButtonLayoutAndActivation() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Korean, i18n::Language::Japanese,
+                              i18n::Language::SimplifiedChinese, i18n::Language::TraditionalChinese}) {
+    i18n::setLanguage(language);
+    for (const int width : {200, 472}) {
+      View root(0, 0, width, 120);
+      auto *button = new PlayStartButton(width, width == 200 ? 64 : 120);
+      root.addView(button);
+      int launches = 0;
+      button->setOnClickListener([&] { ++launches; });
+      const auto targets = std::string("HARD ") + i18n::tr("menu.selector.retry.or") + " AAA " +
+          i18n::tr("menu.selector.retry.or") + " " + i18n::tr("menu.selector.retry.chart_goals");
+      button->setQuickRetry(true, i18n::format("menu.selector.retry.summary", {{"targets", targets}}));
+      root.applyYogaLayout();
+      auto *summary = static_cast<TextView *>(button->getContentView()->findViewByName("quickRetryStartSummary"));
+      auto *icon = static_cast<TextView *>(button->getContentView()->findViewByName("selectorButtonIcon"));
+      require(summary->getVisible() && summary->getText().find(targets) != std::string::npos &&
+                  icon->getText() == ui_icons::textForCodepoint(0xf071),
+              "Quick Retry presents actual hurdles and a warning symbol");
+      require(summary->getWidth() > 0 && summary->getHeight() >= 24 &&
+                  summary->getX() >= button->getX() &&
+                  summary->getX() + summary->getWidth() <= button->getX() + button->getWidth() &&
+                  summary->getY() + summary->getHeight() <= button->getY() + button->getHeight(),
+              "localized retry summary stays inside narrow and wide Play buttons");
+      require(button->label()->getHeight() >= 20,
+              "compact warning still leaves a readable primary Play label");
+      click(*button);
+      require(launches == 1, "warning presentation preserves single-click launch");
+      button->setQuickRetry(false, {});
+      root.applyYogaLayout();
+      require(!summary->getVisible() && icon->getText() == ui_icons::textForCodepoint(ui_icons::kPlay),
+              "turning Quick Retry off restores the ordinary Play presentation");
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testStoragePolicyDirectSelection() {
@@ -483,6 +522,15 @@ void testPhoneOptionsReflowWithoutLosingSelection() {
       panel->setWidth(width);
       scroll.refreshContentLayout();
       scroll.applyYogaLayout();
+      for (const auto *name : {"quick-retry-gauge-checkbox", "quick-retry-pacemaker-checkbox",
+                               "quick-retry-goals-checkbox", "quick-retry-failure-policy-choice",
+                               "retry-pattern-choice"}) {
+        auto *child = panel->findViewByName(name);
+        require(child && child->getX() > panel->getX() &&
+                    child->getX() + child->getWidth() <= panel->getX() + width &&
+                    child->getHeight() >= rendering::compactTouchTarget,
+                "nested retry children retain indentation, bounds and touch height after rotation");
+      }
       auto *choice = panel->findViewByName("ruleset-choice");
       auto *button = dynamic_cast<Button *>(choice->findViewByName("choice:beatoraja"));
       require(button && button->getVisible() &&
@@ -1731,6 +1779,7 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
+  testQuickRetryStartButtonLayoutAndActivation();
   testDropdownPreservesAllocatedWidthAcrossRefreshes();
   testNaturalDropdownsRemainVisibleAcrossParentLayouts();
   testSettingsChoicePresentationAndSelection();
@@ -1766,6 +1815,10 @@ int main() {
 
   {
     GameplayRuleset selected = GameplayRuleset::LR2;
+    bool quickRetry = false, allConditions = false;
+    bool retryGauge = true, retryPacemaker = true, retryGoals = true;
+    bool newPattern = false;
+    std::string displayMode = "pace";
     ScrollView scroll(0, 0, 360, 400);
     scroll.setWidth(360)->setHeight(400);
     auto *content = new View();
@@ -1774,7 +1827,14 @@ int main() {
         ->setAlignItems(YGAlignStretch);
     auto *panel = new PlayOptionsPanelView(
         {.onRulesetSelected =
-             [&](GameplayRuleset ruleset) { selected = ruleset; }},
+             [&](GameplayRuleset ruleset) { selected = ruleset; },
+         .onQuickRetrySelected = [&](bool enabled) { quickRetry = enabled; },
+         .onQuickRetryFailurePolicySelected = [&](bool all) { allConditions = all; },
+         .onQuickRetryGaugeSelected = [&](bool enabled) { retryGauge = enabled; },
+         .onQuickRetryPacemakerSelected = [&](bool enabled) { retryPacemaker = enabled; },
+         .onQuickRetryGoalsSelected = [&](bool enabled) { retryGoals = enabled; },
+         .onRetryPatternSelected = [&](bool value) { newPattern = value; },
+         .onPacemakerDisplayModeSelected = [&](const std::string &value) { displayMode = value; }},
         {.width = 340.0f,
          .playOptionColumns = 2,
          .showGauge = true,
@@ -1783,7 +1843,16 @@ int main() {
         nullptr);
     content->addView(panel);
     scroll.setContentView(content);
+    panel->refresh({});
     scroll.applyYogaLayout();
+    auto *display = dynamic_cast<ChoiceControlView *>(panel->findViewByName("pacemaker-display-choice"));
+    require(display && display->selectedId() == "pace" &&
+                display->findViewByName("choice-buttons")->getVisible(),
+            "three pacemaker representation modes use choice buttons and default to Pace");
+    click(*static_cast<Button *>(display->findViewByName("choice:score_minus")));
+    require(displayMode == "score_minus", "Score minus selection reaches its callback");
+    panel->refresh({.pacemakerDisplayMode = "score_plus"});
+    require(display->selectedId() == "score_plus", "Score plus preference refreshes selection");
 
     panel->refresh({.ruleset = GameplayRuleset::LR2});
     auto *ruleset = dynamic_cast<ChoiceControlView *>(panel->findViewByName("ruleset-choice"));
@@ -1804,6 +1873,66 @@ int main() {
     panel->refresh({.ruleset = GameplayRuleset::LR2, .clubMode = true});
     require(clubContent->checked(),
             "Club Beat refresh switches to its on state");
+
+    auto *quick = dynamic_cast<ChoiceControlView *>(panel->findViewByName("quick-retry-choice"));
+    auto *pattern = dynamic_cast<ChoiceControlView *>(panel->findViewByName("retry-pattern-choice"));
+    require(quick && pattern && quick->selectedId() == "off" && pattern->selectedId() == "same",
+            "quick retry defaults off with same pattern");
+    require(quick->findViewByName("choice-cycle")->getVisible(),
+            "quick retry uses one On/Off cycle button");
+    const std::array conditionNames{"quick-retry-gauge-checkbox", "quick-retry-pacemaker-checkbox",
+                                    "quick-retry-goals-checkbox"};
+    auto *policy = dynamic_cast<ChoiceControlView *>(panel->findViewByName("quick-retry-failure-policy-choice"));
+    auto *children = panel->findViewByName("quick-retry-children");
+    require(policy && policy->selectedId() == "any" && children &&
+                children->findViewByName("retry-pattern-choice") == pattern,
+            "nested retry options include the Any-default policy and pattern");
+    auto *allButton = static_cast<Button *>(policy->findViewByName("choice:all"));
+    require(allButton && !allButton->isEnabled(), "master switch disables failure policy");
+    for (const auto *name : conditionNames) {
+      auto *checkbox = dynamic_cast<Button *>(children->findViewByName(name));
+      auto *content = checkbox ? dynamic_cast<CheckboxButtonContent *>(checkbox->getContentView()) : nullptr;
+      require(content && content->checked() && !checkbox->isEnabled(),
+              "conditions are checked checkboxes disabled behind the master switch");
+      click(*checkbox);
+      require(content->checked(), "disabled checkboxes preserve their checked state");
+    }
+    click(*static_cast<Button *>(quick->findViewByName("choice-cycle")));
+    require(quickRetry, "quick retry cycle enables automatic retry");
+    panel->refresh({.quickRetryEnabled = true});
+    scroll.applyYogaLayout();
+    require(policy->findViewByName("choice-buttons")->getVisible(),
+            "Any/All are distinct choice buttons in the compact panel");
+    click(*allButton);
+    require(allConditions, "All choice reaches its settings callback");
+    panel->refresh({.quickRetryEnabled = true, .quickRetryAllConditionsFail = true});
+    require(policy->selectedId() == "all", "saved All policy refreshes the selection");
+    click(*static_cast<Button *>(policy->findViewByName("choice:any")));
+    require(!allConditions, "Any choice can be restored directly");
+    for (const auto *name : conditionNames) {
+      auto *checkbox = static_cast<Button *>(panel->findViewByName(name));
+      require(checkbox->isEnabled() && checkbox->getX() > quick->getX(),
+              "enabled child checkboxes are visibly indented beneath the master");
+      click(*checkbox);
+    }
+    require(!retryGauge && !retryPacemaker && !retryGoals,
+            "each condition checkbox reaches its own settings callback");
+    panel->refresh({.quickRetryEnabled = true, .quickRetryGauge = false,
+                    .quickRetryPacemaker = false, .quickRetryGoals = false});
+    for (const auto *name : conditionNames) {
+      auto *checkbox = static_cast<Button *>(panel->findViewByName(name));
+      require(!static_cast<CheckboxButtonContent *>(checkbox->getContentView())->checked(),
+              "condition refresh retains separate unchecked selections");
+    }
+    require(pattern->findViewByName("choice-buttons")->getVisible(),
+            "same and new are distinct pattern buttons");
+    click(*static_cast<Button *>(pattern->findViewByName("choice:new")));
+    require(newPattern, "new pattern choice reaches settings callback");
+    panel->refresh({.quickRetryEnabled = true, .quickRetryNewPattern = true});
+    click(*static_cast<Button *>(pattern->findViewByName("choice:same")));
+    require(!newPattern, "same pattern can be restored directly");
+    click(*static_cast<Button *>(quick->findViewByName("choice-cycle")));
+    require(!quickRetry, "quick retry cycle disables automatic retry");
 
     click(*beatoraja);
     require(selected == GameplayRuleset::Beatoraja,

@@ -3,6 +3,7 @@
 #include "LongNoteModeUtils.h"
 #include "replay/ReplayOption.h"
 #include "scene/play/GameplayRuleset.h"
+#include "scene/play/PacemakerDisplayMode.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cctype>
@@ -662,6 +663,7 @@ void AppSettings::sanitize() {
       parseAssistOptionId(selectedAssistOption, kDefaultAssistOption);
   selectedPacemakerTarget =
       parsePacemakerTargetId(selectedPacemakerTarget, kDefaultPacemakerTarget);
+  pacemakerDisplayMode = pacemaker::displayModeId(pacemaker::displayModeFromId(pacemakerDisplayMode));
   selectedPacemakerGoalId = std::max<std::int64_t>(0, selectedPacemakerGoalId);
   const auto boundedSkinString = [](std::string &value,
                                     std::string_view fallback) {

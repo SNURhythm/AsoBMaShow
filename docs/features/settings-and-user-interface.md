@@ -35,6 +35,94 @@ and Show Same Folder clears it along with the other filters.
 The filter panel scrolls within half the song column's height, preserving chart
 list space in short landscape windows. Dropdown menus use the overlay layer.
 
+## Pacemaker display
+
+Play Options offers three **Pacemaker Display** modes, saved per profile:
+
+- **Pace** (default): current EX score minus the target's score at the current
+  chart progress, including the existing BEST ghost progression when available.
+- **Score -**: maximum attainable final EX score minus the final target. This
+  starts with the remaining margin and includes deferred classic-LN judgements.
+- **Score +**: current EX score minus the final target.
+
+Positive differences mean ahead of target in every mode. Score modes display
+their difference from the start; Pace retains its existing first-note behavior.
+The modes apply to the built-in HUD, skin target-difference numbers, and replay
+presentation. They change display only; Quick Retry still uses the same final
+targets and reachability rules.
+
+## Quick Retry
+
+Play Options offers **Quick Retry** (Off/On, default Off) and **Randomization on retry**
+(Keep/Reshuffle, default Keep). Keep preserves the current random layout; Reshuffle
+uses the normal retry path to generate another layout. The child options are grouped below
+the master switch with indentation and a vertical rule. Three condition checkboxes—**Gauge**, **Pacemaker Target**, and
+**Goals**—default checked. **Retry when** offers **Any fails** (default) and
+**All fail**. All preferences are saved with the profile. Child controls are
+disabled while the master switch is Off; unchecking all three conditions prevents
+automatic retries even with the master switch On.
+
+With Quick Retry enabled, the built-in selector's Play button uses a borderless amber
+warning treatment and shows the selected chart's concrete hurdles in small text,
+such as **Keep HARD + AAA** or **Keep HARD or AAA**. Comparable requirements collapse
+to the strictest hurdle for **Any fails** and the easiest hurdle for **All fail**.
+A plus joins hurdles
+that must all remain reachable; **or** separates alternative ways to keep the
+attempt. Unfinished goal alternatives retain that meaning when combined with
+gauge and pacemaker requirements. Physical gauge checks stay separate from lamp
+goals when auto-shift or assists make them different. Course launches keep the
+ordinary button. With no concrete chart selected (including Random entries),
+the button shows shared gauge and numeric pacemaker settings, such as
+**Keep HARD + AAA** or **Keep HARD or AAA**. When Goals is enabled, its unresolved
+conditions appear as **Chart goals**, for example **Keep HARD + AAA + Chart goals**
+or **Keep HARD or AAA or Chart goals**. Goals alone displays **Keep Chart goals**.
+Chart-specific BEST scores remain unresolved until a chart is selected.
+Selecting a chart restores the complete, filtered summary.
+The summary excludes requirements disabled by gameplay's startup eligibility
+check. If eligibility depends on long-note recovery unavailable in chart metadata,
+it shows that targets depend on the chart rather than an estimated hurdle.
+The custom selector's toolbar also adds an amber warning icon beside Play Options
+while Quick Retry is enabled.
+
+During ordinary single-chart manual play, **Any fails** restarts as soon as one
+enabled condition group becomes unreachable with the best possible remaining
+judgements. **All fail** waits until every enabled, available condition group is
+unreachable. Disabled conditions and unavailable targets do not count. The gauge
+requirement works even without a pacemaker or unfinished goals. It uses the
+selected gauge for Off and Continue,
+and the effective lower-bound gauge for Select-to-Under and Best Clear.
+Survival-to-Groove permits either the selected survival gauge or its Normal
+fallback to clear. Assist lamp caps do not change the physical gauge requirement.
+
+Pacemaker Target uses the selected numeric pacemaker's final EX target. The Goals
+condition considers all unfinished score and lamp conditions for this chart and long-note
+mode, independently of the pacemaker selection. **GOAL** pacemaker selections are
+governed by the Goals checkbox, not duplicated as a single pacemaker condition.
+Within Goals, conditions are alternatives: an impossible score does not end an
+attempt that can still earn an unfinished clear lamp, and vice versa. Conditions
+already fulfilled by saved results are excluded. In **Any fails**, the three enabled
+groups trigger independently: an unreachable
+required gauge retries even if a score or goal remains reachable. In **All fail**,
+a reachable or already achieved score/goal keeps the attempt going while that
+group is enabled.
+
+The check includes deferred classic-LN head judgements, remaining HCN recovery,
+gauge auto-shift, and assist lamp limits. Requirements already impossible before
+play are disabled independently, avoiding restart loops without disabling other
+reachable requirements. Replay, autoplay, practice, course,
+and mid-chart starts do not use Quick Retry. Automatic retries follow the same
+attempt reset behavior as manual retries and do not save discarded attempts.
+
+Goal conditions compile once per attempt to the lowest unfinished EX target and
+lamp rank; the numeric pacemaker retains its own EX threshold. Runtime checks do
+not iterate goals or remaining notes: they compare those thresholds and the
+required gauge using the fixed gauge table. Pending classic-LN judgements
+and remaining HCN recovery are maintained as per-note contributions during the
+existing judgement/gauge updates. Snapshot publication only copies their cached
+aggregate; it does not rescan the chart on input. The fallback controller also
+keeps cached totals. Gauge prediction uses a conservative rounding bound instead
+of simulating every remaining perfect hit near a clear border.
+
 ## Audio timing profiles
 
 Audio offset, visual offset, and the Input Trigger / Auto Timed keysound rule
@@ -186,30 +274,53 @@ precedent; apply the rule when revising them. The [migration inventory](settings
 Settings, Play Options, and preview controls aligned with it. Saved values
 retain their existing meaning.
 
-Use a cycle button for a toggle, visible buttons for a few choices that fit,
-and a dropdown for other cases. Users must always be able to see the current
-value.
+Choose the control by the user's decision, not just the number of stored values.
+A cycling button is the default for opposing states. A checkbox is appropriate
+when checking a clearly labeled option communicates inclusion or enablement more
+naturally, especially when users select several independent options together.
+Use visible buttons for a few mutually exclusive choices that fit, and a dropdown
+for other single-selection cases. Users must always be able to see the current
+value or checked state.
 
 | Control | Use when | Examples |
 | --- | --- | --- |
-| Cycling button | A toggle between two opposing states, such as On/Off, Show/Hide, or Light/Dark. Two options alone do not make a toggle. One activation switches directly to the other state. | Show lane indicators: On / Off; appearance: Light / Dark. |
+| Checkbox | An independently included or enabled option whose meaning is clear from a persistent label and checked state. Prefer it when a checklist makes several selections easier to scan, or an optional step is naturally attached to the current task. | Quick Retry conditions: Gauge, Pacemaker Target, Goals; Include replay data in an export. |
+| Cycling button | The default for two opposing states when explicit current-state text is more informative than a checkmark, especially when both states have meaningful names. Two options alone do not make a toggle. One activation switches directly to the other state. | Show lane indicators: On / Off; appearance: Light / Dark. |
 | Multiple choice buttons | A few stable, mutually exclusive choices, including two distinct modes or roughly 3–4 options, with labels that all fit legibly together on the current screen. | Flick / Tap; LR2 / Beatoraja; Auto / Landscape / Portrait. |
-| Dropdown | Other cases: larger sets, dynamic lists, long labels, or a small choice group that does not fit. A dynamic list does not become a toggle just because it currently has two entries. | Language, audio device, resolution, skin package, file choice. |
+| Dropdown | Other single-selection cases: larger sets, dynamic lists, long labels, or a small choice group that does not fit. A dynamic list does not become a toggle just because it currently has two entries. | Language, audio device, resolution, skin package, file choice. |
 
-Apply these rules in order: a toggle uses one cycling button; a small choice
-set uses multiple buttons if it fits; everything else uses a dropdown. Do not
-extend cycling to three or more states to save space. Continuous numeric
-values use a slider or editable numeric control rather than this rule.
+First distinguish independent options from mutually exclusive choices. For an
+independent binary option, use a checkbox when its label makes checked/unchecked
+unambiguous and the surrounding task or group is clearly easier to understand
+that way. Otherwise, use the default cycling button with explicit state text.
+For a mutually exclusive choice, use an opposing-state cycle or distinct-mode
+buttons/dropdown as described above. Do not use checkboxes for mutually exclusive
+modes or one-shot actions, and do not extend cycling to three or more states to
+save space. Continuous numeric values use a slider or editable numeric control.
+
+For example, Quick Retry's master On/Off setting uses a cycling button, while
+its Gauge, Pacemaker Target, and Goals checkboxes select which independent
+conditions participate. Any fails / All fail and Same / New remain mutually
+exclusive choice groups. Checkbox use follows this distinction; it is not an
+exception limited to Quick Retry or a reason to replace every binary control.
 
 ### Consistent presentation and behavior
 
 - Put a persistent setting label above the control and align the group with
-  the section's left edge. A selected value must not be the only explanation
-  of what the setting controls.
+  the section's left edge. Checkboxes use a persistent label beside each box;
+  related boxes may share a group label above them. A selected value must not
+  be the only explanation of what the setting controls.
 - Multiple buttons form one single-selection group with a clear selected
   state and consistent heights, spacing, and widths within the group. Selecting
-  the active choice is a no-op. Independent toggles use separate cycling
-  buttons, not a single mutually exclusive choice group.
+  the active choice is a no-op. Independent options use separate cycling
+  buttons or checkboxes according to the rule above, never a single mutually
+  exclusive choice group.
+- Checkbox labels describe what is included or enabled; avoid ambiguous or
+  double-negative wording. Make the box and its label one activation target,
+  preserve the normal touch-target size, and distinguish checked, unchecked,
+  focused, and disabled states. Group related options visibly. Disabling a
+  parent setting disables its child controls without clearing their saved
+  selections.
 - A cycling button displays the **current** state and a visible cycle
   affordance. One activation switches to the other state; the next switches
   back. Users must be able to distinguish it from an action button or a
@@ -237,8 +348,10 @@ values use a slider or editable numeric control rather than this rule.
   modes have no lamp color bars.
 - Keep the same labels, option order, selected value, and meaning wherever a
   setting appears. If a compact surface needs a different control, preserve
-  those semantics. Use the same cycling-button convention for toggles across
-  settings instead of mixing checkboxes, two-button groups, and dropdowns.
+  those semantics. Use the same control for the same decision across surfaces
+  unless layout or task context gives a clear usability reason to change it.
+  Choose checkbox versus cycling-button presentation deliberately; inconsistent
+  existing controls or a desire to save space alone are not sufficient reasons.
 
 ### Compact layouts and localization
 

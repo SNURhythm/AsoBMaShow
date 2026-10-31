@@ -100,6 +100,7 @@ def main():
         runtime_android_branches(extract(source, signature))
         if signature == "void GamePlayScene::onApplicationBackgroundChanged(" else extract(source, signature)
         for signature in signatures)
+    methods += "\n" + extract(source, "quick_retry::Projection GamePlayScene::currentQuickRetryProjection() const")
     methods += "\n" + extract(source, "int GamePlayScene::presentationKeyMode() const")
     methods += "\n" + extract(source, "void GamePlayScene::resetHellChargeGaugeTracking(")
     methods += "\n" + extract(source, "void GamePlayScene::updateHellChargeGauge(").replace(

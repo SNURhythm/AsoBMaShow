@@ -4109,6 +4109,7 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
 
 void MusicSelectScene::refreshToolbarAvailability() {
   if (!toolbar_) return;
+  toolbar_->setQuickRetryEnabled(context.settings.quickRetryEnabled);
   using Control = MusicSelectToolbarControl;
   for (const auto control : {Control::ChartMenu, Control::MoreMenu,
        Control::ChartViewer, Control::ChartRecords, Control::Rankings, Control::RevealChart,
@@ -4421,7 +4422,14 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .assistOption = selections.assistOption,
       .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
       .clubMode = context.settings.gameplayClubModeEnabled,
+      .quickRetryEnabled = context.settings.quickRetryEnabled,
+      .quickRetryAllConditionsFail = context.settings.quickRetryAllConditionsFail,
+      .quickRetryGauge = context.settings.quickRetryGauge,
+      .quickRetryPacemaker = context.settings.quickRetryPacemaker,
+      .quickRetryGoals = context.settings.quickRetryGoals,
+      .quickRetryNewPattern = context.settings.quickRetryNewPattern,
       .pacemakerTarget = selections.pacemakerTarget,
+      .pacemakerDisplayMode = context.settings.pacemakerDisplayMode,
       .pacemakerGoalLabel = goalPacemakerLabel(),
       .profileId = context.profileManager.activeProfile().id,
       .laneCovers = context.settings.presentation().laneCoverState()};
@@ -4457,6 +4465,7 @@ void MusicSelectScene::updatePlayOptions(
 }
 
 void MusicSelectScene::refreshPlayOptionsModal() {
+  if (toolbar_) toolbar_->setQuickRetryEnabled(context.settings.quickRetryEnabled);
   if (playOptionsModal_ != nullptr) {
     playOptionsModal_->refresh(playOptionsState());
   }
@@ -4533,11 +4542,46 @@ void MusicSelectScene::openPlayOptions() {
            }
            refreshPlayOptionsModal();
          },
+         .onQuickRetrySelected = [this](bool enabled) {
+           context.settings.quickRetryEnabled = enabled;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry selection");
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetryFailurePolicySelected = [this](bool all) {
+           context.settings.quickRetryAllConditionsFail = all;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry failure policy");
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetryGaugeSelected = [this](bool enabled) {
+           context.settings.quickRetryGauge = enabled;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry gauge selection");
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetryPacemakerSelected = [this](bool enabled) {
+           context.settings.quickRetryPacemaker = enabled;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry pacemaker selection");
+           refreshPlayOptionsModal();
+         },
+         .onQuickRetryGoalsSelected = [this](bool enabled) {
+           context.settings.quickRetryGoals = enabled;
+           if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry goals selection");
+           refreshPlayOptionsModal();
+         },
+         .onRetryPatternSelected = [this](bool newPattern) {
+           context.settings.quickRetryNewPattern = newPattern;
+           if (!context.saveSettings()) SDL_Log("Failed to save retry pattern selection");
+           refreshPlayOptionsModal();
+         },
          .onPacemakerSelected = [this](const std::string &target) {
            context.settings.selectedPacemakerGoalId = 0;
            updatePlayOptions([&target](auto &selections) {
              selections.pacemakerTarget = pacemaker::normalizeTargetId(target);
            });
+         },
+         .onPacemakerDisplayModeSelected = [this](const std::string &mode) {
+           context.settings.pacemakerDisplayMode = mode;
+           if (!context.saveSettings()) SDL_Log("Failed to save pacemaker display mode");
+           refreshPlayOptionsModal();
          },
          .onLaneCoversChanged = [this](const lane_cover::State &covers) {
            context.settings.presentation().setLaneCoverState(covers);

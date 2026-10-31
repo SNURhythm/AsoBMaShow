@@ -8,6 +8,7 @@
 //
 
 #include "GamePlayScene.h"
+#include "QuickRetrySummary.h"
 #include "../../input/SDLPointerEvent.h"
 #include "BestReplayLoad.h"
 
@@ -2375,6 +2376,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       .inputMaintenance = {.context = session.get(),
                             .run = &RealtimeGameplaySession::maintainTouchInput},
       .inputTriggeredKeysounds = !options.autoKeySound,
+      .publishQuickRetryProjection = !quickRetryTargets.empty() ||
+          pacemaker::displayModeFromId(context.settings.pacemakerDisplayMode) == pacemaker::DisplayMode::ScoreMinus,
       .activationSongTimeMicros = policy.activationSongTimeMicros,
       .practiceCompletionSongTimeMicros =
           policy.practiceCompletionSongTimeMicros,
@@ -3076,6 +3079,7 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
   state->comboBreak = snapshot->attempt.comboBreak;
   state->stageCombo = snapshot->attempt.stageCombo;
   state->stagePassedNotes = snapshot->attempt.stagePassedNotes;
+  realtimeQuickRetryProjection = snapshot->quickRetryProjection;
   state->fastCount = snapshot->fastCount;
   state->slowCount = snapshot->slowCount;
   for (int judgement = 0; judgement < JudgementCount; ++judgement) {
@@ -3576,6 +3580,7 @@ void GamePlayScene::init() {
       .pacemakerDiffY = context.settings.presentation().pacemakerDiffY,
       .pacemakerDiffSizePercent = context.settings.presentation().pacemakerDiffSizePercent,
       .pacemakerDiffBold = context.settings.presentation().pacemakerDiffBold,
+      .pacemakerDisplayMode = pacemaker::displayModeFromId(context.settings.pacemakerDisplayMode),
       .judgementCounterEnabled = context.settings.presentation().judgementCounterEnabled,
       .judgementCounterPosition = context.settings.presentation().judgementCounterPosition,
       .fastSlowCriteria = context.settings.presentation().judgementTimingFastSlowCriteria,
@@ -3950,6 +3955,7 @@ bool GamePlayScene::reset() {
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
   backgroundGaugeFailurePending = false;
+  quickRetryPending = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
   // Retry and Retry Same both begin a new attempt. Rebuild all attempt facts
   // so runtime modifiers (including pause use) never leak into the retry.
@@ -4130,6 +4136,7 @@ bool GamePlayScene::reset() {
   updatePacemakerStatus();
   resetHellChargeGaugeTracking(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
+  configureQuickRetry();
   state->isPlaying = !guidedAccessReminderPending;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   const long long initialRawSongTimeMicros = context.jukebox.getTimeMicros();
@@ -5342,6 +5349,107 @@ void GamePlayScene::configurePacemakerTarget() {
       *chart, selected, activePacemakerBest, nullptr, goalTarget ? &*goalTarget : nullptr);
 }
 
+void GamePlayScene::configureQuickRetry() {
+  quickRetryTargets = {};
+  quickRetryHellChargeTicks.clear();
+  quickRetryRemainingHellChargeTicks = 0;
+  realtimeQuickRetryProjection = {};
+  quickRetryNewPattern = context.settings.quickRetryNewPattern;
+  if (!context.settings.quickRetryEnabled || chart == nullptr || state == nullptr ||
+      options.autoPlay || isReplayPlayback() || isCoursePlayback() ||
+      options.practiceMode || options.practiceSession != nullptr || options.startPosition != 0)
+    return;
+
+  quickRetryTargets.allConditionsFail = context.settings.quickRetryAllConditionsFail;
+  quickRetryTargets.requireGaugeClear = context.settings.quickRetryGauge;
+  if (context.settings.quickRetryGoals) {
+    std::string error;
+    const auto goals = context.scoreRepository.LoadChartGoalsForChart(chart->Meta, error);
+    if (!goals) {
+      SDL_Log("Cannot load Quick Retry goals: %s", error.c_str());
+    }
+    if (goals) {
+      const int mode = scoreLongNoteModeForClearLamp(chart->Meta, options.longNoteMode);
+      const auto compiled = quick_retry::compileGoalTargets(*goals, mode, chart->Meta.TotalNotes);
+      quickRetryTargets.score = compiled.targets.score;
+      quickRetryTargets.lamp = compiled.targets.lamp;
+    }
+  }
+  // GOAL is governed by the Goals toggle and its alternative unfinished conditions,
+  // rather than duplicating only the displayed goal as an independent score target.
+  if (context.settings.quickRetryPacemaker && activePacemakerTarget.enabled &&
+      pacemaker::normalizeTargetId(options.pacemakerTarget) != pacemaker::kTargetGoal)
+    quickRetryTargets.pacemakerScore = activePacemakerTarget.finalScore;
+  if (quickRetryTargets.empty()) return;
+  if (quickRetryTargets.requireGaugeClear || quickRetryTargets.lamp >= 0) {
+    for (auto *measure : chart->Measures) {
+      if (measure == nullptr) continue;
+      for (auto *timeline : measure->TimeLines) {
+        if (timeline == nullptr) continue;
+        for (auto *note : timeline->Notes) {
+          if (note == nullptr || !note->IsLongNote()) continue;
+          auto *head = static_cast<bms_parser::LongNote *>(note);
+          if (!head->IsTail() && head->Tail && head->Timeline && head->Tail->Timeline &&
+              effectiveLongNoteIsHellCharge(head, chart, options.longNoteMode)) {
+            const auto ticks = quick_retry::remainingHellChargeTicks(
+                head->Timeline->Timing, head->Tail->Timeline->Timing,
+                std::numeric_limits<std::int64_t>::min(), 0,
+                quick_retry::hellChargeEarlyAllowance(rulesetPolicyBuild.policy->judge.rules(),
+                    gameplay::judgeRoleFor(head, chart->Meta, options.longNoteMode)));
+            quickRetryHellChargeTicks.emplace(head, ticks);
+            quickRetryRemainingHellChargeTicks += ticks;
+          }
+        }
+      }
+    }
+  }
+  quickRetryTargets = quick_retry::armReachableTargets(
+      *state, chart->Meta.TotalNotes, quickRetryTargets, currentQuickRetryProjection());
+}
+
+quick_retry::Projection GamePlayScene::currentQuickRetryProjection() const {
+  // The worker publishes projection and score atomically. Never combine an
+  // older gauge with a newer presentation clock at an HCN tail boundary. Keep
+  // the final projection after worker shutdown, until configureQuickRetry resets
+  // the attempt: the fallback controller never consumed those worker judgements.
+  if (realtimeQuickRetryProjection) return *realtimeQuickRetryProjection;
+  auto result = laneInputController != nullptr ? laneInputController->quickRetryProjection()
+                                               : quick_retry::Projection{};
+  result.hellChargeTicks = quickRetryRemainingHellChargeTicks;
+  return result;
+}
+
+void GamePlayScene::updateQuickRetryHellCharge(const bms_parser::LongNote *head, long long timeMicros) {
+  const auto found = quickRetryHellChargeTicks.find(head);
+  if (found == quickRetryHellChargeTicks.end()) return;
+  const auto end = head->Tail->Timeline->Timing;
+  const bool dead = head->Tail->IsDead && !(head->Tail->IsPlayed && head->Tail->PlayedTime < end);
+  const auto balance = hellChargeGaugeBalanceMicros.find(const_cast<bms_parser::LongNote *>(head));
+  const auto ticks = dead ? 0 : quick_retry::remainingHellChargeTicks(
+      head->Timeline->Timing, end, timeMicros,
+      balance == hellChargeGaugeBalanceMicros.end() ? 0 : balance->second,
+      quick_retry::hellChargeEarlyAllowance(rulesetPolicyBuild.policy->judge.rules(),
+          gameplay::judgeRoleFor(head, chart->Meta, options.longNoteMode)));
+  quickRetryRemainingHellChargeTicks += ticks - found->second;
+  found->second = ticks;
+}
+
+bool GamePlayScene::retryIfTargetsUnreachable() {
+  if (quickRetryPending) return true;
+  if (quickRetryTargets.empty() || state == nullptr || state->isEnding ||
+      !state->isPlaying || advancingGameplayInBackground || context.jukebox.isPaused())
+    return false;
+  if (!quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryTargets,
+                               currentQuickRetryProjection()))
+    return false;
+  quickRetryPending = true;
+  state->isEnding = true;
+  stopRealtimeGameplayAuthority(false);
+  if (quickRetryNewPattern) retryWithNewPattern();
+  else restartCurrentPattern();
+  return true;
+}
+
 void GamePlayScene::configureSkinIrTarget() {
   if (state != nullptr && state->isEnding) return;
   if (skinIrRankingGeneration != 0 && context.irRankingService) {
@@ -6423,7 +6531,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .graphGaugeState = state->gaugeSnapshot(),
       .pacemakerTarget = activePacemakerTarget,
       .pacemakerStatus =
-          pacemaker::snapshotForState(activePacemakerTarget, *state),
+          pacemaker::snapshotForState(activePacemakerTarget, *state, currentQuickRetryProjection()),
       .goalPacemakerSelected = pacemaker::normalizeTargetId(options.pacemakerTarget) == pacemaker::kTargetGoal,
       .skinIrTarget = activeSkinIrTarget,
       .player1RandomOption = gameplayRandomOptionIndex(playOptions.option),
@@ -6942,6 +7050,7 @@ bool GamePlayScene::finishIfGaugeFailed() {
 
   const long long finalGameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  if (retryIfTargetsUnreachable()) return true;
   updateSkinGameplayGraph(finalGameplayTimeMicros);
 
   SDL_Log("Active survival gauge failed");
@@ -7100,6 +7209,10 @@ void GamePlayScene::update(float dt) {
     const auto terminalAction = gameplay::classifyRealtimeGameplayTerminal(
         terminalReason, options.practiceSession != nullptr,
         sourcePlaytimeElapsed);
+    if ((terminalAction == gameplay::RealtimeGameplayTerminalAction::Wait ||
+         terminalAction == gameplay::RealtimeGameplayTerminalAction::SurvivalGaugeFailed ||
+         terminalAction == gameplay::RealtimeGameplayTerminalAction::CompleteChart) &&
+        retryIfTargetsUnreachable()) return;
     if (terminalAction == gameplay::RealtimeGameplayTerminalAction::Wait) {
       return;
     }
@@ -7153,6 +7266,7 @@ void GamePlayScene::update(float dt) {
       return;
     }
   }
+  if (retryIfTargetsUnreachable()) return;
   if (practiceSectionComplete) {
     completePracticeSection(false);
     return;
@@ -8021,6 +8135,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                                 judgedTime, poorResult);
               continue;
             } else if (longNote->IsTail()) {
+              if (laneInputController != nullptr) laneInputController->resolveQuickRetryNote(longNote);
               markLongNoteMissed(longNote, judgedTime);
               continue;
             } else {
@@ -8417,6 +8532,9 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
           continue;
         }
 
+        const auto updateRetryRecovery = makeScopeExit([&] {
+          updateQuickRetryHellCharge(longNote, gameplayTimeMicros);
+        });
         const long long headTime = longNote->Timeline->Timing;
         const long long tailTime = longNote->Tail->Timeline->Timing;
         const bool tailJudgedBeforeTiming =
@@ -8471,6 +8589,9 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
     std::ranges::sort(activeHellChargeNotes, {},
                        [](const auto *note) { return note->Lane; });
     for (auto *longNote : activeHellChargeNotes) {
+      const auto updateRetryRecovery = makeScopeExit([&] {
+        updateQuickRetryHellCharge(longNote, gameplayTimeMicros);
+      });
       long long &balance = hellChargeGaugeBalanceMicros[longNote];
       const bool gaining =
           laneIsPressed(lanePressed, longNote->Lane) || options.autoPlay ||
@@ -8565,6 +8686,13 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
     attemptProvenance.eligibility = ScoreEligibility::Modified;
     recordedReplay.provenance = attemptProvenance;
     analyticsReplay.provenance = attemptProvenance;
+  }
+  if (const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(graphNote)) {
+    if (laneInputController != nullptr &&
+        ((longNote->IsTail() && longNote->IsPlayed) ||
+         (longNote->Tail != nullptr && longNote->Tail->IsPlayed)))
+      laneInputController->resolveQuickRetryNote(longNote);
+    updateQuickRetryHellCharge(longNote->IsTail() ? longNote->Head : longNote, clock.songTimeMicros);
   }
   const int previousCount = state->judgeCount[judgeResult.judgement];
   state->commitJudge(judgeResult);
@@ -8944,6 +9072,10 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
         if (const auto &longNote = static_cast<bms_parser::LongNote *>(note);
             !longNote->IsTail()) {
           longNote->Press(pressedTime);
+          if (laneInputController != nullptr &&
+              (judgeResult.judgement != Bad || rulesetPolicyBuild.policy->judge.rules().vanishBad)) {
+            laneInputController->rememberAcceptedLongHeadJudge(longNote, judgeResult);
+          }
           const bool chargeLongNote =
               effectiveLongNoteIsCharge(longNote, chart, options.longNoteMode);
           if (chargeLongNote) {

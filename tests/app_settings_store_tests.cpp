@@ -1328,6 +1328,50 @@ void testScreenOrientationRoundTripAndDefaults() {
   }
 }
 
+void testQuickRetryRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "quick-retry.json";
+  writeFile(path, R"({"schemaVersion":4})");
+  auto settings = AppSettingsStore::Load(path).settings;
+  expect(!settings.quickRetryEnabled && !settings.quickRetryNewPattern,
+         "existing profiles do not automatically retry and default to same pattern");
+  expect(settings.quickRetryGauge && settings.quickRetryPacemaker && settings.quickRetryGoals,
+         "all retry conditions default on behind the disabled master switch");
+  expect(!settings.quickRetryAllConditionsFail, "existing profiles retry on any failed condition");
+  settings.quickRetryAllConditionsFail = true;
+  settings.quickRetryEnabled = true;
+  settings.quickRetryNewPattern = true;
+  settings.quickRetryGauge = false;
+  settings.quickRetryPacemaker = false;
+  settings.quickRetryGoals = false;
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "quick retry settings save");
+  const auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.quickRetryAllConditionsFail, "All failure policy survives settings reload");
+  expect(loaded.quickRetryEnabled && loaded.quickRetryNewPattern,
+         "quick retry and new pattern survive settings reload");
+  expect(!loaded.quickRetryGauge && !loaded.quickRetryPacemaker && !loaded.quickRetryGoals,
+         "each disabled retry condition survives settings reload");
+}
+
+void testPacemakerDisplayModeRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "pacemaker-display.json";
+  writeFile(path, R"({"schemaVersion":4})");
+  auto settings = AppSettingsStore::Load(path).settings;
+  expect(settings.pacemakerDisplayMode == "pace", "existing profiles retain paced comparison");
+  for (const auto *mode : {"score_minus", "score_plus"}) {
+    settings.pacemakerDisplayMode = mode;
+    std::string error;
+    expect(AppSettingsStore::Save(path, settings, error), "pacemaker display mode saves");
+    expect(AppSettingsStore::Load(path).settings.pacemakerDisplayMode == mode,
+           "pacemaker display mode survives reload");
+  }
+  settings.pacemakerDisplayMode = "unknown";
+  settings.sanitize();
+  expect(settings.pacemakerDisplayMode == "pace", "invalid display mode falls back to Pace");
+}
+
 void testIpadGestureReminderRoundTrip() {
   TempDirectory temp;
   expect(AppSettings{}.ipadGestureReminderEnabled,
@@ -3122,6 +3166,8 @@ int main() {
   testAntiAliasingPersistenceAndMigration();
   testMetalDisplayLinkDefaultPersistence();
   testPrepMetronomeDurationPersistence();
+  testQuickRetryRoundTrip();
+  testPacemakerDisplayModeRoundTrip();
   testIpadGestureReminderRoundTrip();
   testScreenOrientationRoundTripAndDefaults();
   testReplayPreferencesSurviveSettingsRoundTrip();

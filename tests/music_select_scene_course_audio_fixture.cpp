@@ -230,6 +230,7 @@ struct MusicSelectScene {
     SceneManager *sceneManager;
     std::atomic_bool appInBackground = false;
     std::atomic_bool storageMaintenanceActive = false;
+    void refreshAudioTimingProfile(bool = false) {}
   } context;
   bool launching_ = false;
   bool sceneActive_ = true, failed_ = false, overlayVisible = false;

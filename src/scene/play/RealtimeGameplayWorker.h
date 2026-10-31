@@ -89,6 +89,7 @@ struct RealtimeGameplayWorkerConfig {
     void (*run)(void *, std::int64_t steadyTimestampMicros) = nullptr;
   } inputMaintenance;
   bool inputTriggeredKeysounds = true;
+  bool publishQuickRetryProjection = false;
   std::size_t maximumReplayInputTransitions =
       replay::kReplayLimits.maxInputTransitions;
   std::optional<std::int64_t> activationSongTimeMicros;
@@ -110,6 +111,7 @@ struct RealtimeGameplaySnapshot {
   std::vector<bool> lanePressed;
   std::vector<bool> longNoteHoldingByLane;
   GameplayAttemptSnapshot attempt;
+  quick_retry::Projection quickRetryProjection;
   SkinGameplayDynamicGraphState skinGameplayGraph;
   GaugeStateSnapshot gaugeState;
   std::array<JudgementFastSlowCount, JudgementCount> fastSlowCounts{};

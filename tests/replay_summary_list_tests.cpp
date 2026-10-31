@@ -5,6 +5,7 @@
 #include "../src/scene/play/SkinGameplayGraphState.h"
 
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <iostream>
 
@@ -210,6 +211,36 @@ bool testAutoPlayDemotedUnpairedHead() {
 }
 
 int main() {
+  {
+    const pacemaker::Target target{.enabled = true, .finalScore = 180,
+                                   .maxScore = 200, .totalNotes = 100};
+    RhythmState state(nullptr, false);
+    const auto initial = pacemaker::snapshotForState(target, state);
+    assert(pacemaker::displayDelta(initial, pacemaker::DisplayMode::ScoreMinus) == 20);
+    assert(pacemaker::displayDelta(initial, pacemaker::DisplayMode::ScorePlus) == -180);
+    state.stagePassedNotes = 25;
+    state.judgeCount[PGreat] = 20;
+    state.judgeCount[Poor] = 5;
+    auto snapshot = pacemaker::snapshotForState(target, state);
+    assert(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::Pace) == -5);
+    assert(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScoreMinus) == 10);
+    assert(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScorePlus) == -140);
+    quick_retry::Projection pending;
+    pending.pendingClassicJudgements[Great] = 1;
+    pending.pendingClassicJudgements[Bad] = 1;
+    snapshot = pacemaker::snapshotForState(target, state, pending);
+    assert(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScoreMinus) == 7);
+    state.stagePassedNotes = 100;
+    snapshot = pacemaker::snapshotForState(target, state);
+    assert(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::Pace) == -140);
+    assert(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScoreMinus) == -140);
+    assert(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScorePlus) == -140);
+    state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+    state.stagePassedNotes = 25;
+    state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+    snapshot = pacemaker::snapshotForState(target, state);
+    assert(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScoreMinus) == -140);
+  }
   if (!testAutoPlayDemotedUnpairedHead()) return 1;
   const bool recoveredPmsResult = testRecoveredPmsLongNoteRetainsHeadBad();
   const bool continuingAutoShift = testContinuingAutoShiftReplayHasNoGaugeCutoff();

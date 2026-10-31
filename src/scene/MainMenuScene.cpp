@@ -4,6 +4,8 @@
 #include "../platform/SDLMainThread.h"
 #include "../i18n/Localization.h"
 #include "MainMenuScene.h"
+#include "play/QuickRetrySummary.h"
+#include "../view/PlayStartButton.h"
 #include "NewcomerTutorialView.h"
 #include "ResultRecordsLoader.h"
 #include "ChartRecordActions.h"
@@ -2413,8 +2415,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rightContent->addView(readyPlayOptionsButton);
   refreshPlaybackSelectionControls();
 
-  startButton = makePrimarySelectorButton(
-      i18n::message("menu.selector.play.label"), 0xf04b, &startButtonText);
+  auto *playStart = new PlayStartButton(kDetailsContentWidth, 88);
+  startButton = playStart;
+  startButtonText = playStart->label();
   startButton->setName("mainMenuStart");
   startButton->setOnClickListener([this]() {
     if (willStart.load()) {
@@ -4065,6 +4068,7 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
       refreshLongNoteModeClearRankViews();
     }
   }
+  refreshQuickRetryStartButton();
 }
 
 void MainMenuScene::refreshIrRecordListIfNeeded() {
@@ -4725,6 +4729,7 @@ void MainMenuScene::refreshPlaybackSelectionControls() {
 }
 
 void MainMenuScene::refreshPlayOptionsPanel() {
+  refreshQuickRetryStartButton();
   if (playOptionsPanel == nullptr) {
     return;
   }
@@ -4750,7 +4755,14 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .playbackRatePercent = playbackRate,
        .playbackLocked = playbackLocked,
        .clubMode = context.settings.gameplayClubModeEnabled,
+       .quickRetryEnabled = context.settings.quickRetryEnabled,
+       .quickRetryAllConditionsFail = context.settings.quickRetryAllConditionsFail,
+       .quickRetryGauge = context.settings.quickRetryGauge,
+       .quickRetryPacemaker = context.settings.quickRetryPacemaker,
+       .quickRetryGoals = context.settings.quickRetryGoals,
+       .quickRetryNewPattern = context.settings.quickRetryNewPattern,
        .pacemakerTarget = profileSelections.pacemakerTarget,
+       .pacemakerDisplayMode = context.settings.pacemakerDisplayMode,
        .pacemakerGoalLabel = goalPacemakerLabel(),
        .profileId = context.profileManager.activeProfile().id,
        .laneCovers = context.settings.presentation().laneCoverState()});
@@ -4779,6 +4791,7 @@ void MainMenuScene::refreshSelectedChartDetails() {
 }
 
 void MainMenuScene::refreshReadySettingsSummary() {
+  refreshQuickRetryStartButton();
   const EffectivePlayOptionSelection effective =
       currentEffectivePlayOptionSelection();
   if (readySpeedText) {
@@ -4888,7 +4901,132 @@ MainMenuScene::currentCourseSelectionFor(
       activeFolder.courseKey, courseValidationForActiveFolder().records, result);
 }
 
+void MainMenuScene::refreshQuickRetryStartButton() {
+  auto *button = dynamic_cast<PlayStartButton *>(startButton);
+  if (!button || willStart.load()) return;
+  const auto selected = selectedRecordSnapshot();
+  const bool course = selected ? selected->courseStart
+      : activeFolder.type == LibraryFolderItem::Type::Course;
+  if (!context.settings.quickRetryEnabled || course) {
+    button->setQuickRetry(false, {});
+    return;
+  }
+  if (!selected || selected->randomSelect || selected->meta.TotalNotes <= 0) {
+    // Shared settings remain useful on folders and Random entries. Do not use
+    // a synthetic note count or the previously selected chart's best/goals.
+    std::vector<quick_retry::HurdleAlternatives> groups;
+    if (context.settings.quickRetryGauge) {
+      const auto required = quick_retry::requiredGaugeType(profileSelections.gaugeType,
+          profileSelections.gaugeAutoShift, profileSelections.gaugeAutoShiftLowerBound);
+      std::string label = gaugeButtonLabel(required, GaugeAutoShiftMode::None);
+      if (profileSelections.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
+          gaugeTypeIndex(required) >= gaugeTypeIndex(GaugeType::Hard)) label += " → NORMAL";
+      groups.push_back({{{quick_retry::HurdleKind::Gauge, 0, label}}});
+    }
+    const auto target = pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+    if (context.settings.quickRetryPacemaker && pacemaker::targetIsGrade(target))
+      groups.push_back({{{quick_retry::HurdleKind::Score, 0, pacemaker::displayTargetLabel(target)}}});
+    auto description = quick_retry::hurdleText(
+        quick_retry::summarizeHurdles(groups, context.settings.quickRetryAllConditionsFail),
+        i18n::tr("menu.selector.retry.or"));
+    if (context.settings.quickRetryGoals) {
+      const auto goals = i18n::tr("menu.selector.retry.chart_goals");
+      if (description.empty()) description = goals;
+      else description = description + " " +
+          (context.settings.quickRetryAllConditionsFail ? i18n::tr("menu.selector.retry.or") : "+") +
+          " " + goals;
+    }
+    const bool chartTargets = context.settings.quickRetryPacemaker && target == pacemaker::kTargetBest;
+    button->setQuickRetry(true, !description.empty()
+        ? i18n::format("menu.selector.retry.summary", {{"targets", description}})
+        : i18n::tr(chartTargets ? "menu.selector.retry.pending" : "menu.selector.retry.none"));
+    return;
+  }
+
+  const auto &meta = selected->meta;
+  const auto effective = currentEffectivePlayOptionSelection();
+  const int mode = long_note_mode::valueFromId(effective.longNoteMode);
+  const auto rules = compileGameplayGaugeRules(profileSelections.ruleset, meta, GaugeProfile::Standard);
+  GameplayScoreState initial({.gaugeRules = rules, .keyMode = meta.KeyMode});
+  initial.configureGauge(profileSelections.gaugeType, profileSelections.gaugeAutoShift,
+      rules.resolvedProfile, profileSelections.gaugeAutoShiftLowerBound);
+  initial.setAssistClearMark(clear_policy::assistClearMarkRequired(
+      effective.assistOption, meta.MinBpm, meta.MaxBpm,
+      {.percent = context.settings.selectedPlaybackRatePercent,
+       .mode = context.settings.selectedPlaybackMode}));
+  bool uncertain = false;
+  const auto eligible = [&](quick_retry::Targets target) {
+    const auto result = quick_retry::startupTargetEligible(initial, meta.TotalNotes, target,
+                                                          meta.TotalLongNotes > 0);
+    if (!result) uncertain = true;
+    return result.value_or(false);
+  };
+  std::vector<quick_retry::HurdleAlternatives> groups;
+  if (context.settings.quickRetryGauge && eligible({.requireGaugeClear = true})) {
+    const auto required = quick_retry::requiredGaugeType(profileSelections.gaugeType,
+        profileSelections.gaugeAutoShift, profileSelections.gaugeAutoShiftLowerBound);
+    auto type = required;
+    std::string label = gaugeButtonLabel(required, GaugeAutoShiftMode::None);
+    if (profileSelections.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
+        rules.gauges[gaugeTypeIndex(required)].survival) {
+      type = GaugeType::Normal;
+      label += " → NORMAL";
+    }
+    const bool physicalGauge = profileSelections.gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
+        profileSelections.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder ||
+        clear_policy::assistClearMarkRequired(effective.assistOption, meta.MinBpm, meta.MaxBpm,
+            {.percent = context.settings.selectedPlaybackRatePercent,
+             .mode = context.settings.selectedPlaybackMode}) != AssistClearMark::None;
+    const int rank = gaugeTypeToClearRank(gaugeClearTypeForProfile(type, rules.resolvedProfile));
+    groups.push_back({{{physicalGauge ? quick_retry::HurdleKind::Gauge : quick_retry::HurdleKind::Clear,
+                        clearLampOrder(rank), label}}});
+  }
+  if (context.settings.quickRetryPacemaker &&
+      pacemaker::normalizeTargetId(profileSelections.pacemakerTarget) != pacemaker::kTargetGoal) {
+    const auto target = pacemaker::targetFromSelection(meta, profileSelections.pacemakerTarget,
+        scoreBestScores.bestFor(meta, mode));
+    if (target.enabled && eligible({.pacemakerScore = target.finalScore})) {
+      const auto label = target.label == pacemaker::kTargetBest
+          ? target.label + " " + std::to_string(target.finalScore) : target.label;
+      groups.push_back({{{quick_retry::HurdleKind::Score, target.finalScore, label}}});
+    }
+  }
+  if (context.settings.quickRetryGoals && !meta.SHA256.empty()) {
+    const auto key = std::tuple{context.profileManager.activeProfile().id, meta.SHA256,
+                                context.scoreRepository.GetRevision()};
+    if (!quickRetryGoalsKey_ || *quickRetryGoalsKey_ != key) {
+      std::string error;
+      const auto goals = context.scoreRepository.LoadChartGoalsForChart(meta, error);
+      quickRetryGoalsLoaded_ = goals.has_value();
+      quickRetryGoals_ = goals.value_or(std::vector<chart_goals::GoalProgress>{});
+      quickRetryGoalsKey_ = key;
+      if (!error.empty()) SDL_Log("Cannot load Quick Retry button targets: %s", error.c_str());
+    }
+    if (!quickRetryGoalsLoaded_) {
+      button->setQuickRetry(true, i18n::tr("menu.selector.retry.unavailable"));
+      return;
+    }
+    const auto goals = quick_retry::compileGoalTargets(quickRetryGoals_,
+        scoreLongNoteModeForClearLamp(meta, mode), meta.TotalNotes);
+    quick_retry::HurdleAlternatives alternatives;
+    if (goals.scoreLabel && eligible({.score = goals.targets.score})) alternatives.push_back({{quick_retry::HurdleKind::Score,
+        goals.targets.score, chart_goals::targetLabels(*goals.scoreLabel).score}});
+    if (goals.targets.lamp >= 0 && eligible({.lamp = goals.targets.lamp})) alternatives.push_back({{quick_retry::HurdleKind::Clear,
+        clearLampOrder(goals.targets.lamp), kombo::lampLabel(goals.targets.lamp)}});
+    if (!alternatives.empty()) groups.push_back(std::move(alternatives));
+  }
+  if (uncertain) {
+    button->setQuickRetry(true, i18n::tr("menu.selector.retry.pending"));
+    return;
+  }
+  const auto hurdles = quick_retry::summarizeHurdles(groups, context.settings.quickRetryAllConditionsFail);
+  const auto description = quick_retry::hurdleText(hurdles, i18n::tr("menu.selector.retry.or"));
+  button->setQuickRetry(true, description.empty() ? i18n::tr("menu.selector.retry.none")
+      : i18n::format("menu.selector.retry.summary", {{"targets", description}}));
+}
+
 void MainMenuScene::refreshStartButtonForActiveFolder() {
+  refreshQuickRetryStartButton();
   if (startButtonText == nullptr || willStart.load()) {
     return;
   }
@@ -7307,8 +7445,43 @@ void MainMenuScene::buildPlayOptionsModal() {
          setPlaybackModeSelection(mode);
        },
        .onClubModeToggled = [this]() { toggleGameplayClubMode(); },
+       .onQuickRetrySelected = [this](bool enabled) {
+         context.settings.quickRetryEnabled = enabled;
+         if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry selection");
+         refreshPlayOptionsPanel();
+       },
+       .onQuickRetryFailurePolicySelected = [this](bool all) {
+         context.settings.quickRetryAllConditionsFail = all;
+         if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry failure policy");
+         refreshPlayOptionsPanel();
+       },
+       .onQuickRetryGaugeSelected = [this](bool enabled) {
+         context.settings.quickRetryGauge = enabled;
+         if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry gauge selection");
+         refreshPlayOptionsPanel();
+       },
+       .onQuickRetryPacemakerSelected = [this](bool enabled) {
+         context.settings.quickRetryPacemaker = enabled;
+         if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry pacemaker selection");
+         refreshPlayOptionsPanel();
+       },
+       .onQuickRetryGoalsSelected = [this](bool enabled) {
+         context.settings.quickRetryGoals = enabled;
+         if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry goals selection");
+         refreshPlayOptionsPanel();
+       },
+       .onRetryPatternSelected = [this](bool newPattern) {
+         context.settings.quickRetryNewPattern = newPattern;
+         if (!context.saveSettings()) SDL_Log("Failed to save retry pattern selection");
+         refreshPlayOptionsPanel();
+       },
        .onPacemakerSelected = [this](const std::string &target) {
          setPacemakerTargetSelection(target);
+       },
+       .onPacemakerDisplayModeSelected = [this](const std::string &mode) {
+         context.settings.pacemakerDisplayMode = mode;
+         if (!context.saveSettings()) SDL_Log("Failed to save pacemaker display mode");
+         refreshPlayOptionsPanel();
        },
        .onLaneCoversChanged = [this](const lane_cover::State &covers) {
          context.settings.presentation().setLaneCoverState(covers);

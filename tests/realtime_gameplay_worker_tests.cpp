@@ -21,6 +21,7 @@
 #include <iostream>
 #include <new>
 #include <thread>
+#include <type_traits>
 
 namespace rendering {
 int render_width = 1000, render_height = 500;
@@ -3346,6 +3347,52 @@ void testWorkerMissedHcnControlsPreviewVoice() {
   }
 }
 
+static_assert(std::is_same_v<decltype(std::declval<const gameplay::GameplaySimulation &>().quickRetryProjection()),
+                             const quick_retry::Projection &>,
+              "snapshot publication reads an already maintained projection");
+
+void testQuickRetrySnapshotKeepsLongNoteBoundsWithScore() {
+  for (int type : {1, 3}) {
+    auto chart = bmsonReleaseFixture(type, 1, false);
+    auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    FakeClock clock;
+    FakeAudio audio;
+    auto config = makeConfig(clock, audio);
+    config.publishQuickRetryProjection = true;
+    config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 3));
+    gameplay::RealtimeGameplayWorker worker(definition, config);
+    {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      require(snapshot->quickRetryProjection.hellChargeTicks == (type == 3 ? 4 : 0),
+              "future HCN has four strict 200ms recovery ticks, no invented carried tick");
+    }
+    require(worker.start(), "quick retry snapshot worker starts");
+    const long long pressTime = type == 1 ? 1'050'000 : 1'000'000;
+    clock.nowMicros.store(pressTime);
+    require(worker.enqueueInput({.epoch = 7, .type = gameplay::RealtimeGameplayInputType::Press,
+                                .lane = 0, .steadyTimestampMicros = pressTime}), "LN head queues");
+    require(waitUntil([&] { return worker.acquireLatestSnapshot()->noteStates[0].played; }),
+            "LN head reaches authoritative snapshot");
+    if (type == 1) {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      const auto accepted = snapshot->noteStates[0].acceptedHeadJudge.judgement;
+      require(accepted != PGreat && snapshot->attempt.score == 0 &&
+                  snapshot->quickRetryProjection.pendingClassicJudgements[accepted] == 1,
+              "uncommitted imperfect classic head constrains the score immediately");
+    } else {
+      clock.nowMicros.store(1'200'001);
+      require(waitUntil([&] {
+        return worker.acquireLatestSnapshot()->quickRetryProjection.hellChargeTicks == 3;
+      }), "earned HCN tick and remaining recovery advance together");
+      const auto snapshot = worker.acquireLatestSnapshot();
+      require(snapshot->quickRetryProjection.hellChargeTicks == 3 && snapshot->attempt.score == 2,
+              "retained snapshot owns both HCN recovery and its scored head");
+    }
+    worker.stop();
+  }
+}
+
 void testWorkerLongHeadVoiceControl() {
   for (int type : {1, 2, 3}) for (bool inputAudio : {false, true}) {
     auto chart = bmsonReleaseFixture(type, 1, false, 960);
@@ -3505,6 +3552,7 @@ int main() {
   testWorkerScratchHcnRetainsAudioUntilFinalLift();
   testWorkerMissedHcnControlsPreviewVoice();
   testLiveReplayLongNoteAudioAfterMissAndHeldCompletion();
+  testQuickRetrySnapshotKeepsLongNoteBoundsWithScore();
   testWorkerLongHeadVoiceControl();
   testWorkerBmsonReleaseAudio();
   testWakeTimeoutPreservesConcurrentSignal();

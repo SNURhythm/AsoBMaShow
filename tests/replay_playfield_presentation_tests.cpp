@@ -951,6 +951,47 @@ void testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound() {
          "replay export authority retains the recorded gauge auto-shift lower bound");
 }
 
+void testReplayPacemakerStopsAtDetectedGaugeFailure() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 100;
+  const pacemaker::Target target{.enabled = true, .finalScore = 180,
+                                 .maxScore = 200, .totalNotes = 100};
+  for (const auto action : {ReplayEventAction::Miss, ReplayEventAction::Gauge,
+                            ReplayEventAction::Mine}) {
+    ReplayData replay;
+    replay.initialGaugeType = GaugeType::Hard;
+    replay.events = {{.action = action, .songTimeMicros = 1'000,
+                      .judgement = action == ReplayEventAction::Mine ? None : Bad,
+                      .gauge = 0, .gaugeType = GaugeType::Hard}};
+    RhythmState state(&chart, false);
+    state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+    pacemaker::applyReplayEventToState(state, replay.events.front());
+    for (const auto mode : {GaugeAutoShiftMode::None, GaugeAutoShiftMode::Continue}) {
+      replay.gaugeAutoShift = mode;
+      // The exporter supplies a terminal failure time; Continue supplies none.
+      const auto failure = mode == GaugeAutoShiftMode::None
+          ? std::optional<long long>{1'000} : std::nullopt;
+      for (const long long time : {999, 1'000, 1'001}) {
+        PlayfieldAuthorityUpdate authority{
+            .pacemakerStatus = pacemaker::snapshotForState(target, state),
+            .failureAnimationActive = replay_video_export::replayGameplayFailureAnimationActive(time, failure)};
+        replay_video_export::applyReplayGameplayGaugeAuthority(authority, replay, GaugeType::Hard, 0);
+        const auto &snapshot = authority.pacemakerStatus;
+        const bool stopped = failure && time >= *failure;
+        expect(snapshot.scoreStopped == stopped,
+               "replay pacemaker stops future score at the detected failure timestamp");
+        expect(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScoreMinus) ==
+                   (stopped ? -180 : 2 * (100 - state.stagePassedNotes) - 180),
+               "failed export Score minus converges to current score minus the target");
+        expect(pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::ScorePlus) == -180 &&
+                   pacemaker::displayDelta(snapshot, pacemaker::DisplayMode::Pace) == snapshot.delta,
+               "failure propagation preserves Score plus and Pace");
+      }
+    }
+  }
+}
+
 void testReplayGameplayRuntimeAuthorityCarriesApplicationClocks() {
   PlayfieldAuthorityUpdate authority;
 
@@ -1723,6 +1764,7 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
 
   AppSettings settings;
   PlayfieldPresentationConfig configuration;
+  configuration.pacemakerDisplayMode = pacemaker::DisplayMode::ScoreMinus;
   TestBga bga;
   const auto created = ReplayPlayfieldPresentation::create(
       createInfo(chart, settings, configuration, bga));
@@ -1734,7 +1776,7 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
                           .lane = 1,
                           .noteTimeMicros = 1'000,
                           .judgeTimeMicros = 1'010,
-                          .judgement = PGreat,
+                          .judgement = Great,
                           .diffMicros = 10,
                           .gauge = 0.73F};
   const PlayfieldJudgeEventClock clock{.songTimeMicros = 1'100,
@@ -1742,6 +1784,8 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
                                        .bgaTimeMicros = 1'025};
   expect(!created.presentation->applyReplayEvent(event, clock, true),
          "classic long-note head returns the exporter-equivalent suppressed HUD result");
+  expect(created.presentation->scoreProjection().pendingClassicJudgements[Great] == 1,
+         "Score minus retains accepted classic head score loss before tail judgement");
   created.presentation->releaseDueClassicLongNoteTails(1'999);
   const auto beforeTail =
       created.presentation->captureVisualStateForTesting({});
@@ -1765,12 +1809,14 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   release.noteTimeMicros = 2'000;
   release.judgeTimeMicros = 2'000;
   release.combo = 1;
-  release.score = 2;
+  release.score = 1;
   expect(created.presentation->applyReplayEvent(release, clock, true),
          "classic LN completion still updates its score HUD");
+  expect(created.presentation->scoreProjection().pendingClassicJudgements[Great] == 0,
+         "Score minus removes deferred loss once the tail is scored");
   const auto completed = created.presentation->captureVisualStateForTesting({});
   expect(completed.judgementIndicatorSampleCount == 1 && completed.combo == 1 &&
-             completed.score == 2,
+             completed.score == 1,
          "classic LN completion does not duplicate its head timing sample");
   RenderContext context;
   const auto frame = created.presentation->renderFrame(
@@ -2740,6 +2786,7 @@ int main() {
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
   testReplayGameplayGaugeAuthorityPreservesRecordedLowerBound();
+  testReplayPacemakerStopsAtDetectedGaugeFailure();
   testReplayGameplayRuntimeAuthorityCarriesApplicationClocks();
   testReplayGameplayTargetOptionAuthorityUsesSourceDefault();
   testReplayGameplaySpeedUsesNoteDisplayClock();

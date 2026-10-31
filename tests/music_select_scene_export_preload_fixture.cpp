@@ -157,6 +157,7 @@ struct Repository {
   std::uint64_t GetLibraryRevision() const { return revision; }
 };
 struct Context {
+  void refreshAudioTimingProfile(bool = false) {}
   std::string pendingKomboNotificationProfile;
   struct {
     struct Profile { std::string id; } profile;

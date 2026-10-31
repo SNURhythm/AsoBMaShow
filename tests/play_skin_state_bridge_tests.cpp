@@ -806,6 +806,7 @@ void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
                               .mutationTable = mutations});
   auto state = stateAt(73);
   state.authority.stagePassedNotes = 1;
+  state.score = 0;
   state.authority.judgementCounters = {{PGreat, 0}};
   state.authority.bestScore = 5;
   state.authority.bestScoreTarget = {.enabled = true,
@@ -827,12 +828,15 @@ void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
              "best rate without a ghost uses the projected integer score at stage progress");
   expectRate(114, 1.0F / 6.0F,
              "rival rate uses linear stage progress even for a replay target");
+  expect(bridge.integerProperty({153}).value == -2, "Pace retains live rival comparison");
   bridge.discardFrame();
 
   state.clock.serial = 74;
+  state.configuration.pacemakerDisplayMode = pacemaker::DisplayMode::ScoreMinus;
   state.authority.bestScoreTarget.usesReplayProgression = true;
   state.authority.bestScoreTarget.scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3, 5});
   bridge.beginFrame(state, projectionAt(74));
+  expect(bridge.integerProperty({153}).value == 0, "Score minus skin difference uses remaining maximum EX");
   // The skin frame must retain its replay after the producer replaces storage.
   state.authority.bestScoreTarget.scoreAfterNotes = {};
   expectRate(112, 1.0F / 3.0F,
@@ -840,9 +844,11 @@ void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
   bridge.discardFrame();
 
   state.clock.serial = 75;
+  state.configuration.pacemakerDisplayMode = pacemaker::DisplayMode::ScorePlus;
   state.authority.bestScoreTarget.scoreAfterNotes =
       pacemaker::ScoreProgression({0, 2, 3});
   bridge.beginFrame(state, projectionAt(75));
+  expect(bridge.integerProperty({153}).value == -4, "Score plus skin difference uses current EX");
   expectRate(112, 1.0F / 6.0F,
              "a best ghost with different note count falls back to linear progress");
   bridge.discardFrame();

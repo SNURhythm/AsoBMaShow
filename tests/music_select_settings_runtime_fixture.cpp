@@ -130,6 +130,7 @@ struct Lifecycle {
   }
 };
 struct ApplicationContext {
+  void refreshAudioTimingProfile() {}
   std::string pendingKomboNotificationProfile;
   struct {
     struct Profile { std::string id; } profile;

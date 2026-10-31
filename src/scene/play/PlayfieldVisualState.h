@@ -149,6 +149,7 @@ struct PlayfieldPresentationConfig {
   float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;
   int pacemakerDiffSizePercent = AppSettings::kDefaultPacemakerDiffSizePercent;
   bool pacemakerDiffBold = false;
+  pacemaker::DisplayMode pacemakerDisplayMode = pacemaker::DisplayMode::Pace;
   bool judgementCounterEnabled = false;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;

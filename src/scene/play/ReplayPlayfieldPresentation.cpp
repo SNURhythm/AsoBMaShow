@@ -96,6 +96,8 @@ ReplayPlayfieldPresentation::ReplayPlayfieldPresentation(
     timelineTimeById_.emplace(timeline.id, timeline.timeMicros);
   }
   notesById_.reserve(chartModel_->notes.size());
+  if (configuration_.pacemakerDisplayMode == pacemaker::DisplayMode::ScoreMinus)
+    scoreProjectionCache_.reset(chartModel_->notes.size());
   replayNotesByTimeLaneAndSource_.reserve(chartModel_->notes.size());
   for (const auto &note : chartModel_->notes) {
     notesById_.emplace(note.id, &note);
@@ -565,6 +567,18 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
   const bool pms = beatoraja && (keyMode == 9 || keyMode == 18);
   const bool vanishes = recordedJudge.isNotePlayed() &&
       !(pms && event.judgement == Bad && event.action == ReplayEventAction::Press);
+  if (configuration_.pacemakerDisplayMode == pacemaker::DisplayMode::ScoreMinus &&
+      resolvedGraphNote != nullptr && isClassicLongNote(*resolvedGraphNote) &&
+      isLongNote(*resolvedGraphNote)) {
+    const auto *head = resolvedGraphNote->kind == ChartVisualNoteKind::LongHead
+                           ? resolvedGraphNote : notesById_.at(resolvedGraphNote->pairId);
+    const auto index = static_cast<int>(head - chartModel_->notes.data());
+    if (event.action == ReplayEventAction::Press && vanishes && head == resolvedGraphNote)
+      scoreProjectionCache_.setClassic(index, event.judgement);
+    else if (event.action == ReplayEventAction::Miss || event.action == ReplayEventAction::MultiBad ||
+             (event.action == ReplayEventAction::Release && event.judgement != None))
+      scoreProjectionCache_.resolveClassic(index);
+  }
   const auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
       if (event.action == ReplayEventAction::Miss) ++stagePassedNotes_;

@@ -903,6 +903,13 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
+      {"pacemakerDisplayMode", settings.pacemakerDisplayMode},
+      {"quickRetryEnabled", settings.quickRetryEnabled},
+      {"quickRetryAllConditionsFail", settings.quickRetryAllConditionsFail},
+      {"quickRetryGauge", settings.quickRetryGauge},
+      {"quickRetryPacemaker", settings.quickRetryPacemaker},
+      {"quickRetryGoals", settings.quickRetryGoals},
+      {"quickRetryNewPattern", settings.quickRetryNewPattern},
       {"selectedPacemakerGoalId", settings.selectedPacemakerGoalId},
       {"skinModeFilterName", settings.skinModeFilterName},
       {"skinSortId", settings.skinSortId},
@@ -1328,6 +1335,13 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
+  readValue(document, "pacemakerDisplayMode", settings.pacemakerDisplayMode, diagnostics);
+  readValue(document, "quickRetryEnabled", settings.quickRetryEnabled, diagnostics);
+  readValue(document, "quickRetryAllConditionsFail", settings.quickRetryAllConditionsFail, diagnostics);
+  readValue(document, "quickRetryGauge", settings.quickRetryGauge, diagnostics);
+  readValue(document, "quickRetryPacemaker", settings.quickRetryPacemaker, diagnostics);
+  readValue(document, "quickRetryGoals", settings.quickRetryGoals, diagnostics);
+  readValue(document, "quickRetryNewPattern", settings.quickRetryNewPattern, diagnostics);
   readValue(document, "selectedPacemakerGoalId",
             settings.selectedPacemakerGoalId, diagnostics);
   readBoundedSkinString(document, "skinModeFilterName",

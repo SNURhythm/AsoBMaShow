@@ -33,7 +33,14 @@ struct PlayOptionsPanelState {
   int playbackRatePercent = 100;
   bool playbackLocked = false;
   bool clubMode = false;
+  bool quickRetryEnabled = false;
+  bool quickRetryAllConditionsFail = false;
+  bool quickRetryGauge = true;
+  bool quickRetryPacemaker = true;
+  bool quickRetryGoals = true;
+  bool quickRetryNewPattern = false;
   std::string pacemakerTarget = "BEST";
+  std::string pacemakerDisplayMode = "pace";
   std::string pacemakerGoalLabel = "BEST";
   std::string profileId;
   lane_cover::State laneCovers;
@@ -52,7 +59,14 @@ struct PlayOptionsPanelCallbacks {
   std::function<void(int)> onPlaybackRateSelected;
   std::function<void(const std::string &)> onPlaybackModeSelected;
   std::function<void()> onClubModeToggled;
+  std::function<void(bool)> onQuickRetrySelected;
+  std::function<void(bool)> onQuickRetryFailurePolicySelected;
+  std::function<void(bool)> onQuickRetryGaugeSelected;
+  std::function<void(bool)> onQuickRetryPacemakerSelected;
+  std::function<void(bool)> onQuickRetryGoalsSelected;
+  std::function<void(bool)> onRetryPatternSelected;
   std::function<void(const std::string &)> onPacemakerSelected;
+  std::function<void(const std::string &)> onPacemakerDisplayModeSelected;
   std::function<void(const lane_cover::State &)> onLaneCoversChanged;
 };
 
@@ -87,7 +101,14 @@ private:
   View *gaugeAutoShiftBoundsSection = nullptr;
   ChoiceControlView *longNoteModeChoice = nullptr;
   ChoiceControlView *assistOptionChoice = nullptr;
+  ChoiceControlView *quickRetryChoice = nullptr;
+  ChoiceControlView *quickRetryFailurePolicyChoice = nullptr;
+  Button *quickRetryGaugeCheckbox = nullptr;
+  Button *quickRetryPacemakerCheckbox = nullptr;
+  Button *quickRetryGoalsCheckbox = nullptr;
+  ChoiceControlView *retryPatternChoice = nullptr;
   ChoiceControlView *pacemakerChoice = nullptr;
+  ChoiceControlView *pacemakerDisplayChoice = nullptr;
   TextView *assistOptionLabel = nullptr;
   SnappedSlider *playbackRateSlider = nullptr;
   TextView *playbackRateText = nullptr;

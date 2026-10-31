@@ -1,6 +1,8 @@
 #include "AssistOptionUtils.h"
 #include "scene/play/GameplayScoreState.h"
 #include "scene/play/RhythmState.h"
+#include "scene/play/QuickRetry.h"
+#include "scene/play/QuickRetrySummary.h"
 
 #include <bit>
 #include <cstdint>
@@ -278,7 +280,349 @@ void testBestClearFallsBackToBottomGaugeWhenNoneQualifies() {
 }
 } // namespace
 
+void testQuickRetryProjectedSurvivalToGroove() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+  state.configureGauge(GaugeType::Hazard, GaugeAutoShiftMode::SurvivalToGroove);
+  for (int i = 0; i < 80; ++i) state.commitJudge(JudgeResult(PGreat, 0));
+  quick_retry::Projection pending;
+  pending.pendingClassicJudgements[Bad] = 1;
+  auto played = state;
+  played.commitJudge(JudgeResult(Bad, 0));
+  for (int i = 0; i < 19; ++i) played.commitJudge(JudgeResult(PGreat, 0));
+  require(played.getClearTypeRank() == kClearTypeNormalClearRank,
+          "deferred BAD on Hazard can shift to Normal and clear");
+  require(!quick_retry::shouldRetry(
+              state, 100, {.lamp = kClearTypeNormalClearRank, .requireGaugeClear = true}, pending),
+          "both gauge and goal checks allow the projected Normal fallback before Hazard fails");
+  require(quick_retry::shouldRetry(state, 100, {.lamp = kClearTypeHardClearRank}, pending),
+          "Normal fallback cannot satisfy a survival clear goal");
+}
+
+void testQuickRetryRequiredGauge() {
+  const quick_retry::Targets gaugeOnly{.requireGaugeClear = true};
+  require(!gaugeOnly.empty(), "gauge requirement enables retry without pacemaker targets");
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  const auto armed = quick_retry::armReachableTargets(
+      state, 100, {.score = 201, .pacemakerScore = 199, .requireGaugeClear = true});
+  require(armed.score < 0 && armed.pacemakerScore == 199 && armed.requireGaugeClear,
+          "impossible initial goals leave independent pacemaker and gauge requirements armed");
+  const auto goalOnly = quick_retry::armReachableTargets(
+      state, 100, {.score = 198, .pacemakerScore = 201});
+  require(goalOnly.score == 198 && goalOnly.pacemakerScore < 0,
+          "impossible initial pacemaker leaves achievable goals armed");
+  GameplayScoreState lowTotal(beatorajaScoreConfig(1, 7, 1.0));
+  lowTotal.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  const auto scoreOnly = quick_retry::armReachableTargets(
+      lowTotal, 1, {.score = 2, .requireGaugeClear = true});
+  require(scoreOnly.score == 2 && !scoreOnly.requireGaugeClear,
+          "impossible initial gauge does not loop or disable an achievable score target");
+  state.stagePassedNotes = 99;
+  state.comboBreak = 1;
+  const auto setGauge = [&](GaugeType type, float value) {
+    state.gaugeValues[gaugeTypeIndex(type)] = value;
+    if (state.gaugeType == type) state.currentGauge = value;
+  };
+  setGauge(GaugeType::Normal, 78);
+  require(quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "selected groove gauge retries before chart end when clear is impossible");
+  require(quick_retry::shouldRetry(state, 100, {.score = 0, .requireGaugeClear = true}),
+          "reached score does not suppress the independent gauge requirement");
+  require(quick_retry::shouldRetry(state, 100, {.score = 2, .requireGaugeClear = true}),
+          "reachable score does not suppress the independent gauge requirement");
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly, {.hellChargeTicks = 2}),
+          "gauge-only retry includes remaining HCN recovery");
+  setGauge(GaugeType::Normal, 79);
+  state.lightAssistClearMark = true;
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "physical gauge border is independent of assist lamp caps");
+  require(quick_retry::shouldRetry(state, 100, {.score = 3, .requireGaugeClear = true}),
+          "achievable gauge does not suppress unreachable goals retry");
+  require(quick_retry::shouldRetry(state, 100, {.score = 0, .pacemakerScore = 3}),
+          "reachable goal does not suppress an independently enabled pacemaker retry");
+  require(quick_retry::shouldRetry(state, 100, {.score = 3, .pacemakerScore = 2}),
+          "reachable pacemaker does not suppress independently enabled goals retry");
+  setGauge(GaugeType::Normal, 78);
+  require(!quick_retry::shouldRetry(state, 100, {.pacemakerScore = 2}),
+          "pacemaker-only selection ignores unselected goal and gauge requirements");
+  state.lightAssistClearMark = false;
+
+  for (const auto mode : {GaugeAutoShiftMode::SelectToUnder, GaugeAutoShiftMode::BestClear}) {
+    state.configureGauge(GaugeType::Hard, mode, GaugeProfile::Standard, GaugeType::Easy);
+    setGauge(GaugeType::Easy, 78);
+    require(quick_retry::shouldRetry(state, 100, gaugeOnly),
+            "unreachable auto-shift lower bound retries even with a surviving higher gauge");
+    state.gaugeSurvivalFailed.fill(true);
+    state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Easy)] = false;
+    setGauge(GaugeType::Easy, 79);
+    require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+            "recoverable lower bound keeps attempt after higher gauges die");
+  }
+  state.configureGauge(GaugeType::Easy, GaugeAutoShiftMode::SelectToUnder,
+                       GaugeProfile::Standard, GaugeType::Hard);
+  setGauge(GaugeType::Easy, 79);
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "lower bound above selected gauge uses the effective clamped bound");
+
+  for (const auto mode : {GaugeAutoShiftMode::None, GaugeAutoShiftMode::Continue}) {
+    state.configureGauge(GaugeType::Hard, mode);
+    state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+    require(quick_retry::shouldRetry(state, 100, gaugeOnly),
+            "failed selected survival gauge retries including Continue mode");
+  }
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::SurvivalToGroove);
+  setGauge(GaugeType::Normal, 78);
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "Survival-to-Groove keeps a surviving selected gauge");
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+  state.gaugeType = GaugeType::Normal;
+  setGauge(GaugeType::Normal, 79);
+  require(!quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "Survival-to-Groove permits recovery through Normal");
+  setGauge(GaugeType::Normal, 78);
+  require(quick_retry::shouldRetry(state, 100, gaugeOnly),
+          "Survival-to-Groove retries when Normal fallback cannot recover");
+}
+
+void testQuickRetryFailurePolicy() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  state.stagePassedNotes = 99;
+  state.comboBreak = 1;
+  for (int enabled = 0; enabled < 8; ++enabled) {
+    for (int failed = 0; failed < 8; ++failed) {
+      state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] =
+          (failed & 1) ? 78 : 79;
+      for (const bool all : {false, true}) {
+        const quick_retry::Targets targets{
+            .score = (enabled & 4) ? ((failed & 4) ? 3 : 2) : -1,
+            .pacemakerScore = (enabled & 2) ? ((failed & 2) ? 3 : 2) : -1,
+            .requireGaugeClear = bool(enabled & 1), .allConditionsFail = all};
+        const bool expected = enabled != 0 &&
+            (all ? (enabled & failed) == enabled : (enabled & failed) != 0);
+        require(quick_retry::shouldRetry(state, 100, targets) == expected,
+                "Any/All combines only enabled gauge, pacemaker and goal groups");
+      }
+    }
+  }
+  const quick_retry::Targets alternatives{.score = 3, .lamp = kClearTypeNormalClearRank,
+      .pacemakerScore = 3, .allConditionsFail = true};
+  state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 79;
+  require(!quick_retry::shouldRetry(state, 100, alternatives),
+          "All waits while an alternative goal lamp remains reachable");
+  require(!quick_retry::shouldRetry(state, 100,
+              {.score = 0, .pacemakerScore = 3, .allConditionsFail = true}),
+          "a goal already reached this attempt keeps All mode from retrying");
+  GameplayScoreState initial(beatorajaScoreConfig(100, 7, 100.0));
+  const auto armed = quick_retry::armReachableTargets(initial, 100,
+      {.score = 201, .pacemakerScore = 199, .allConditionsFail = true});
+  require(armed.allConditionsFail && armed.score < 0 && armed.pacemakerScore == 199,
+          "All mode preserves its policy while discarding impossible starting conditions");
+  require(quick_retry::shouldRetry(state, 100, armed),
+          "discarded starting conditions do not prevent All mode from retrying");
+}
+
+void testQuickRetryDeferredBadGaugeFloor() {
+  struct Case { float gauge; int remaining; int bads; int hcnTicks; bool clears; };
+  for (const auto &test : std::array{
+           Case{2, 80, 1, 0, true}, Case{2, 78, 1, 0, false},
+           Case{20, 63, 1, 0, false}, Case{2, 81, 2, 0, true},
+           Case{2, 78, 1, 2, true}}) {
+    GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+    state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+    state.stagePassedNotes = 100 - test.remaining;
+    state.comboBreak = 1;
+    state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = test.gauge;
+    quick_retry::Projection pending;
+    pending.pendingClassicJudgements[Bad] = test.bads;
+    pending.hellChargeTicks = test.hcnTicks;
+
+    auto played = state;
+    for (int i = 0; i < test.bads; ++i) played.commitJudge(JudgeResult(Bad, 0));
+    for (int i = test.bads; i < test.remaining; ++i) played.commitJudge(JudgeResult(PGreat, 0));
+    for (int i = 0; i < test.hcnTicks; ++i) played.applyGaugeJudgementRate(Great, 0.5F);
+    if ((played.getClearTypeRank() == kClearTypeNormalClearRank) != test.clears)
+      std::cerr << "start=" << test.gauge << " remaining=" << test.remaining
+                << " bads=" << test.bads << " ticks=" << test.hcnTicks
+                << " final=" << played.currentGauge << '\n';
+    require((played.getClearTypeRank() == kClearTypeNormalClearRank) == test.clears,
+            "deferred BAD fixture confirms attainable clear with real gauge clamping");
+    require(quick_retry::shouldRetry(state, 100, {.lamp = kClearTypeNormalClearRank}, pending) ==
+                !test.clears,
+            "projection applies deferred damage at the floor before optimistic recovery");
+  }
+}
+
+void testQuickRetryReachability() {
+  require(quick_retry::remainingHellChargeTicks(1'000'000, 1'200'000, 0, 0) == 0,
+          "exactly 200ms future HCN cannot earn a strict recovery tick");
+  require(quick_retry::remainingHellChargeTicks(1'000'000, 2'000'000, 1'500'000, -100'000) == 2,
+          "negative HCN debt can be discharged before future recovery");
+  const std::array mixed{quick_retry::Condition{.score = 199},
+                         quick_retry::Condition{.score = 198},
+                         quick_retry::Condition{.lamp = 400},
+                         quick_retry::Condition{.lamp = 200}};
+  const auto targets = quick_retry::compileTargets(mixed);
+  require(targets.score == 198 && targets.lamp == 200,
+          "OR goals compile to the weakest unfinished score and lamp once");
+  quick_retry::ProjectionCache cache;
+  cache.reset(4);
+  cache.setClassic(1, Great);
+  cache.setClassic(1, Great);
+  cache.setHellCharge(2, 4);
+  cache.setHellCharge(3, 2);
+  require(cache.get().pendingClassicJudgements[Great] == 1 && cache.get().hellChargeTicks == 6,
+          "per-note updates replace contributions rather than double count");
+  cache.resolveClassic(1);
+  cache.setHellCharge(2, 1);
+  require(cache.get().pendingClassicJudgements[Great] == 0 && cache.get().hellChargeTicks == 3,
+          "resolved heads and earned ticks update cached totals");
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  const std::array score{quick_retry::Condition{.score = 199}};
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(score)), "perfect start can reach target");
+  quick_retry::Projection pending;
+  pending.pendingClassicJudgements[Great] = 1;
+  const std::array maxScore{quick_retry::Condition{.score = 200}};
+  require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(maxScore), pending),
+          "accepted GREAT classic head makes MAX impossible before its tail");
+  state.commitJudge(JudgeResult(Great, 0));
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(score)), "exactly attainable EX target continues");
+  state.commitJudge(JudgeResult(Great, 0));
+  require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(score)), "one EX below target retries immediately");
+  state.commitJudge(JudgeResult(Kpoor, 0));
+  require(state.stagePassedNotes == 2, "empty poor consumes no remaining score opportunity");
+  const std::array alternatives{quick_retry::Condition{.score = 199},
+                               quick_retry::Condition{.score = 198}};
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(alternatives)), "any achievable alternative keeps attempt");
+  require(!quick_retry::shouldRetry(state, 100, {}), "no targets must not cause retry loop");
+
+  state.comboBreak = 1;
+  state.stagePassedNotes = 99;
+  state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 78;
+  const std::array clear{quick_retry::Condition{.lamp = 300}};
+  require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(clear)), "one recovery point cannot reach 80 border");
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(clear), {.hellChargeTicks = 2}), "HCN recovery can rescue clear target");
+  state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 79;
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(clear)), "exact gauge border remains attainable");
+  const std::array compound{quick_retry::Condition{.score = 199},
+                           quick_retry::Condition{.lamp = 300}};
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(compound)), "unreachable score does not discard reachable lamp");
+  const std::array fc{quick_retry::Condition{.lamp = 600}};
+  require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(fc)), "broken combo cannot recover full combo");
+  state.comboBreak = 0;
+  state.combo = state.maxCombo = 99;
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(fc)), "normal gauge can still earn full combo");
+  state.lightAssistClearMark = true;
+  require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(clear)), "assist cap prevents normal clear goal");
+
+  state.lightAssistClearMark = false;
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+  const std::array reached{quick_retry::Condition{.score = 2}};
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(reached)),
+          "survival failure must preserve a score target already reached");
+  const std::array lostAtFailure{quick_retry::Condition{.score = 3}};
+  require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(lostAtFailure)),
+          "terminal survival failure cannot earn remaining EX");
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
+  state.comboBreak = 1;
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hazard)] = true;
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::ExHard)] = true;
+  const std::array hard{quick_retry::Condition{.lamp = 400}};
+  require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(hard)), "Best Clear retains surviving hard gauge");
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+  require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(hard)), "dead hard gauges cannot recover after shift");
+}
+
+void testQuickRetrySummaryStartupEligibility() {
+  GameplayScoreState initial(beatorajaScoreConfig(100, 7, 200));
+  initial.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+  initial.setAssistClearMark(AssistClearMark::LightAssistedEasy);
+  require(quick_retry::startupTargetEligible(initial, 100, {.lamp = kClearTypeHardClearRank}, true) == false,
+          "Light Assist excludes the impossible HARD summary even with HCN recovery");
+  require(quick_retry::startupTargetEligible(initial, 100, {.pacemakerScore = 178}, true) == true,
+          "the independent AAA pacemaker remains in the summary");
+  require(quick_retry::startupTargetEligible(initial, 100, {.score = 201}, false) == false,
+          "summary omits scores beyond a perfect play");
+  require(quick_retry::startupTargetEligible(initial, 100, {.requireGaugeClear = true}, true) == true,
+          "assist caps do not remove the physical HARD gauge requirement");
+  GameplayScoreState lowTotal(beatorajaScoreConfig(1, 7, 1));
+  require(quick_retry::startupTargetEligible(lowTotal, 1, {.requireGaugeClear = true}, false) == false,
+          "unreachable initial groove gauge is omitted without long notes");
+  require(!quick_retry::startupTargetEligible(lowTotal, 1, {.requireGaugeClear = true}, true).has_value(),
+          "unknown HCN recovery defers a summary instead of disabling a possible target");
+}
+
+void testQuickRetrySummaryCollapsesActualHurdles() {
+  using namespace quick_retry;
+  const Hurdle aa{HurdleKind::Score, 140, "AA"}, aaa{HurdleKind::Score, 160, "AAA"};
+  const Hurdle clear{HurdleKind::Clear, 300, "CLEAR"}, hard{HurdleKind::Clear, 400, "HARD"};
+  const std::vector<HurdleAlternatives> groups{{{aa}}, {{aaa}}};
+  require(hurdleText(summarizeHurdles(groups, false), "or") == "AAA",
+          "Any-fails uses the strictest independent score hurdle");
+  require(hurdleText(summarizeHurdles(groups, true), "or") == "AA",
+          "All-fail uses the easiest independent score hurdle");
+  require(hurdleText(summarizeHurdles({{{hard}}, {{clear}}}, false), "or") == "HARD" &&
+              hurdleText(summarizeHurdles({{{hard}}, {{clear}}}, true), "or") == "CLEAR",
+          "comparable clear requirements follow the same strict/easy policy");
+  const std::vector<HurdleAlternatives> mixed{{{hard}}, {{aaa}}, {{aa}, {clear}}};
+  require(hurdleText(summarizeHurdles(mixed, false), "or") == "HARD + AAA",
+          "a stricter score hurdle subsumes weaker alternative goals");
+  const auto all = summarizeHurdles(mixed, true);
+  require(hurdleText(all, "or") == "AA or CLEAR",
+          "All-fail retains the weakest score and clear alternatives");
+  const std::vector<HurdleAlternatives> shared{
+      {{Hurdle{HurdleKind::Gauge, 0, "HARD"}}}, {{Hurdle{HurdleKind::Score, 0, "AAA"}}}};
+  require(hurdleText(summarizeHurdles(shared, false), "or") == "HARD + AAA" &&
+              hurdleText(summarizeHurdles(shared, true), "or") == "HARD or AAA",
+          "shared gauge and grade labels preserve Any/All without chart-specific thresholds");
+  const Hurdle physical{HurdleKind::Gauge, 300, "NORMAL"};
+  require(summarizeHurdles({{{physical}}, {{hard}}}, false).front().size() == 2,
+          "auto-shift physical gauge checks are not conflated with a clear lamp");
+  // Compare the simplified expression with the original groups at boundaries.
+  for (bool allFail : {false, true}) {
+    const auto summary = summarizeHurdles(mixed, allFail);
+    for (int score : {139, 140, 159, 160, 200}) {
+      for (int lamp : {0, 300, 400, 600}) {
+        const auto satisfied = [&](const HurdleClause &clause) {
+          return std::all_of(clause.begin(), clause.end(), [&](const Hurdle &h) {
+            return (h.kind == HurdleKind::Score ? score : lamp) >= h.value;
+          });
+        };
+        const bool original = allFail
+            ? (lamp >= 400 || score >= 160 || score >= 140 || lamp >= 300)
+            : (lamp >= 400 && score >= 160 && (score >= 140 || lamp >= 300));
+        require(std::any_of(summary.begin(), summary.end(), satisfied) == original,
+                "concise hurdles preserve the original retry boundaries");
+      }
+    }
+  }
+  std::vector<chart_goals::GoalProgress> goals(4);
+  goals[0].goal.longNoteMode = 1;
+  goals[0].goal.target = {.lamp = 400, .scoreNumerator = 24};
+  goals[0].progress.lampMet = true;
+  goals[1].goal.longNoteMode = 1;
+  goals[1].goal.target = {.scoreNumerator = 21};
+  goals[2].goal.longNoteMode = 2;
+  goals[2].goal.target = {.scoreNumerator = 18};
+  goals[3].goal.longNoteMode = 1;
+  goals[3].goal.target = {.lamp = 300};
+  goals[3].progress.achieved = true;
+  const auto compiled = compileGoalTargets(goals, 1, 100);
+  require(compiled.targets.score == 156 && compiled.targets.lamp < 0 &&
+              compiled.scoreLabel->scoreNumerator == 21,
+          "summary and gameplay share unfinished, mode-specific goal thresholds");
+}
+
 int main() {
+  testQuickRetrySummaryStartupEligibility();
+  testQuickRetrySummaryCollapsesActualHurdles();
+  testQuickRetryProjectedSurvivalToGroove();
+  testQuickRetryRequiredGauge();
+  testQuickRetryFailurePolicy();
+  testQuickRetryDeferredBadGaugeFloor();
+  testQuickRetryReachability();
   static_assert(kClearTypeLightAssistedEasyClearRank == 50);
   static_assert(kClearTypeAssistedEasyClearRank == 100);
   static_assert(normalizeClearLamp(150) == kClearTypeLightAssistedEasyClearRank);

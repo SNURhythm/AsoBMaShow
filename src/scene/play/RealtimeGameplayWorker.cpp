@@ -78,7 +78,11 @@ void RealtimeGameplayWorker::SnapshotLease::release() noexcept {
 RealtimeGameplayWorker::RealtimeGameplayWorker(
     GameplayDefinition definition, RealtimeGameplayWorkerConfig config)
     : definition_(std::move(definition)), config_(std::move(config)),
-      simulation_(definition_, config_.simulation) {
+      simulation_(definition_, [this] {
+        auto simulationConfig = config_.simulation;
+        simulationConfig.trackQuickRetry = config_.publishQuickRetryProjection;
+        return simulationConfig;
+      }()) {
   std::size_t laneStorageSize = 0;
   for (const auto &lane : definition_.lanes()) {
     if (lane.lane >= 0) {
@@ -996,6 +1000,8 @@ void RealtimeGameplayWorker::publishSnapshot() {
       snapshot.longNoteHoldingByLane[lane] = holdingCounts[lane] != 0;
     }
     snapshot.attempt = simulation_.snapshot();
+    if (config_.publishQuickRetryProjection)
+      snapshot.quickRetryProjection = simulation_.quickRetryProjection();
     const auto &graph = simulation_.skinGameplayGraphState();
     if (firstPublication ||
         snapshot.skinGameplayGraph.judgementRevision != graph.judgementRevision ||

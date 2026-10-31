@@ -63,6 +63,9 @@ public:
   // Mirrors the legacy export loop's per-frame classic-LN tail release. The
   // adapter owns visual endpoint state, so callers never mutate parser notes.
   void releaseDueClassicLongNoteTails(long long gameplayTimeMicros);
+  [[nodiscard]] const quick_retry::Projection &scoreProjection() const noexcept {
+    return scoreProjectionCache_.get();
+  }
   // Apply one recorded lane-cover mutation. Export uses this before its final
   // frame authority snapshot so coalesced events retain their source order.
   void applyLaneCoverTransition(const ReplayLaneCoverTransition &, double bpm);
@@ -177,6 +180,7 @@ private:
   std::vector<HcnPairPlaybackState> hcnPairs_;
   std::vector<ChartVisualId> classicLongTailIds_;
   std::size_t classicLongTailCursor_ = 0;
+  quick_retry::ProjectionCache scoreProjectionCache_;
   int progressiveMaximumCombo_ = 0;
   int stageCombo_ = 0;
   int stagePassedNotes_ = 0;

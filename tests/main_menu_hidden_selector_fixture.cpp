@@ -36,6 +36,7 @@ struct ImageView { static inline int drops=0; static void dropAllCache(){++drops
 struct Completion {std::filesystem::path chartPath;int targetIdentity=0,selectionGeneration=0;};
 struct Tasks {std::vector<Completion> completions; std::vector<Completion> takeDownloadedIndexCompletions(){auto r=std::move(completions);completions.clear();return r;}};
 struct Context {
+ void refreshAudioTimingProfile() {}
  std::string pendingKomboNotificationProfile;
  struct ProfileManager {struct Profile {std::string id="active";} profile;const Profile& activeProfile() const{return profile;}} profileManager;
  std::atomic_bool chartLibraryFoldersReloadRequested=false,chartLibraryListReloadRequested=false;
@@ -75,6 +76,7 @@ struct MainMenuScene {
  std::optional<std::string> reloadScoreClearRanks(){++scoreReads;scoreClearRanksRevision=context.scoreRepository.GetRevision();return {};}
  void reloadFolderItems(bool){++folderReloads;assignmentDayId=kombo::today();}void reloadChartList(bool){++chartReloads;}
  void refreshLongNoteModeClearRankViews(){++cacheViewRefreshes;}
+ void refreshQuickRetryStartButton(){}
  std::optional<std::string> refreshScoreClearRankViews(){reloadScoreClearRanks();refreshLongNoteModeClearRankViews();return {};}
  float portraitDetailsHeight(float){return 0;}
  void updatePreviewVisuals(){}void refreshIrRecordListIfNeeded(){}void refreshTasksButton(){}void applyFindBmsUpdates(){}

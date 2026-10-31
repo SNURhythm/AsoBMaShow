@@ -36,6 +36,8 @@ main_menu_library::FindBmsChartIdentity main_menu_library::findBmsChartIdentity(
     const bms_parser::ChartMeta &meta) { return {.sha256 = meta.SHA256, .md5 = meta.MD5}; }
 
 struct Toolbar {
+  bool quickRetry = false;
+  void setQuickRetryEnabled(bool value) { quickRetry = value; }
   struct Control { MusicSelectToolbarControl control; };
   std::vector<Control> entries{{MusicSelectToolbarControl::ChartMenu},
                               {MusicSelectToolbarControl::ChartViewer},
@@ -50,7 +52,7 @@ struct MusicSelectScene {
     std::atomic_bool appInBackground = false, storageMaintenanceActive = false, backgroundTasksPausedForForegroundScene = false;
     TaskService *chartLibraryTasks = nullptr;
     void *sceneManager = nullptr;
-    struct { bool findBmsSkipUnarchivingForNonSolidArchives = false; storage_management::StoragePreferences storagePreferences; } settings;
+    struct { bool quickRetryEnabled = false; bool findBmsSkipUnarchivingForNonSolidArchives = false; storage_management::StoragePreferences storagePreferences; } settings;
   } context;
   struct Bars {
     std::vector<MusicSelectBar> rows;
@@ -98,6 +100,9 @@ int main() {
   scene.bars_.rows = {{.kind = skin::MusicSelectBarKind::Song, .chart = missing}};
   scene.refreshToolbarAvailability();
   assert(scene.canDownloadSelectedChart());
+  scene.context.settings.quickRetryEnabled = true;
+  scene.refreshToolbarAvailability();
+  assert(toolbar.quickRetry);
   assert(!toolbar.enabled[Control::ChartViewer] && !toolbar.enabled[Control::ChartRecords]);
   assert(!scene.toolbarControlAvailable(Control::RevealChart));
   for (bool *guard : {&scene.failed_, &scene.blocked}) {
