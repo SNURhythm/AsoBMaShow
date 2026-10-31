@@ -5475,7 +5475,7 @@ void GamePlayScene::playQuickRetryFeedback() {
 void GamePlayScene::renderQuickRetryFeedback() {
   auto &started = context.quickRetryFeedback.startedMicros;
   if (!started) return;
-  constexpr float durationMicros = 240'000.0F;
+  constexpr float durationMicros = 320'000.0F;
   const float progress = std::clamp(float(nowMicros() - *started) / durationMicros, 0.0F, 1.0F);
   if (progress >= 1.0F) {
     started.reset();
@@ -5483,11 +5483,11 @@ void GamePlayScene::renderQuickRetryFeedback() {
   }
   const float fade = (1.0F - progress) * (1.0F - progress);
   const auto color = app_theme::withAlpha(app_theme::amber(),
-      static_cast<std::uint8_t>(70.0F * fade)).toABGR();
+      static_cast<std::uint8_t>(190.0F * fade)).toABGR();
   const auto clear = app_theme::withAlpha(app_theme::amber(), 0).toABGR();
   const float width = rendering::window_width;
   const float height = rendering::window_height;
-  const float edge = 8.0F + 10.0F * progress;
+  const float edge = 28.0F + 30.0F * progress;
   auto &batch = quickRetryFeedbackBatch;
   batch.setSubmitView(rendering::ui_view);
   batch.begin();
@@ -5495,6 +5495,14 @@ void GamePlayScene::renderQuickRetryFeedback() {
   batch.addRectVerticalGradient(0, height - edge, width, edge, clear, color);
   batch.addRectColors(0, edge, edge, height - 2 * edge, color, clear, clear, color);
   batch.addRectColors(width - edge, edge, edge, height - 2 * edge, clear, color, color, clear);
+  // A crisp inner rim makes the broad glow visible over bright BGA/skins.
+  const auto rim = Color(255, 239, 205,
+      static_cast<std::uint8_t>(145.0F * fade)).toABGR();
+  constexpr float rimWidth = 3.0F;
+  batch.addRect(0, 0, width, rimWidth, rim);
+  batch.addRect(0, height - rimWidth, width, rimWidth, rim);
+  batch.addRect(0, rimWidth, rimWidth, height - 2 * rimWidth, rim);
+  batch.addRect(width - rimWidth, rimWidth, rimWidth, height - 2 * rimWidth, rim);
   batch.end();
 }
 

@@ -15,9 +15,9 @@ import soundfile as sf
 from earshot.forge import bank, sfx
 
 ROOT = Path(__file__).resolve().parents[1]
-QUERY = "a soft digital interface reset click with a short airy tail"
-ALTERNATIVES = ["a sharp harsh click", "a cartoon bubble pop",
-                "a laser gun blast", "an error buzz"]
+QUERY = "a delicate glassy two-note interface chime"
+ALTERNATIVES = ["an alarm beep", "a harsh buzzer",
+                "a cartoon boing", "a metallic impact"]
 
 
 def main():
@@ -25,26 +25,27 @@ def main():
     parser.add_argument("--feedback", action="store_true")
     args = parser.parse_args()
     output = ROOT / "assets/quick-retry.wav"
-    click, click_meta = bank.render("pro_click/soft", peak_db=-16)
-    air, air_meta = bank.render("swish/flick", dur=0.20, peak_db=-29)
-    if click.ndim == 1:
-        click = np.column_stack((click, click))
-    if air.ndim == 1:
-        air = np.column_stack((air, air))
-    # The quiet air layer starts with the click: one gesture, with no lead-in.
-    samples = np.zeros((max(len(click), len(air)), 2))
-    samples[:len(click)] += click
-    samples[:len(air)] += air
-    samples *= 10 ** (-16 / 20) / np.max(np.abs(samples))
+    first, first_meta = bank.render("mallet/celesta", pitch="D6", dur=0.26, peak_db=-16)
+    second, second_meta = bank.render("mallet/celesta", pitch="A6", dur=0.26, peak_db=-17)
+    if first.ndim == 1:
+        first = np.column_stack((first, first))
+    if second.ndim == 1:
+        second = np.column_stack((second, second))
+    second_offset = round(0.09 * 48000)
+    samples = np.zeros((max(len(first), second_offset + len(second)), 2))
+    samples[:len(first)] += first
+    samples[second_offset:second_offset + len(second)] += second
+    samples *= 10 ** (-14 / 20) / np.max(np.abs(samples))
     metadata = {"components": [
-                    {key: item[key] for key in ("id", "seed", "dur_s", "peak_db")}
-                    for item in (click_meta, air_meta)],
+                    {**{key: item[key] for key in ("id", "seed", "dur_s", "peak_db")},
+                     "pitch": pitch, "offset_s": offset}
+                    for item, pitch, offset in ((first_meta, "D6", 0), (second_meta, "A6", 0.09))],
                 "duration_s": len(samples) / 48000,
-                "sample_rate": 48000, "peak_dbfs": -16}
+                "sample_rate": 48000, "peak_dbfs": -14}
     sf.write(output, samples, 48000, subtype="PCM_16")
     # Check the quantized asset that ships, not just the in-memory synthesis.
     decoded, rate = sf.read(output)
-    metadata["checks"] = sfx.check(decoded, sr=rate, category="pro_click")
+    metadata["checks"] = sfx.check(decoded, sr=rate, category="mallet")
     if not metadata["checks"]["ok"]:
         raise SystemExit(json.dumps(metadata["checks"], indent=2))
     report = {"earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",

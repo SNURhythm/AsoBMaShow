@@ -40,15 +40,15 @@ the personal-best ghost gains replay progression.
 
 ## Automatic retry feedback
 
-Automatic Quick Retry plays a short digital reset cue and a 240 ms amber edge fade
-for both Keep and Reshuffle. Manual retry remains silent. The cue is preloaded
+Automatic Quick Retry plays a glassy two-note cue and a 320 ms amber edge pulse
+with a bright pale-gold rim for both Keep and Reshuffle. Manual retry remains silent. The cue is preloaded
 when Quick Retry targets are armed and uses the system-audio processor, so chart
 stop/reload cannot cut it off or change its pitch. Master volume and mute apply.
 The sound and fade state survive replacement of the gameplay scene; repeated
 frames for a pending retry do not retrigger either effect. Feedback does not add
 a wait to the retry transition.
 
-The 200 ms WAV is generated and checked with Earshot; see
+The 350 ms WAV is generated and checked with Earshot; see
 [its generation and feedback record](../audio/quick-retry.md).
 
 ## Lane covers
