@@ -422,6 +422,7 @@ final class NativeDocumentView {
         activeSyntaxSpans = 0;
     }
 
+    @android.annotation.TargetApi(33)
     private static final class BackApi33 {
         static Object register(AsoBMaShowActivity activity, Runnable onBack) {
             android.window.OnBackInvokedCallback callback = onBack::run;
