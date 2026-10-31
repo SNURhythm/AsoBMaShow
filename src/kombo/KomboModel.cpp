@@ -389,6 +389,14 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
     if (isGoalsAssignment(progress.requirement)) {
       for (const auto &goal : p.achievedGoals) {
         if (day.points >= day.config.dailyGoal && remainingBonus == 0) break;
+        // A preceding completion can reach the target within this result.
+        // Switch before consuming another identity; old partial counts do not
+        // carry into the one-goal bonus rounds.
+        if (day.points >= day.config.dailyGoal &&
+            progress.requirement.chartCount != progress.bonusChartCount) {
+          progress.requirement.chartCount = progress.bonusChartCount;
+          progress.charts = 0;
+        }
         if (goal.empty() || !progress.usedCharts.insert(goal).second) continue;
         progress.chartProgress.emplace(goal, ChartAchievement{});
         if (++progress.charts < progress.requirement.chartCount) continue;

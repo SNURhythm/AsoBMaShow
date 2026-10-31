@@ -114,7 +114,10 @@ int main() {
     // Later completions from the same result earn bonus rewards.
     attempt.day = 44001;
     attempt.achievedGoals = {"a", "b", "c", "d", "e", "f"};
-    CHECK(record(goals, attempt, 0) == 11 && goals.savings == 11);
+    CHECK(record(goals, attempt, 0) == 13 && goals.savings == 13);
+    CHECK(goals.days.at(44001).assignments[0].completedRounds == 4);
+    CHECK(goals.days.at(44001).assignments[0].usedCharts.size() == 6);
+    CHECK(record(goals, attempt, 0) == 0);
   }
   {
     State crossing;
@@ -133,6 +136,8 @@ int main() {
   {
     State capped;
     Config routine; routine.dailyGoal=10;
+    routine.assignments = {goalsAssignment()};
+    routine.assignments[0].chartCount = 2;
     configure(capped,routine,45001);
     auto attempt=play(45001,"many-goals");
     for (int i=0;i<30;++i) attempt.achievedGoals.push_back("goal-"+std::to_string(i));
@@ -140,7 +145,7 @@ int main() {
     const auto &day=capped.days.at(45001);
     CHECK(day.points==20 && capped.savings==10 && bonusPoints(day)==10);
     CHECK(day.assignments.front().completedRounds==11);
-    CHECK(day.assignments.front().usedCharts.size()==11);
+    CHECK(day.assignments.front().usedCharts.size()==12);
     CHECK(record(capped,attempt,0)==0);
   }
   State activity;
