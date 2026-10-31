@@ -266,6 +266,10 @@ void FolderGoalsScene::build() {
     auto *panel=card(body);
     text(panel,draft_.source.name.empty() ? draft_.source.identity : draft_.source.name,27);
     text(panel,i18n::tr("folder_goals.ui.scope_help"),17)->setThemedColor(app_theme::textSecondary);
+    if (editing_) {
+      text(panel,std::string(i18n::tr("play_options.long_note_mode.label"))+": "+long_note_mode::idFromValue(draft_.longNoteMode),24)
+          ->setThemedColor(app_theme::cyan);
+    }
     if (editing_ && newGoal_) {
       auto *modes=row(panel);
       for (int mode:{1,2,3}) button(modes,long_note_mode::idFromValue(mode),[this,mode]{later([this,mode]{changeScope(mode,draft_.target.type);});},mode==draft_.longNoteMode)->setFlex(1);
