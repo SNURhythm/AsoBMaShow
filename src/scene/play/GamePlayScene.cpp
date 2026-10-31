@@ -2375,7 +2375,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       .inputMaintenance = {.context = session.get(),
                             .run = &RealtimeGameplaySession::maintainTouchInput},
       .inputTriggeredKeysounds = !options.autoKeySound,
-      .publishQuickRetryProjection = !quickRetryTargets.empty(),
+      .publishQuickRetryProjection = !quickRetryTargets.empty() ||
+          pacemaker::displayModeFromId(context.settings.pacemakerDisplayMode) == pacemaker::DisplayMode::ScoreMinus,
       .activationSongTimeMicros = policy.activationSongTimeMicros,
       .practiceCompletionSongTimeMicros =
           policy.practiceCompletionSongTimeMicros,
@@ -3578,6 +3579,7 @@ void GamePlayScene::init() {
       .pacemakerDiffY = context.settings.presentation().pacemakerDiffY,
       .pacemakerDiffSizePercent = context.settings.presentation().pacemakerDiffSizePercent,
       .pacemakerDiffBold = context.settings.presentation().pacemakerDiffBold,
+      .pacemakerDisplayMode = pacemaker::displayModeFromId(context.settings.pacemakerDisplayMode),
       .judgementCounterEnabled = context.settings.presentation().judgementCounterEnabled,
       .judgementCounterPosition = context.settings.presentation().judgementCounterPosition,
       .fastSlowCriteria = context.settings.presentation().judgementTimingFastSlowCriteria,
@@ -6528,7 +6530,7 @@ void GamePlayScene::capturePlayfieldVisualState(
       .graphGaugeState = state->gaugeSnapshot(),
       .pacemakerTarget = activePacemakerTarget,
       .pacemakerStatus =
-          pacemaker::snapshotForState(activePacemakerTarget, *state),
+          pacemaker::snapshotForState(activePacemakerTarget, *state, currentQuickRetryProjection()),
       .goalPacemakerSelected = pacemaker::normalizeTargetId(options.pacemakerTarget) == pacemaker::kTargetGoal,
       .skinIrTarget = activeSkinIrTarget,
       .player1RandomOption = gameplayRandomOptionIndex(playOptions.option),

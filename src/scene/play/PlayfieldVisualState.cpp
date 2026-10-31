@@ -28,7 +28,9 @@ bool sameSnapshot(const pacemaker::Snapshot &left,
          left.maxScore == right.maxScore && left.delta == right.delta &&
          left.playedNotes == right.playedNotes &&
          left.totalNotes == right.totalNotes &&
-         left.usesReplayProgression == right.usesReplayProgression;
+         left.usesReplayProgression == right.usesReplayProgression &&
+         left.pendingScoreLoss == right.pendingScoreLoss &&
+         left.scoreStopped == right.scoreStopped;
 }
 
 } // namespace

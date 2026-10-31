@@ -1351,6 +1351,24 @@ void testQuickRetryRoundTrip() {
          "each disabled retry condition survives settings reload");
 }
 
+void testPacemakerDisplayModeRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "pacemaker-display.json";
+  writeFile(path, R"({"schemaVersion":4})");
+  auto settings = AppSettingsStore::Load(path).settings;
+  expect(settings.pacemakerDisplayMode == "pace", "existing profiles retain paced comparison");
+  for (const auto *mode : {"score_minus", "score_plus"}) {
+    settings.pacemakerDisplayMode = mode;
+    std::string error;
+    expect(AppSettingsStore::Save(path, settings, error), "pacemaker display mode saves");
+    expect(AppSettingsStore::Load(path).settings.pacemakerDisplayMode == mode,
+           "pacemaker display mode survives reload");
+  }
+  settings.pacemakerDisplayMode = "unknown";
+  settings.sanitize();
+  expect(settings.pacemakerDisplayMode == "pace", "invalid display mode falls back to Pace");
+}
+
 void testIpadGestureReminderRoundTrip() {
   TempDirectory temp;
   expect(AppSettings{}.ipadGestureReminderEnabled,
@@ -3146,6 +3164,7 @@ int main() {
   testMetalDisplayLinkDefaultPersistence();
   testPrepMetronomeDurationPersistence();
   testQuickRetryRoundTrip();
+  testPacemakerDisplayModeRoundTrip();
   testIpadGestureReminderRoundTrip();
   testScreenOrientationRoundTripAndDefaults();
   testReplayPreferencesSurviveSettingsRoundTrip();

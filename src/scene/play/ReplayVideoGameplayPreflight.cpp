@@ -152,6 +152,7 @@ PlayfieldPresentationConfig replayGameplayPresentationConfig(
       .pacemakerDiffY = settings.presentation().pacemakerDiffY,
       .pacemakerDiffSizePercent = settings.presentation().pacemakerDiffSizePercent,
       .pacemakerDiffBold = settings.presentation().pacemakerDiffBold,
+      .pacemakerDisplayMode = pacemaker::displayModeFromId(settings.pacemakerDisplayMode),
       .judgementCounterEnabled = settings.presentation().judgementCounterEnabled,
       .judgementCounterPosition = settings.presentation().judgementCounterPosition,
       .fastSlowCriteria = settings.presentation().judgementTimingFastSlowCriteria,

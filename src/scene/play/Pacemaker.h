@@ -5,12 +5,15 @@
 #include "../../ResultContracts.h"
 #include "../../repositories/ScoreRepository.h"
 #include "RhythmState.h"
+#include "PacemakerDisplayMode.h"
+#include "QuickRetryProjection.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cctype>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -83,7 +86,21 @@ struct Snapshot {
   int playedNotes = 0;
   int totalNotes = 0;
   bool usesReplayProgression = false;
+  int pendingScoreLoss = 0;
+  bool scoreStopped = false;
 };
+
+inline int displayDelta(const Snapshot &snapshot, DisplayMode mode) {
+  if (mode == DisplayMode::Pace) return snapshot.delta;
+  std::int64_t score = snapshot.currentScore;
+  if (mode == DisplayMode::ScoreMinus && !snapshot.scoreStopped) {
+    score += std::max<std::int64_t>(0,
+        2LL * std::max(0, snapshot.totalNotes - snapshot.playedNotes) - snapshot.pendingScoreLoss);
+  }
+  return static_cast<int>(std::clamp<std::int64_t>(
+      score - snapshot.finalTargetScore, std::numeric_limits<int>::min(),
+      std::numeric_limits<int>::max()));
+}
 
 inline bool judgementCountsAsPlayedNote(Judgement judgement) {
   return judgement != None && judgement != Kpoor;
@@ -501,7 +518,8 @@ inline Snapshot snapshotForBuiltInPresentation(
 }
 
 inline Snapshot snapshotForState(const Target &target,
-                                 const RhythmState &state) {
+                                 const RhythmState &state,
+                                 const quick_retry::Projection &projection = {}) {
   Snapshot snapshot;
   snapshot.enabled = target.enabled;
   snapshot.label = target.label;
@@ -513,6 +531,9 @@ inline Snapshot snapshotForState(const Target &target,
   snapshot.playedNotes = playedNotesForState(state, target.totalNotes);
   snapshot.targetScore = targetScoreAtPlayedNotes(target, snapshot.playedNotes);
   snapshot.delta = snapshot.currentScore - snapshot.targetScore;
+  snapshot.pendingScoreLoss = projection.pendingClassicJudgements[Great] +
+      2 * (projection.pendingClassicJudgements[Good] + projection.pendingClassicJudgements[Bad]);
+  snapshot.scoreStopped = state.activeGaugeFailed();
   return snapshot;
 }
 

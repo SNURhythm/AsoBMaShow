@@ -39,6 +39,7 @@ struct PlayOptionsPanelState {
   bool quickRetryGoals = true;
   bool quickRetryNewPattern = false;
   std::string pacemakerTarget = "BEST";
+  std::string pacemakerDisplayMode = "pace";
   std::string pacemakerGoalLabel = "BEST";
   std::string profileId;
   lane_cover::State laneCovers;
@@ -63,6 +64,7 @@ struct PlayOptionsPanelCallbacks {
   std::function<void(bool)> onQuickRetryGoalsSelected;
   std::function<void(bool)> onRetryPatternSelected;
   std::function<void(const std::string &)> onPacemakerSelected;
+  std::function<void(const std::string &)> onPacemakerDisplayModeSelected;
   std::function<void(const lane_cover::State &)> onLaneCoversChanged;
 };
 
@@ -103,6 +105,7 @@ private:
   ChoiceControlView *quickRetryGoalsChoice = nullptr;
   ChoiceControlView *retryPatternChoice = nullptr;
   ChoiceControlView *pacemakerChoice = nullptr;
+  ChoiceControlView *pacemakerDisplayChoice = nullptr;
   TextView *assistOptionLabel = nullptr;
   SnappedSlider *playbackRateSlider = nullptr;
   TextView *playbackRateText = nullptr;

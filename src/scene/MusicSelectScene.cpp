@@ -4427,6 +4427,7 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .quickRetryGoals = context.settings.quickRetryGoals,
       .quickRetryNewPattern = context.settings.quickRetryNewPattern,
       .pacemakerTarget = selections.pacemakerTarget,
+      .pacemakerDisplayMode = context.settings.pacemakerDisplayMode,
       .pacemakerGoalLabel = goalPacemakerLabel(),
       .profileId = context.profileManager.activeProfile().id,
       .laneCovers = context.settings.presentation().laneCoverState()};
@@ -4568,6 +4569,11 @@ void MusicSelectScene::openPlayOptions() {
            updatePlayOptions([&target](auto &selections) {
              selections.pacemakerTarget = pacemaker::normalizeTargetId(target);
            });
+         },
+         .onPacemakerDisplayModeSelected = [this](const std::string &mode) {
+           context.settings.pacemakerDisplayMode = mode;
+           if (!context.saveSettings()) SDL_Log("Failed to save pacemaker display mode");
+           refreshPlayOptionsModal();
          },
          .onLaneCoversChanged = [this](const lane_cover::State &covers) {
            context.settings.presentation().setLaneCoverState(covers);

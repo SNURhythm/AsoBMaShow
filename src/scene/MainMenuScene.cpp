@@ -4756,6 +4756,7 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .quickRetryGoals = context.settings.quickRetryGoals,
        .quickRetryNewPattern = context.settings.quickRetryNewPattern,
        .pacemakerTarget = profileSelections.pacemakerTarget,
+       .pacemakerDisplayMode = context.settings.pacemakerDisplayMode,
        .pacemakerGoalLabel = goalPacemakerLabel(),
        .profileId = context.profileManager.activeProfile().id,
        .laneCovers = context.settings.presentation().laneCoverState()});
@@ -7339,6 +7340,11 @@ void MainMenuScene::buildPlayOptionsModal() {
        },
        .onPacemakerSelected = [this](const std::string &target) {
          setPacemakerTargetSelection(target);
+       },
+       .onPacemakerDisplayModeSelected = [this](const std::string &mode) {
+         context.settings.pacemakerDisplayMode = mode;
+         if (!context.saveSettings()) SDL_Log("Failed to save pacemaker display mode");
+         refreshPlayOptionsPanel();
        },
        .onLaneCoversChanged = [this](const lane_cover::State &covers) {
          context.settings.presentation().setLaneCoverState(covers);

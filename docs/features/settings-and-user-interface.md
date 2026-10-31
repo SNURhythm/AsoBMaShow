@@ -35,6 +35,22 @@ and Show Same Folder clears it along with the other filters.
 The filter panel scrolls within half the song column's height, preserving chart
 list space in short landscape windows. Dropdown menus use the overlay layer.
 
+## Pacemaker display
+
+Play Options offers three **Pacemaker Display** modes, saved per profile:
+
+- **Pace** (default): current EX score minus the target's score at the current
+  chart progress, including the existing BEST ghost progression when available.
+- **Score -**: maximum attainable final EX score minus the final target. This
+  starts with the remaining margin and includes deferred classic-LN judgements.
+- **Score +**: current EX score minus the final target.
+
+Positive differences mean ahead of target in every mode. Score modes display
+their difference from the start; Pace retains its existing first-note behavior.
+The modes apply to the built-in HUD, skin target-difference numbers, and replay
+presentation. They change display only; Quick Retry still uses the same final
+targets and reachability rules.
+
 ## Quick Retry
 
 Play Options offers **Quick Retry** (Off/On, default Off) and **Retry Pattern**

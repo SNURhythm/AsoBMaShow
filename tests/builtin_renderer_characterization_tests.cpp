@@ -1706,6 +1706,18 @@ void verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker() {
   expect(pacemaker.usesReplayProgression && pacemaker.targetScore == 2 &&
              pacemaker.delta == 0,
          "built-in BEST pacemaker uses the saved-best ghost progression");
+  frame.state.configuration.pacemakerDisplayMode = ::pacemaker::DisplayMode::ScoreMinus;
+  frame.projection.frameSerial = ++frame.state.clock.serial;
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) == PresentationFrameOutcome::Ready,
+         "Score minus frame prepares");
+  expect(fixture.renderer.pacemakerStateForTesting().delta == 1,
+         "Score minus uses maximum final score rather than BEST ghost pace");
+  frame.state.configuration.pacemakerDisplayMode = ::pacemaker::DisplayMode::ScorePlus;
+  frame.projection.frameSerial = ++frame.state.clock.serial;
+  expect(fixture.renderer.prepareFrame(frame.state, frame.projection) == PresentationFrameOutcome::Ready,
+         "Score plus frame prepares");
+  expect(fixture.renderer.pacemakerStateForTesting().delta == -1,
+         "Score plus compares current EX directly with final BEST");
 }
 
 void verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost() {

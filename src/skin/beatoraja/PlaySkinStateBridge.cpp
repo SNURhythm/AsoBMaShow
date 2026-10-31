@@ -2749,20 +2749,30 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   }
   case 108:
   case 128:
-  case 153:
+  case 153: {
     // IntegerPropertyFactory's diff_exscore, diff_exscore2, and
     // diff_targetscore all delegate to createDiffRivalScoreProperty():
     // current EX score minus ScoreDataProperty's live rival score. LITONE12
-    // uses 108 for Ghost and 153 for its graph difference.
-    return {.value = static_cast<std::int64_t>(snapshot->score) -
+    // uses 108 for Ghost and 153 for its graph difference. Pace retains that
+    // contract; the selected display mode changes only the comparison value.
+    pacemaker::Snapshot comparison{
+        .currentScore = snapshot->score,
+        .finalTargetScore = targetScore(*snapshot),
+        .playedNotes = snapshot->authority.stagePassedNotes,
+        .totalNotes = context_.chartModel.staticMetadata.totalNotes,
+        .pendingScoreLoss = snapshot->authority.pacemakerStatus.pendingScoreLoss,
+        .scoreStopped = snapshot->authority.pacemakerStatus.scoreStopped};
+    comparison.delta = static_cast<std::int64_t>(snapshot->score) -
                     (usesSkinIrTarget(snapshot->authority)
                          ? (context_.chartModel.staticMetadata.totalNotes > 0
                                 ? static_cast<std::int64_t>(targetScore(*snapshot)) *
                                       snapshot->authority.stagePassedNotes /
                                       context_.chartModel.staticMetadata.totalNotes
                                 : 0)
-                         : snapshot->authority.pacemakerStatus.targetScore),
+                         : snapshot->authority.pacemakerStatus.targetScore);
+    return {.value = pacemaker::displayDelta(comparison, snapshot->configuration.pacemakerDisplayMode),
             .supported = true};
+  }
   case 150:
     // NUMBER_HIGHSCORE delegates to createHighScoreProperty(), which reads
     // ScoreDataProperty.getBestScore(): the persisted final EX score.

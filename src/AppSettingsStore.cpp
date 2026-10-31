@@ -903,6 +903,7 @@ json settingsToJson(const AppSettings &settings) {
       {"selectedLnMode", settings.selectedLnMode},
       {"selectedAssistOption", settings.selectedAssistOption},
       {"selectedPacemakerTarget", settings.selectedPacemakerTarget},
+      {"pacemakerDisplayMode", settings.pacemakerDisplayMode},
       {"quickRetryEnabled", settings.quickRetryEnabled},
       {"quickRetryGauge", settings.quickRetryGauge},
       {"quickRetryPacemaker", settings.quickRetryPacemaker},
@@ -1333,6 +1334,7 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "selectedPacemakerTarget",
             settings.selectedPacemakerTarget, diagnostics);
+  readValue(document, "pacemakerDisplayMode", settings.pacemakerDisplayMode, diagnostics);
   readValue(document, "quickRetryEnabled", settings.quickRetryEnabled, diagnostics);
   readValue(document, "quickRetryGauge", settings.quickRetryGauge, diagnostics);
   readValue(document, "quickRetryPacemaker", settings.quickRetryPacemaker, diagnostics);

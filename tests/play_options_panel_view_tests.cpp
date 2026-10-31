@@ -1769,6 +1769,7 @@ int main() {
     bool quickRetry = false;
     bool retryGauge = true, retryPacemaker = true, retryGoals = true;
     bool newPattern = false;
+    std::string displayMode = "pace";
     ScrollView scroll(0, 0, 360, 400);
     scroll.setWidth(360)->setHeight(400);
     auto *content = new View();
@@ -1782,7 +1783,8 @@ int main() {
          .onQuickRetryGaugeSelected = [&](bool enabled) { retryGauge = enabled; },
          .onQuickRetryPacemakerSelected = [&](bool enabled) { retryPacemaker = enabled; },
          .onQuickRetryGoalsSelected = [&](bool enabled) { retryGoals = enabled; },
-         .onRetryPatternSelected = [&](bool value) { newPattern = value; }},
+         .onRetryPatternSelected = [&](bool value) { newPattern = value; },
+         .onPacemakerDisplayModeSelected = [&](const std::string &value) { displayMode = value; }},
         {.width = 340.0f,
          .playOptionColumns = 2,
          .showGauge = true,
@@ -1791,7 +1793,16 @@ int main() {
         nullptr);
     content->addView(panel);
     scroll.setContentView(content);
+    panel->refresh({});
     scroll.applyYogaLayout();
+    auto *display = dynamic_cast<ChoiceControlView *>(panel->findViewByName("pacemaker-display-choice"));
+    require(display && display->selectedId() == "pace" &&
+                display->findViewByName("choice-buttons")->getVisible(),
+            "three pacemaker representation modes use choice buttons and default to Pace");
+    click(*static_cast<Button *>(display->findViewByName("choice:score_minus")));
+    require(displayMode == "score_minus", "Score minus selection reaches its callback");
+    panel->refresh({.pacemakerDisplayMode = "score_plus"});
+    require(display->selectedId() == "score_plus", "Score plus preference refreshes selection");
 
     panel->refresh({.ruleset = GameplayRuleset::LR2});
     auto *ruleset = dynamic_cast<ChoiceControlView *>(panel->findViewByName("ruleset-choice"));

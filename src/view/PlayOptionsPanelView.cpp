@@ -333,6 +333,13 @@ PlayOptionsPanelView::PlayOptionsPanelView(
       return id == pacemaker::kTargetGoal;
     });
     addView(pacemakerChoice);
+    addView(makeLabel(i18n::message("play_options.pacemaker_display.label")));
+    pacemakerDisplayChoice = new ChoiceControlView([this](const std::string &id) {
+      if (callbacks.onPacemakerDisplayModeSelected) callbacks.onPacemakerDisplayModeSelected(id);
+      return true;
+    }, overlayPortal, 16);
+    pacemakerDisplayChoice->setName("pacemaker-display-choice");
+    addView(pacemakerDisplayChoice);
   }
 }
 
@@ -447,6 +454,11 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
         .enabled = state.quickRetryEnabled});
   }
   if (pacemakerChoice) {
+    pacemakerDisplayChoice->refresh({.selectedId = pacemaker::displayModeId(
+        pacemaker::displayModeFromId(state.pacemakerDisplayMode)),
+        .options = {{.id = "pace", .label = i18n::message("play_options.pacemaker_display.pace")},
+                    {.id = "score_minus", .label = i18n::message("play_options.pacemaker_display.score_minus")},
+                    {.id = "score_plus", .label = i18n::message("play_options.pacemaker_display.score_plus")}}});
     std::vector<DropdownView::Option> options;
     for (const char *target : pacemaker::kSelectableTargets) {
       options.push_back({.id = target, .label = target == std::string_view(pacemaker::kTargetGoal)
@@ -468,7 +480,7 @@ void PlayOptionsPanelView::closeDropdowns() {
   for (auto *choice : {rulesetChoice, gaugeChoice, gaugeAutoShiftChoice,
                       gaugeLowerBoundChoice, longNoteModeChoice,
                       assistOptionChoice, quickRetryChoice, quickRetryGaugeChoice,
-                      quickRetryPacemakerChoice, quickRetryGoalsChoice, retryPatternChoice, pacemakerChoice}) {
+                      quickRetryPacemakerChoice, quickRetryGoalsChoice, retryPatternChoice, pacemakerChoice, pacemakerDisplayChoice}) {
     if (choice) choice->closeMenu();
   }
   if (playOptionSection) playOptionSection->closeDropdowns();

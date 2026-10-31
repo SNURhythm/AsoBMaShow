@@ -3648,7 +3648,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .gaugeRules = initialGaugeState.gaugeRules(),
         .pacemakerTarget = activePacemakerTarget,
         .pacemakerStatus =
-            pacemaker::snapshotForState(activePacemakerTarget, pacemakerState),
+            pacemaker::snapshotForState(activePacemakerTarget, pacemakerState,
+                                        preparedGameplay.presentation->scoreProjection()),
         .goalPacemakerSelected = pacemaker::normalizeTargetId(selectedPacemakerTarget) == pacemaker::kTargetGoal,
         .player1RandomOption = replay::projectedBeatorajaReplayOptionIndex(
                                    replay.playOption.value_or("NORMAL"))
@@ -4556,7 +4557,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .pacemakerTarget = activePacemakerTarget,
           .pacemakerStatus =
               pacemaker::snapshotForState(activePacemakerTarget,
-                                          pacemakerState),
+                                          pacemakerState, presentation.scoreProjection()),
           .goalPacemakerSelected = pacemaker::normalizeTargetId(selectedPacemakerTarget) == pacemaker::kTargetGoal,
           .player1RandomOption = replay::projectedBeatorajaReplayOptionIndex(
                                      stageReplay.playOption.value_or("NORMAL"))

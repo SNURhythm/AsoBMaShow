@@ -341,6 +341,7 @@ private:
   float pacemakerDiffY = AppSettings::kDefaultPacemakerDiffY;
   int pacemakerDiffSizePercent = AppSettings::kDefaultPacemakerDiffSizePercent;
   bool pacemakerDiffBold = false;
+  pacemaker::DisplayMode pacemakerDisplayMode = pacemaker::DisplayMode::Pace;
   bool judgementCounterEnabled = true;
   AppSettings::JudgementCounterPosition judgementCounterPosition =
       AppSettings::JudgementCounterPosition::Right;

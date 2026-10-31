@@ -4200,7 +4200,7 @@ void BMSRenderer::applyPendingPacemakerText() {
       pendingPacemakerUsesReplayProgression.load(std::memory_order_relaxed);
   const std::string label = pacemakerLabel.empty() ? "TARGET" : pacemakerLabel;
   std::string text = "PM " + label + " " + std::to_string(finalTarget);
-  if (usesReplay) {
+  if (usesReplay && pacemakerDisplayMode == pacemaker::DisplayMode::Pace) {
     text += " GHOST";
   }
   if (pacemakerText != nullptr) {
@@ -4208,8 +4208,9 @@ void BMSRenderer::applyPendingPacemakerText() {
     pacemakerText->setColor(app_theme::sdl(app_theme::textSecondary()));
   }
   if (pacemakerDeltaText != nullptr) {
-    pacemakerDeltaText->setVisible(playedNotes > 0);
-    pacemakerDeltaText->setText(playedNotes > 0 ? formatSignedScoreDelta(delta)
+    const bool showDelta = playedNotes > 0 || pacemakerDisplayMode != pacemaker::DisplayMode::Pace;
+    pacemakerDeltaText->setVisible(showDelta);
+    pacemakerDeltaText->setText(showDelta ? formatSignedScoreDelta(delta)
                                                 : "");
     pacemakerDeltaText->setColor(
         ui_theme::sdl(delta >= 0 ? ui_theme::lime() : ui_theme::coral()));
@@ -4357,6 +4358,7 @@ void BMSRenderer::configure(
     refreshJudgementFeedbackTextStyle();
   }
   setJudgementTimingY(configuration.judgementTimingY);
+  pacemakerDisplayMode = configuration.pacemakerDisplayMode;
   setPacemakerDiffStyle(configuration.pacemakerDiffY, configuration.pacemakerDiffSizePercent,
                        configuration.pacemakerDiffBold);
   setJudgementFeedbackStyle(configuration.judgementTextSizePercent,
@@ -5040,7 +5042,7 @@ void BMSRenderer::setPacemakerStatus(const pacemaker::Snapshot &snapshot) {
                                     std::memory_order_relaxed);
   pendingPacemakerFinalTargetScore.store(snapshot.finalTargetScore,
                                          std::memory_order_relaxed);
-  pendingPacemakerDelta.store(snapshot.delta, std::memory_order_relaxed);
+  pendingPacemakerDelta.store(pacemaker::displayDelta(snapshot, pacemakerDisplayMode), std::memory_order_relaxed);
   pendingPacemakerPlayedNotes.store(snapshot.playedNotes,
                                     std::memory_order_relaxed);
   pendingPacemakerTotalNotes.store(snapshot.totalNotes,
