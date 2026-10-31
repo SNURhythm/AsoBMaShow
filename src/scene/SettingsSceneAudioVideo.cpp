@@ -291,6 +291,16 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
       [](bool input) { return i18n::message(input
           ? "settings.controls.keysound.input_trigger.label" : "settings.controls.keysound.auto_timed.label"); },
       [this](bool input) { context.settings.inputKeysoundEnabled = input; persistSettings(); }));
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.timing.input_audio.label"),
+      i18n::message("settings.timing.choose_hit_sounds.message"),
+      keysoundControls, metrics.modeCardHeight, metrics.cardsWidth,
+      context.settings.bluetoothAudioTimingActive()));
+
+  auto *countInControls = new View();
+  countInControls->setFlexDirection(FlexDirection::Column);
+  countInControls->setGap(metrics.compact ? 12.0f : 16.0f);
+  countInControls->setAlignItems(YGAlignFlexStart);
   prepMetronomeModeText =
       makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
@@ -302,8 +312,8 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
         !context.settings.prepMetronomeEnabled;
     persistSettings();
   });
-  keysoundControls->addView(prepMetronomeModeButton);
-  keysoundControls->addView(makeWrappedText(
+  countInControls->addView(prepMetronomeModeButton);
+  countInControls->addView(makeWrappedText(
       i18n::message("settings.controls.prep_metronome.max_duration.label"),
       metrics.bodyTextSize, app_theme::textSecondary()));
   prepMetronomeMaxDurationInput = makeNumericInput(metrics);
@@ -316,13 +326,13 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
         context.settings.prepMetronomeMaxDurationMilliseconds));
     persistSettings();
   });
-  keysoundControls->addView(makeInputFrame(metrics, prepMetronomeMaxDurationInput));
-  keysoundControls->addView(makeWrappedText(
+  countInControls->addView(makeInputFrame(metrics, prepMetronomeMaxDurationInput));
+  countInControls->addView(makeWrappedText(
       i18n::message("settings.controls.prep_metronome.max_duration.message"),
       metrics.smallTextSize, app_theme::textSecondary()));
   cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.timing.input_audio.label"), i18n::message("settings.timing.choose_hit_sounds_count_in.message"),
-      keysoundControls, metrics.modeCardHeight, metrics.cardsWidth));
+      metrics, i18n::message("settings.audio.count_in.label"), i18n::message("settings.audio.count_in.message"),
+      countInControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   const auto model = BuildAudioControlModel(
       audioDraft, context.audioDeviceManager.capabilities(),

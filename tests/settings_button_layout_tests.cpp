@@ -90,6 +90,34 @@ void testFlatSettingsSectionUsesContentHeight() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testBluetoothProfileHeadingFits() {
+  settings_scene::LayoutMetrics metrics;
+  metrics.flatSections = true;
+  metrics.cardPadding = 14;
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const bool bluetooth : {false, true}) {
+      View root(0, 0, 220, 500);
+      root.setFlexDirection(FlexDirection::Column);
+      auto *section = settings_scene::makeCard(metrics,
+          i18n::message("settings.timing.audio_offset.label"), "", new View(), 100, 220, bluetooth);
+      root.addView(section);
+      root.applyYogaLayout();
+      auto *icon = section->findViewByName("settingsBluetoothProfileIcon");
+      require((icon != nullptr) == bluetooth, "only Bluetooth profiles mark their headings");
+      if (icon) {
+        auto *title = section->findViewByName("settingsSectionTitle");
+        require(title->getX() + title->getWidth() <= icon->getX(),
+                "Bluetooth mark does not overlap localized heading");
+        requireFits(renderedTextBounds(*icon), section->getX(), section->getY(),
+                    section->getWidth(), section->getHeight());
+      }
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testCompactActionCaptionsFitLocalizedControls() {
   for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
                               i18n::Language::Korean}) {
@@ -135,6 +163,10 @@ void testInlineIconsPreserveCompactLocalizedLabels() {
     require(TTF_FontHasGlyph(font, glyph), "readability icons exist in the shipped font");
   }
   TTF_CloseFont(font);
+  auto *brands = TTF_OpenFont(ui_icons::kFontAwesomeBrandsPath, 18);
+  require(brands && TTF_FontHasGlyph(brands, ui_icons::kBluetooth),
+          "Bluetooth mark exists in the bundled Font Awesome Brands font");
+  TTF_CloseFont(brands);
   TTF_Quit();
   for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
                               i18n::Language::Korean}) {
@@ -378,6 +410,7 @@ int main() {
   testTaskBadgeUpdatesWithoutMovingItsButton();
   testSelectorIconsKeepSpaceBesideLocalizedLabels();
   testFlatSettingsSectionUsesContentHeight();
+  testBluetoothProfileHeadingFits();
   testFixedJapaneseButtonsShrinkOnlyTheirRenderedText();
   testNestedButtonLabelsFitButOrdinaryTextKeepsItsOverflow();
   testButtonFittingRespondsToLanguageAndAvailableHeight();

@@ -41,6 +41,9 @@ Audio offset, visual offset, and the Input Trigger / Auto Timed keysound rule
 are saved separately for Bluetooth and non-Bluetooth outputs in each player
 profile. Existing settings (including legacy config imports) seed both categories.
 Edits then affect only the current category. Audio diagnostics shows that category.
+Audio Offset, Visual Offset, and Input Audio headings show a Font Awesome Bluetooth
+mark when that profile is active. Count-in has its own section and remains shared
+between audio profiles.
 
 Selection follows the actual output route. Songs and calibration retain the
 category they started with; new attempts and menus can select the new category.

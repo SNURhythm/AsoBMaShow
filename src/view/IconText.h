@@ -7,6 +7,9 @@ namespace ui_icons {
 
 inline constexpr const char *kFontAwesomeSolidPath =
     "assets/fonts/fa-solid-900.ttf";
+inline constexpr const char *kFontAwesomeBrandsPath =
+    "assets/fonts/fa-brands-400.ttf";
+inline constexpr uint32_t kBluetooth = 0xf294;
 inline constexpr uint32_t kXmark = 0xf00d;
 inline constexpr uint32_t kTrash = 0xf1f8;
 inline constexpr uint32_t kPlus = 0xf067;
