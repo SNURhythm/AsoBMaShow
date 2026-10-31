@@ -258,13 +258,18 @@ contains examples and timing context if needed.
 ## Settings Choice Controls
 
 - Follow [Choosing a settings control](docs/features/settings-and-user-interface.md#choosing-a-settings-control)
-  when adding or revising settings: one cycling button for two opposing states (On/Off, Show/Hide, Light/Dark),
-  multiple buttons for distinct modes (including two choices such as Flick/Tap)
-  or a few stable choices (normally 3–4) when they fit
-  legibly, and a dropdown otherwise. Dynamic lists stay dropdowns even when
-  only two entries are available. Preserve labels, ordering, and meaning
-  across layouts, and bring revised controls into this convention rather
-  than copying existing inconsistencies.
+  when adding or revising settings. Choose by the user's decision, not just the
+  number of stored values: a cycling button is the default for opposing states
+  (On/Off, Show/Hide, Light/Dark); use checkboxes when clearly labeled independent
+  inclusion/enabling options are easier to understand as a checklist or an
+  optional part of a task (for example, Quick Retry conditions). Use multiple
+  buttons for distinct mutually exclusive modes (including Flick/Tap) or a few
+  stable choices (normally 3–4) when they fit legibly, and a dropdown otherwise.
+  Dynamic single-selection lists stay dropdowns even with only two entries.
+  Do not use checkboxes for mutually exclusive modes or one-shot actions.
+  Preserve labels, ordering, saved meaning, and clear current/checked states
+  across layouts. Apply this guidance when revising controls; existing
+  inconsistencies are not precedents.
 
 ## Formatting
 

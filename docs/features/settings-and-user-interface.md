@@ -252,30 +252,53 @@ precedent; apply the rule when revising them. The [migration inventory](settings
 Settings, Play Options, and preview controls aligned with it. Saved values
 retain their existing meaning.
 
-Use a cycle button for a toggle, visible buttons for a few choices that fit,
-and a dropdown for other cases. Users must always be able to see the current
-value.
+Choose the control by the user's decision, not just the number of stored values.
+A cycling button is the default for opposing states. A checkbox is appropriate
+when checking a clearly labeled option communicates inclusion or enablement more
+naturally, especially when users select several independent options together.
+Use visible buttons for a few mutually exclusive choices that fit, and a dropdown
+for other single-selection cases. Users must always be able to see the current
+value or checked state.
 
 | Control | Use when | Examples |
 | --- | --- | --- |
-| Cycling button | A toggle between two opposing states, such as On/Off, Show/Hide, or Light/Dark. Two options alone do not make a toggle. One activation switches directly to the other state. | Show lane indicators: On / Off; appearance: Light / Dark. |
+| Checkbox | An independently included or enabled option whose meaning is clear from a persistent label and checked state. Prefer it when a checklist makes several selections easier to scan, or an optional step is naturally attached to the current task. | Quick Retry conditions: Gauge, Pacemaker Target, Goals; Include replay data in an export. |
+| Cycling button | The default for two opposing states when explicit current-state text is more informative than a checkmark, especially when both states have meaningful names. Two options alone do not make a toggle. One activation switches directly to the other state. | Show lane indicators: On / Off; appearance: Light / Dark. |
 | Multiple choice buttons | A few stable, mutually exclusive choices, including two distinct modes or roughly 3–4 options, with labels that all fit legibly together on the current screen. | Flick / Tap; LR2 / Beatoraja; Auto / Landscape / Portrait. |
-| Dropdown | Other cases: larger sets, dynamic lists, long labels, or a small choice group that does not fit. A dynamic list does not become a toggle just because it currently has two entries. | Language, audio device, resolution, skin package, file choice. |
+| Dropdown | Other single-selection cases: larger sets, dynamic lists, long labels, or a small choice group that does not fit. A dynamic list does not become a toggle just because it currently has two entries. | Language, audio device, resolution, skin package, file choice. |
 
-Apply these rules in order: a toggle uses one cycling button; a small choice
-set uses multiple buttons if it fits; everything else uses a dropdown. Do not
-extend cycling to three or more states to save space. Continuous numeric
-values use a slider or editable numeric control rather than this rule.
+First distinguish independent options from mutually exclusive choices. For an
+independent binary option, use a checkbox when its label makes checked/unchecked
+unambiguous and the surrounding task or group is clearly easier to understand
+that way. Otherwise, use the default cycling button with explicit state text.
+For a mutually exclusive choice, use an opposing-state cycle or distinct-mode
+buttons/dropdown as described above. Do not use checkboxes for mutually exclusive
+modes or one-shot actions, and do not extend cycling to three or more states to
+save space. Continuous numeric values use a slider or editable numeric control.
+
+For example, Quick Retry's master On/Off setting uses a cycling button, while
+its Gauge, Pacemaker Target, and Goals checkboxes select which independent
+conditions participate. Any fails / All fail and Same / New remain mutually
+exclusive choice groups. Checkbox use follows this distinction; it is not an
+exception limited to Quick Retry or a reason to replace every binary control.
 
 ### Consistent presentation and behavior
 
 - Put a persistent setting label above the control and align the group with
-  the section's left edge. A selected value must not be the only explanation
-  of what the setting controls.
+  the section's left edge. Checkboxes use a persistent label beside each box;
+  related boxes may share a group label above them. A selected value must not
+  be the only explanation of what the setting controls.
 - Multiple buttons form one single-selection group with a clear selected
   state and consistent heights, spacing, and widths within the group. Selecting
-  the active choice is a no-op. Independent toggles use separate cycling
-  buttons, not a single mutually exclusive choice group.
+  the active choice is a no-op. Independent options use separate cycling
+  buttons or checkboxes according to the rule above, never a single mutually
+  exclusive choice group.
+- Checkbox labels describe what is included or enabled; avoid ambiguous or
+  double-negative wording. Make the box and its label one activation target,
+  preserve the normal touch-target size, and distinguish checked, unchecked,
+  focused, and disabled states. Group related options visibly. Disabling a
+  parent setting disables its child controls without clearing their saved
+  selections.
 - A cycling button displays the **current** state and a visible cycle
   affordance. One activation switches to the other state; the next switches
   back. Users must be able to distinguish it from an action button or a
@@ -303,8 +326,10 @@ values use a slider or editable numeric control rather than this rule.
   modes have no lamp color bars.
 - Keep the same labels, option order, selected value, and meaning wherever a
   setting appears. If a compact surface needs a different control, preserve
-  those semantics. Use the same cycling-button convention for toggles across
-  settings instead of mixing checkboxes, two-button groups, and dropdowns.
+  those semantics. Use the same control for the same decision across surfaces
+  unless layout or task context gives a clear usability reason to change it.
+  Choose checkbox versus cycling-button presentation deliberately; inconsistent
+  existing controls or a desire to save space alone are not sufficient reasons.
 
 ### Compact layouts and localization
 
