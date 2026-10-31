@@ -13,12 +13,11 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 from earshot.forge import bank, sfx
-from earshot.forge.recipes import zip as recipe
 
 ROOT = Path(__file__).resolve().parents[1]
-QUERY = "a soft descending sci-fi pew whoosh with a low rounded tail"
-ALTERNATIVES = ["a sharp laser gun blast", "a rising slide whistle",
-                "an alarm beep", "a harsh buzzer"]
+QUERY = "a soft digital interface reset click with a short airy tail"
+ALTERNATIVES = ["a sharp harsh click", "a cartoon bubble pop",
+                "a laser gun blast", "an error buzz"]
 
 
 def main():
@@ -26,25 +25,26 @@ def main():
     parser.add_argument("--feedback", action="store_true")
     args = parser.parse_args()
     output = ROOT / "assets/quick-retry.wav"
-    # Feedback on the bank version favored a sharp laser/error buzz. Reduce
-    # saw/harmonic energy and saturation; give the downward gesture more time.
-    parameters = {**bank.get("pro_zip/down_warm")["params"],
-                  "length": 0.23, "f0": 1800.0, "f1": 180.0, "saw_db": -36.0,
-                  "h2_db": -26.0, "h3_db": -36.0, "h5_db": -48.0, "fm": 0.08,
-                  "sat": 0.0, "att_ms": 22.0, "rel_ms": 50.0, "tilt_db": -5.0,
-                  "air_db": -25.0, "noise_db": -30.0, "detune": 3.0,
-                  "verb": 0.08, "width": 0.1}
-    samples = recipe.render(parameters, np.random.default_rng(87989972))
-    samples = samples[:round(0.38 * 48000)]
-    samples[-960:] *= np.linspace(1, 0, 960)[:, None]
-    samples *= 10 ** (-13 / 20) / np.max(np.abs(samples))
-    metadata = {"base": "pro_zip/down_warm", "seed": 87989972,
-                "parameters": parameters, "duration_s": len(samples) / 48000,
-                "sample_rate": 48000, "peak_dbfs": -13}
+    click, click_meta = bank.render("pro_click/soft", peak_db=-16)
+    air, air_meta = bank.render("swish/flick", dur=0.20, peak_db=-29)
+    if click.ndim == 1:
+        click = np.column_stack((click, click))
+    if air.ndim == 1:
+        air = np.column_stack((air, air))
+    # The quiet air layer starts with the click: one gesture, with no lead-in.
+    samples = np.zeros((max(len(click), len(air)), 2))
+    samples[:len(click)] += click
+    samples[:len(air)] += air
+    samples *= 10 ** (-16 / 20) / np.max(np.abs(samples))
+    metadata = {"components": [
+                    {key: item[key] for key in ("id", "seed", "dur_s", "peak_db")}
+                    for item in (click_meta, air_meta)],
+                "duration_s": len(samples) / 48000,
+                "sample_rate": 48000, "peak_dbfs": -16}
     sf.write(output, samples, 48000, subtype="PCM_16")
     # Check the quantized asset that ships, not just the in-memory synthesis.
     decoded, rate = sf.read(output)
-    metadata["checks"] = sfx.check(decoded, sr=rate, category="pro_zip")
+    metadata["checks"] = sfx.check(decoded, sr=rate, category="pro_click")
     if not metadata["checks"]["ok"]:
         raise SystemExit(json.dumps(metadata["checks"], indent=2))
     report = {"earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",

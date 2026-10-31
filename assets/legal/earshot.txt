@@ -1,4 +1,4 @@
-Quick Retry sound generated with Earshot 0.4.0 (pro_zip/down_warm).
+Quick Retry sound generated with Earshot 0.4.0 (pro_click/soft and swish/flick).
 https://github.com/Leonxlnx/earshot
 
 MIT License
