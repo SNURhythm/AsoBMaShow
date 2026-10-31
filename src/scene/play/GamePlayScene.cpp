@@ -4793,6 +4793,7 @@ void GamePlayScene::closePauseMenu() {
                  "Realtime gameplay worker failed to resume");
     return;
   }
+  if (context.requestImprovedFramePacing) context.requestImprovedFramePacing();
   if (pauseLayout != nullptr) {
     pauseLayout->setVisible(false);
   }
@@ -5070,6 +5071,7 @@ void GamePlayScene::adjustLaneCoverFromInput(float deltaPercent) {
 }
 
 void GamePlayScene::restartCurrentPattern() {
+  if (context.requestImprovedFramePacing) context.requestImprovedFramePacing();
   if (options.practiceSession != nullptr) {
     options.practiceSession->abandonAttempt();
   }
@@ -5097,6 +5099,7 @@ bool GamePlayScene::restartCourseFromBeginning() {
   if (session == nullptr || session->entries.empty()) {
     return false;
   }
+  if (context.requestImprovedFramePacing) context.requestImprovedFramePacing();
 
   if (pauseLayout != nullptr) {
     pauseLayout->setVisible(false);
@@ -5145,6 +5148,7 @@ void GamePlayScene::retryWithNewPattern() {
     restartCurrentPattern();
     return;
   }
+  if (context.requestImprovedFramePacing) context.requestImprovedFramePacing();
 
   pauseLayout->setVisible(false);
   if (pauseButton != nullptr) {

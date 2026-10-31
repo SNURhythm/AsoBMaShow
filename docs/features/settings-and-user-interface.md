@@ -122,18 +122,22 @@ throughput. Buffer count is not a user setting.
   It defaults to On for new profiles and profiles without a saved preference.
   An explicit saved Off remains an override.
   Off uses ordinary Metal drawable acquisition, SDL's high-refresh request and
-  the existing frame cap. On enables Metal display-link scheduling only in the
-  orientation-locked gameplay scene, including preparation and in-game pauses.
-  Menus and results always use ordinary rendering. The link detaches before
-  leaving gameplay releases the orientation lock.
-  Gameplay entry and geometry reattachment first present an ordinary frame and
-  wait for its displayed callback. UIKit rotation suspends the link until the
+  the existing frame cap. On enables Metal display-link scheduling in gameplay
+  (including preparation and in-game pauses), lane preview, and offset calibration.
+  Other settings screens, menus, and results use ordinary rendering. Preview and
+  calibration keep their existing orientation behavior; gameplay still detaches
+  the link before releasing its orientation lock.
+  Acquiring or reattaching the link first presents an ordinary frame and waits
+  for its displayed callback. UIKit rotation suspends the link until the
   transition ends. Unsupported frame caps and interrupted callbacks still use
   the normal fallback.
-  If gameplay loses application activity, ordinary rendering resumes immediately
-  on return and remains in use until gameplay is left and entered again. There
-  is no timed foreground reattachment. A new gameplay scene entered while the
-  application is inactive also stays on ordinary rendering.
+  If an eligible scene loses application activity, ordinary rendering resumes
+  immediately on return. Explicit gameplay Resume, Retry, Retry Same, and course
+  restart request recovery; reopening lane preview or calibration does too.
+  Recovery preserves an already healthy link and respects the saved Off setting.
+  There is no timed foreground reattachment. Entry or recovery requested while
+  the application is inactive stays on ordinary rendering until another explicit
+  request or entry while active.
   A missing ordinary-frame display callback is retried after one second, with
   obsolete callbacks ignored.
   The Simulator uses the ordinary path because it lacks that display callback.

@@ -39,6 +39,9 @@ void SceneManager::updateForegroundSceneState() {
       context.setGameplayOrientationLocked(lockOrientation);
     }
   }
+  // A new foreground scene starts a fresh pacing span even when it retains
+  // the previous scene's orientation lock (for example a course stage).
+  if (context.requestImprovedFramePacing) context.requestImprovedFramePacing();
   const bool shouldPause =
       currentScene != nullptr &&
       currentScene->pausesBackgroundTasksForPerformance();

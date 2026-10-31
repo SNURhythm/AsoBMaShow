@@ -789,7 +789,13 @@ static void reportResultRecoveryWarning(
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
-  platform::IOSGameplayMetalPolicy iosGameplayMetal;
+  platform::IOSSceneMetalPolicy iosSceneMetal;
+  context.requestImprovedFramePacing = [&] {
+    const auto state = GetIOSPresentationState();
+    const auto *scene = context.sceneManager ? context.sceneManager->currentScene : nullptr;
+    iosSceneMetal.setSceneActive(scene && scene->usesImprovedFramePacing(), state);
+    iosSceneMetal.requestRecovery(state);
+  };
 #endif
   player_settings::PresentationOrientationState presentationOrientation;
   presentationOrientation.updateViewport(rendering::render_width, rendering::render_height);
@@ -798,10 +804,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   context.setGameplayOrientationLocked = [&](bool locked) {
 #if TARGET_OS_IPHONE
     if (locked != orientationLocked) {
-      // Gameplay owns this lock. Release the link before unlocking can rotate
-      // the layer; a new gameplay span starts its own displayed-frame handoff.
+      // Release the link before changing the lock can rotate the layer.
       video::MetalDisplayLink::pauseCurrent();
-      iosGameplayMetal.setGameplayActive(locked, GetIOSPresentationState());
     }
 #endif
     if (locked && !orientationLocked) {
@@ -1135,10 +1139,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
 #if TARGET_OS_IPHONE
     const auto displayLinkState = GetIOSPresentationState();
+    iosSceneMetal.setSceneActive(sceneManager.currentScene &&
+        sceneManager.currentScene->usesImprovedFramePacing(), displayLinkState);
     const auto displayLinkViewport = GetIOSWindowSnapshot(s_window);
     bool iosDisplayLinkFrame = false;
     if (context.settings.iosMetalDisplayLink &&
-        !iosPreparedFrame.pending() && iosGameplayMetal.allows(displayLinkState) &&
+        !iosPreparedFrame.pending() && iosSceneMetal.allows(displayLinkState) &&
         !context.replayVideoExportActive.load(std::memory_order_acquire) &&
         !context.rendererAccess.exportRequested()) {
       iosDisplayLinkFrame = iosDisplayLink.beginFrame(
@@ -1148,7 +1154,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               geometryGeneration = displayLinkViewport ? displayLinkViewport->geometryGeneration : 0] {
             const auto state = GetIOSPresentationState();
             const auto viewport = GetIOSWindowSnapshot(s_window);
-            return iosGameplayMetal.allows(state) && state.generation == generation &&
+            return iosSceneMetal.allows(state) && state.generation == generation &&
                 viewport && !viewport->geometryChanging &&
                 viewport->geometryGeneration == geometryGeneration &&
                 !context.appInBackground.load(std::memory_order_acquire) &&
@@ -2027,6 +2033,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
   sceneManager.cleanup();
   context.setGameplayOrientationLocked = {};
+  context.requestImprovedFramePacing = {};
   context.setResponsiveMenuCanvas = {};
   if (context.displaySettingsManager) {
     const auto shutdownResult = context.displaySettingsManager->shutdown();

@@ -84,6 +84,7 @@ enum class SettingsDestination { Profile, Ir };
 class SettingsScene : public Scene, public IRhythmControl {
 public:
   bool usesResponsiveMenuCanvas() const override { return true; }
+  bool usesImprovedFramePacing() const override { return previewActive; }
   bool needsContinuousPresentation() const override;
   explicit SettingsScene(
       ApplicationContext &context,

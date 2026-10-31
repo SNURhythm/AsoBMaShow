@@ -57,31 +57,38 @@ void testExportStartingDuringPermissionInterruption() {
 }
 void testGameplayMetalEligibility() {
   platform::IOSApplicationLifecycle state;
-  platform::IOSGameplayMetalPolicy gameplay;
+  platform::IOSSceneMetalPolicy gameplay;
   require(!gameplay.allows(state.presentation()), "menus must use ordinary presentation");
   send(state, SDL_EVENT_WILL_ENTER_BACKGROUND);
   send(state, SDL_EVENT_DID_ENTER_FOREGROUND);
   require(!gameplay.allows(state.presentation()), "foreground return in menus must not attach");
-  gameplay.setGameplayActive(true, state.presentation());
+  gameplay.setSceneActive(true, state.presentation());
   require(gameplay.allows(state.presentation()), "fresh gameplay may begin the display handoff");
   send(state, SDL_EVENT_WILL_ENTER_BACKGROUND);
   require(!gameplay.allows(state.presentation()), "inactive gameplay must release the link");
   send(state, SDL_EVENT_DID_ENTER_FOREGROUND);
   require(state.presentation().active && !gameplay.allows(state.presentation()),
           "interrupted gameplay resumes with ordinary presentation");
-  gameplay.setGameplayActive(true, state.presentation());
+  gameplay.setSceneActive(true, state.presentation());
   require(!gameplay.allows(state.presentation()), "same gameplay must not rearm after interruption");
-  gameplay.setGameplayActive(false, state.presentation());
+  gameplay.requestRecovery(state.presentation());
+  require(gameplay.allows(state.presentation()), "explicit resume or retry may rearm active gameplay");
+  send(state, SDL_EVENT_WILL_ENTER_BACKGROUND);
+  gameplay.requestRecovery(state.presentation());
+  send(state, SDL_EVENT_DID_ENTER_FOREGROUND);
+  require(!gameplay.allows(state.presentation()), "inactive recovery request must not arm a later return");
+  gameplay.setSceneActive(false, state.presentation());
+  gameplay.requestRecovery(state.presentation());
   require(!gameplay.allows(state.presentation()), "leaving gameplay must release the link");
-  gameplay.setGameplayActive(true, state.presentation());
+  gameplay.setSceneActive(true, state.presentation());
   require(gameplay.allows(state.presentation()), "a new gameplay session may attach again");
   // A brief inactive pulse may begin and end between render-owner iterations.
   send(state, SDL_EVENT_WILL_ENTER_BACKGROUND);
   send(state, SDL_EVENT_DID_ENTER_FOREGROUND);
   require(!gameplay.allows(state.presentation()), "missed inactive pulse must still retire eligibility");
-  gameplay.setGameplayActive(false, state.presentation());
+  gameplay.setSceneActive(false, state.presentation());
   send(state, SDL_EVENT_WILL_ENTER_BACKGROUND);
-  gameplay.setGameplayActive(true, state.presentation());
+  gameplay.setSceneActive(true, state.presentation());
   send(state, SDL_EVENT_DID_ENTER_FOREGROUND);
   require(!gameplay.allows(state.presentation()), "gameplay entered while inactive must stay ordinary");
 }

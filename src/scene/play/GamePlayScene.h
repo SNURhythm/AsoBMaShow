@@ -56,6 +56,7 @@ class PlayfieldPresentation;
 class GamePlayScene : public Scene, public IRhythmControl {
 public:
   bool locksOrientation() const override { return true; }
+  bool usesImprovedFramePacing() const override { return true; }
 
 private:
   std::unique_ptr<bms_parser::Chart> ownedChart;

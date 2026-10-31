@@ -227,6 +227,7 @@ public:
   StartOptions options;
   struct {
     FixtureJukebox jukebox;
+    std::function<void()> requestImprovedFramePacing;
     std::atomic_bool appInBackground{false};
     InputProfile inputProfile;
     struct {
@@ -705,7 +706,10 @@ void testPausePenaltyAndFreshAttemptBoundary() {
     require(scene.state->getClearType() == ClearType::LightAssistedEasyClear,
             "worker snapshot synchronization cannot erase the pause lamp cap");
     scene.realtimeGameplaySession.reset();
+    int pacingRequests = 0;
+    scene.context.requestImprovedFramePacing = [&] { ++pacingRequests; };
     scene.closePauseMenu();
+    require(pacingRequests == 1, "explicit Resume requests frame pacing recovery");
     require(!scene.context.jukebox.paused &&
                 scene.attemptProvenance.assistOption == assist_options::kAssisted &&
                 scene.state->lightAssistClearMark,
@@ -718,6 +722,7 @@ void testPausePenaltyAndFreshAttemptBoundary() {
     scene.closePauseMenu();
     scene.useProductionResetBoundary = true;
     scene.restartCurrentPattern();
+    require(pacingRequests == 3, "Retry Same requests frame pacing recovery after both resumes");
     require(scene.resets == 1 &&
                 scene.attemptProvenance.assistOption == assist_options::kOff &&
                 scene.attemptProvenance.eligibility == ScoreEligibility::Verified &&

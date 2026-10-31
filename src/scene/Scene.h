@@ -62,6 +62,7 @@ public:
   virtual void updateReplayExportProgress() {}
   virtual bool pausesBackgroundTasksForPerformance() const { return false; }
   virtual bool locksOrientation() const { return false; }
+  virtual bool usesImprovedFramePacing() const { return false; }
   virtual bool usesResponsiveMenuCanvas() const { return false; }
   // Custom drawing is conservative until its clocks and mutations are audited.
   // Service updates and deferred callbacks continue while presentation is idle.

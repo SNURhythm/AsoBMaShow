@@ -278,6 +278,8 @@ public:
   std::function<void()> requestRebuildChartLibrary;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;
+  // Render-owner request only; the normal frame loop performs the safe handoff.
+  std::function<void()> requestImprovedFramePacing;
   std::function<void(bool)> setResponsiveMenuCanvas;
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
