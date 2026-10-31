@@ -4912,7 +4912,28 @@ void MainMenuScene::refreshQuickRetryStartButton() {
     return;
   }
   if (!selected || selected->randomSelect || selected->meta.TotalNotes <= 0) {
-    button->setQuickRetry(true, i18n::tr("menu.selector.retry.pending"));
+    // Shared settings remain useful on folders and Random entries. Do not use
+    // a synthetic note count or the previously selected chart's best/goals.
+    std::vector<quick_retry::HurdleAlternatives> groups;
+    if (context.settings.quickRetryGauge) {
+      const auto required = quick_retry::requiredGaugeType(profileSelections.gaugeType,
+          profileSelections.gaugeAutoShift, profileSelections.gaugeAutoShiftLowerBound);
+      std::string label = gaugeButtonLabel(required, GaugeAutoShiftMode::None);
+      if (profileSelections.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
+          gaugeTypeIndex(required) >= gaugeTypeIndex(GaugeType::Hard)) label += " → NORMAL";
+      groups.push_back({{{quick_retry::HurdleKind::Gauge, 0, label}}});
+    }
+    const auto target = pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+    if (context.settings.quickRetryPacemaker && pacemaker::targetIsGrade(target))
+      groups.push_back({{{quick_retry::HurdleKind::Score, 0, pacemaker::displayTargetLabel(target)}}});
+    const auto description = quick_retry::hurdleText(
+        quick_retry::summarizeHurdles(groups, context.settings.quickRetryAllConditionsFail),
+        i18n::tr("menu.selector.retry.or"));
+    const bool chartTargets = context.settings.quickRetryGoals ||
+        (context.settings.quickRetryPacemaker && target == pacemaker::kTargetBest);
+    button->setQuickRetry(true, !description.empty()
+        ? i18n::format("menu.selector.retry.summary", {{"targets", description}})
+        : i18n::tr(chartTargets ? "menu.selector.retry.pending" : "menu.selector.retry.none"));
     return;
   }
 

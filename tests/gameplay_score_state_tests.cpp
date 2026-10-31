@@ -572,6 +572,11 @@ void testQuickRetrySummaryCollapsesActualHurdles() {
   const auto all = summarizeHurdles(mixed, true);
   require(hurdleText(all, "or") == "AA or CLEAR",
           "All-fail retains the weakest score and clear alternatives");
+  const std::vector<HurdleAlternatives> shared{
+      {{Hurdle{HurdleKind::Gauge, 0, "HARD"}}}, {{Hurdle{HurdleKind::Score, 0, "AAA"}}}};
+  require(hurdleText(summarizeHurdles(shared, false), "or") == "HARD + AAA" &&
+              hurdleText(summarizeHurdles(shared, true), "or") == "HARD or AAA",
+          "shared gauge and grade labels preserve Any/All without chart-specific thresholds");
   const Hurdle physical{HurdleKind::Gauge, 300, "NORMAL"};
   require(summarizeHurdles({{{physical}}, {{hard}}}, false).front().size() == 2,
           "auto-shift physical gauge checks are not conflated with a clear lamp");

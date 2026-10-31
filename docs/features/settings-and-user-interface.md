@@ -71,7 +71,11 @@ that must all remain reachable; **or** separates alternative ways to keep the
 attempt. Unfinished goal alternatives retain that meaning when combined with
 gauge and pacemaker requirements. Physical gauge checks stay separate from lamp
 goals when auto-shift or assists make them different. Course launches keep the
-ordinary button; random selections indicate that targets depend on the chart.
+ordinary button. With no concrete chart selected (including Random entries),
+the button shows shared gauge and numeric pacemaker settings, such as
+**Keep HARD + AAA** or **Keep HARD or AAA**. Chart-specific BEST scores and goals
+are omitted; if those are the only enabled targets, it shows the chart-dependent
+message instead. Selecting a chart restores the complete, filtered summary.
 The summary excludes requirements disabled by gameplay's startup eligibility
 check. If eligibility depends on long-note recovery unavailable in chart metadata,
 it shows that targets depend on the chart rather than an estimated hurdle.
