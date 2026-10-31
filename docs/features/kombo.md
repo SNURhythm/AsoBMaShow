@@ -21,8 +21,9 @@ It cannot be removed or adjusted today. Its button opens Personal goals; the
 existing Goals folder in PLAY contains the charts with unfinished goals. The
 Assignments folder continues to list table assignments only.
 
-Only first achievements from saved normal local plays count. Imported or already
-achieved goals, practice, autoplay and replay viewing do not award credit. Each
+Achievements from saved normal local plays count, including folder goals that
+fall below their target after membership changes and are achieved again. Imported
+or still-achieved goals, practice, autoplay and replay viewing do not award credit. Each
 chart/LN-mode goal counts separately; changing to a new harder target can earn
 fresh credit. A goal with both lamp and score targets counts once, when both are
 met. Score, first-achievement date and Kombo progress commit together, so recovery
@@ -63,9 +64,11 @@ this list. Once the shared daily bonus budget is spent, the folders are empty.
 Both the built-in browser and skin-driven selector support these folders, with
 normal search/filter/navigation behavior and refresh after play or day rollover.
 
-Before the daily goal, completed rounds award **10 points**, capped
-at the points still needed for the goal. The play that reaches the goal awards
-no extra savings, even if it completes several assignments. Later rounds award
+Completed rounds award **10 points**, capped at the points remaining to reach
+the daily goal. Once a completion reaches that goal, later completions from
+the same play immediately use extra-challenge rewards. For example, two
+completions at 10/20 award 10 + 1 points, finishing at 21/20 with one point
+added to savings. Extra-challenge rounds award
 **1 bonus point each**, sharing a hardcoded **10-point daily budget** across all
 assignments. There is no per-assignment cap: one assignment can earn all ten.
 All assignment progression stops when the shared budget is spent. Simultaneous

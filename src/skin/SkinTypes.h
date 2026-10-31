@@ -102,6 +102,8 @@ struct ResultSkinData {
   std::optional<int> songReviewFavorite;
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
+  // Single-frame exports must have artwork ready before rendering.
+  bool loadArtworkSynchronously = false;
   bool showTimingAnalytics = false;
   bool showResultGraph = true;
   std::string playerName;

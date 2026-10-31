@@ -12,12 +12,15 @@
 #include "scene/play/GameplayGaugeTypes.h"
 #include "skin/DefaultSkin.h"
 #include "view/Button.h"
+#include "view/ImageView.h"
 #include "view/ClearLampColors.h"
 #include "view/TextView.h"
 #include "view/UiTheme.h"
 
 #include <bgfx/bgfx.h>
 
+#include <chrono>
+#include <filesystem>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -902,6 +905,63 @@ void testLocalizedResultsKeepSemanticLayoutAndColors() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testLongResultHeaderFits() {
+  auto model=makeLocalResultPresentation(localMeta(),localState(),localOptions());
+  model.title=std::string(200,'W');
+  model.artist=std::string(160,'A');
+  for (int width : {720,1080,1920}) {
+    const auto root=buildPresentationLayout(model,width,1080,true);
+    const auto *header=root->findViewByName("resultHeader");
+    const auto *title=root->findViewByName("title");
+    auto *mode=root->findViewByName("playtype");
+    auto *difficulty=root->findViewByName("difficulty");
+    expect(title && mode && difficulty && title->getWidth()>0,
+           "long result header retains all identity views");
+    expect(title->getX()+title->getWidth()<=mode->getX() &&
+               difficulty->getX()+difficulty->getWidth()<=header->getX()+header->getWidth(),
+           "long result title stays bounded and leaves badges inside the header");
+    const int titleWidth=title->getWidth();
+    mode->setWidth(mode->getWidth()+20);
+    difficulty->setWidth(difficulty->getWidth()+40);
+    root->applyYogaLayout();
+    expect(std::abs(title->getWidth()-(titleWidth-60))<=1,
+           "title width follows both dynamic badge widths");
+  }
+}
+
+void testExportArtworkReadyBeforeFirstRender() {
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("result-artwork-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(directory);
+  const auto file = directory / "artwork.bmp";
+  auto *surface = SDL_CreateSurface(8, 8, SDL_PIXELFORMAT_RGBA32);
+  expect(surface != nullptr && SDL_SaveBMP(surface, file.string().c_str()),
+         "create uncached result artwork fixture");
+  SDL_DestroySurface(surface);
+  auto meta = localMeta();
+  meta.Folder = directory;
+  const auto model = makeLocalResultPresentation(meta, localState(), localOptions());
+  for (bool stageFile : {true, false}) {
+    ImageView::dropAllCache();
+    meta.StageFile = stageFile ? "artwork.bmp" : "";
+    meta.Banner = stageFile ? "" : "artwork.bmp";
+    ResultSkinData data{};
+    data.meta = &meta;
+    data.presentation = &model;
+    data.showControls = false;
+    data.loadArtworkSynchronously = true;
+    View root(0, 0, 1920, 1080);
+    DefaultSkin skin;
+    skin.buildLayout("Result", &root, &data);
+    const auto *artwork = dynamic_cast<ImageView *>(root.findViewByName("resultJacket"));
+    expect(artwork && artwork->imageWidth() > 0 && artwork->imageHeight() > 0,
+           "uncached export stage or banner is ready before the first render");
+  }
+  ImageView::dropAllCache();
+  std::filesystem::remove_all(directory);
+}
+
 void testDefaultSkinLocalPresentationContract() {
   auto options = localOptions();
   bms_parser::Chart chart;
@@ -917,6 +977,10 @@ void testDefaultSkinLocalPresentationContract() {
              textView(root.get(), "difficulty") &&
              textView(root.get(), "artist"),
          "authoritative local presentation keeps existing header descendants");
+  expect(root->findViewByName("resultJacket") &&
+             root->findViewByName("resultArtworkPlaceholder") &&
+             root->findViewByName("resultArtworkFrame")->getHeight() == 98,
+         "result artwork spans the title and artist rows with a placeholder");
   expect(root->findViewByName("resultSummary") &&
              root->findViewByName("resultSummaryCard:grade") &&
              root->findViewByName("resultSummaryCard:score") &&
@@ -1447,6 +1511,8 @@ int main() {
   testRemoteUnknownLampDoesNotInventPresentation();
   testRemoteGaugeLabelAndLampFallbackSemantics();
   testLocalizedResultsKeepSemanticLayoutAndColors();
+  testLongResultHeaderFits();
+  testExportArtworkReadyBeforeFirstRender();
   testDefaultSkinLocalPresentationContract();
   testPortraitResultKeepsComparisonCardsReadable();
   testPortraitResultTimingAndActionsFit();

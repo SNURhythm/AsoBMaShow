@@ -111,10 +111,37 @@ int main() {
     CHECK(rejected);
     advance(goals, 44001);
     CHECK(goals.days.at(44001).assignments[0].requirement.chartCount == 3);
-    // Multiple first achievements from one result retain one shared goal budget.
+    // Later completions from the same result earn bonus rewards.
     attempt.day = 44001;
     attempt.achievedGoals = {"a", "b", "c", "d", "e", "f"};
-    CHECK(record(goals, attempt, 0) == 10 && goals.savings == 10);
+    CHECK(record(goals, attempt, 0) == 11 && goals.savings == 11);
+  }
+  {
+    State crossing;
+    auto routine=config(20);
+    auto second=routine.assignments.front(); second.id="b"; second.chartCount=2;
+    routine.assignments.push_back(second);
+    configure(crossing,routine,45000);
+    CHECK(record(crossing,play(45000,"first"),0)==10);
+    PlayProgress receipt;
+    CHECK(record(crossing,play(45000,"second"),0,&receipt)==11);
+    CHECK(crossing.days.at(45000).points==21 && crossing.savings==1);
+    CHECK(receipt.reachedDailyGoal && receipt.assignments.size()==2);
+    CHECK(record(crossing,play(45000,"third"),0)==2);
+    CHECK(crossing.days.at(45000).points==23 && crossing.savings==3);
+  }
+  {
+    State capped;
+    Config routine; routine.dailyGoal=10;
+    configure(capped,routine,45001);
+    auto attempt=play(45001,"many-goals");
+    for (int i=0;i<30;++i) attempt.achievedGoals.push_back("goal-"+std::to_string(i));
+    CHECK(record(capped,attempt,0)==20);
+    const auto &day=capped.days.at(45001);
+    CHECK(day.points==20 && capped.savings==10 && bonusPoints(day)==10);
+    CHECK(day.assignments.front().completedRounds==11);
+    CHECK(day.assignments.front().usedCharts.size()==11);
+    CHECK(record(capped,attempt,0)==0);
   }
   State activity;
   const auto end = localDay(1735689600); // The seven slots must cross a year boundary.
@@ -471,7 +498,7 @@ int main() {
     auto a = many.assignments[0]; a.id = id; many.assignments.push_back(a);
   }
   configure(shared, many, 28000);
-  CHECK(record(shared, play(28000, "goal"), 0) == 1);
+  CHECK(record(shared, play(28000, "goal"), 0) == 3);
   for (int n = 0; n < 8; ++n) record(shared, play(28000, "bonus" + std::to_string(n)), 0);
   CHECK(bonusPoints(shared.days.at(28000)) == 10 && shared.savings == 10);
   CHECK(shared.days.at(28000).points == 11);

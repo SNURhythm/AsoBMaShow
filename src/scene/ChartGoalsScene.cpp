@@ -625,6 +625,10 @@ void ChartGoalsScene::build() {
     const bool selectableMode = scoreLongNoteModeForClearLamp(draft_.chart, 1) == 1 &&
         scoreLongNoteModeForClearLamp(draft_.chart, 2) == 2 &&
         scoreLongNoteModeForClearLamp(draft_.chart, 3) == 3;
+    if (editing_) {
+      label(detail, std::string(i18n::tr("play_options.long_note_mode.label")) + ": " + scope(draft_), 24)
+          ->setThemedColor(app_theme::cyan);
+    }
     if (selectableMode && editing_) {
       auto *modes = new View();
       modes->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
@@ -633,7 +637,8 @@ void ChartGoalsScene::build() {
           later([this, mode] {
             changeDraftMode(mode);
           });
-        });
+        }, mode == draft_.longNoteMode ? app_theme::ActionCategory::Primary
+                                      : app_theme::ActionCategory::Neutral);
         button->setFlex(1);
         button->setSelected(mode == draft_.longNoteMode);
       }

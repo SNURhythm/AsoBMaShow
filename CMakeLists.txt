@@ -7928,6 +7928,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/Judge.cpp
         src/skin/DefaultSkin.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
+        src/view/ImageFade.cpp
+        src/view/ImageFileDecoder.cpp
+        src/view/ImageView.cpp
+        src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
+        src/MinizBridge.c
+        src/path.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
         src/view/SystemTextRasterizer.cpp
@@ -7942,6 +7953,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    if(APPLE)
+        target_link_libraries(result_presentation_model_tests PRIVATE iconv)
+    endif()
     add_executable(remote_result_scene_tests
         tests/remote_result_scene_tests.cpp
         src/BeatorajaScoreMetrics.cpp
@@ -7987,6 +8001,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/Judge.cpp
         src/ResultImageExporterPresentation.cpp
         src/skin/DefaultSkin.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
+        src/view/ImageFade.cpp
+        src/view/ImageFileDecoder.cpp
+        src/view/ImageView.cpp
+        src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
+        src/MinizBridge.c
+        src/path.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
         src/view/SystemTextRasterizer.cpp
@@ -8004,6 +8029,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    if(APPLE)
+        target_link_libraries(result_image_exporter_partial_tests PRIVATE iconv)
+    endif()
     add_executable(chart_practice_range_tests
         tests/chart_practice_range_tests.cpp
         src/practice/PracticeConfiguration.cpp

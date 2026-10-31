@@ -6,6 +6,8 @@
 #include "../targets.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
+#include "../view/ImageView.h"
+#include "../view/IconText.h"
 #include "../view/AppTheme.h"
 
 #include <algorithm>
@@ -16,6 +18,19 @@
 #include <vector>
 
 namespace {
+class ResultArtworkPlaceholder final : public TextView {
+public:
+  explicit ResultArtworkPlaceholder(ImageView &image)
+      : TextView(ui_icons::kFontAwesomeSolidPath, 32), image_(image) {}
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (image_.imageWidth() <= 0 || image_.imageHeight() <= 0)
+      TextView::renderImpl(context);
+  }
+private:
+  ImageView &image_;
+};
+
 struct BpmTextPart {
   std::string prefix;
   std::string value;
@@ -282,9 +297,45 @@ void DefaultSkin::buildPresentationResultLayout(
     header->setMinHeight(96);
     header->setName("resultHeader");
 
+    const int artworkSize = presentation.artist.has_value() ? 98 : 58;
+    auto *artworkFrame = new View();
+    artworkFrame->setName("resultArtworkFrame");
+    artworkFrame->setSize(artworkSize, artworkSize);
+    artworkFrame->setFlexShrink(0);
+    artworkFrame->setBackgroundColor(app_theme::panelStrong());
+    auto *artwork = new ImageView(0, 0, artworkSize, artworkSize);
+    artwork->setName("resultJacket");
+    artwork->setPositionType(YGPositionTypeAbsolute);
+    artwork->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+    artwork->setContentMode(ImageView::ContentMode::Contain);
+    artworkFrame->addView(artwork);
+    auto *placeholder = new ResultArtworkPlaceholder(*artwork);
+    placeholder->setName("resultArtworkPlaceholder");
+    placeholder->setText(ui_icons::textForCodepoint(ui_icons::kMusic));
+    placeholder->setSize(artworkSize, artworkSize);
+    placeholder->setAlign(TextView::CENTER);
+    placeholder->setVAlign(TextView::MIDDLE);
+    placeholder->setThemedColor(app_theme::textSecondary);
+    artworkFrame->addView(placeholder);
+    if (data->meta != nullptr) {
+      const auto &meta = *data->meta;
+      const auto file = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;
+      if (!file.empty()) {
+        if (data->loadArtworkSynchronously) {
+          artwork->setImage(meta.Folder / file);
+        } else {
+          artwork->setImageAsync(meta.Folder / file, true);
+        }
+      }
+    }
+    header->addView(artworkFrame);
+
     auto *titleStack = new View();
     titleStack->setFlexDirection(FlexDirection::Column);
+    titleStack->setWidth(0);
     titleStack->setFlex(1);
+    titleStack->setFlexShrink(1);
+    titleStack->setMinWidth(0);
     titleStack->setGap(4);
 
     auto *titleRow = new View();
@@ -292,13 +343,19 @@ void DefaultSkin::buildPresentationResultLayout(
     titleRow->setAlignItems(YGAlignCenter);
     titleRow->setGap(14);
     titleRow->setHeight(58);
+    titleRow->setWidthPercent(100);
+    titleRow->setMinWidth(0);
 
     auto *titleText = new TextView(app_theme::boldFont, 46);
     titleText->setText(presentation.title);
+    titleText->setMinimumFontSize(32);
+    titleText->setVAlign(TextView::MIDDLE);
     titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
     titleText->setOverflow(TextView::TextOverflow::Marquee);
     titleText->setHeight(58);
+    titleText->setWidth(0);
     titleText->setFlex(1);
+    titleText->setFlexShrink(1);
     titleText->setMinWidth(0);
     titleText->setName("title");
     titleRow->addView(titleText);
