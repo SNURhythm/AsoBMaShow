@@ -260,6 +260,7 @@ public:
     std::optional<audio::SkinSoundHandle> sound;
     bool loadAttempted = false;
     std::optional<long long> startedMicros;
+    std::string reason;
   } quickRetryFeedback;
   audio::AudioDeviceManager audioDeviceManager;
   audio::ApplyResult audioStartupApplyResult;

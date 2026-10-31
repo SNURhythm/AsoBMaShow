@@ -5440,9 +5440,11 @@ bool GamePlayScene::retryIfTargetsUnreachable() {
   if (quickRetryTargets.empty() || state == nullptr || state->isEnding ||
       !state->isPlaying || advancingGameplayInBackground || context.jukebox.isPaused())
     return false;
-  if (!quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryTargets,
-                               currentQuickRetryProjection()))
+  const auto projection = currentQuickRetryProjection();
+  if (!quick_retry::shouldRetry(*state, chart->Meta.TotalNotes, quickRetryTargets, projection))
     return false;
+  context.quickRetryFeedback.reason = quick_retry::failureReason(
+      *state, chart->Meta.TotalNotes, quickRetryTargets, projection, activePacemakerTarget.label);
   quickRetryPending = true;
   state->isEnding = true;
   stopRealtimeGameplayAuthority(false);
@@ -5453,6 +5455,16 @@ bool GamePlayScene::retryIfTargetsUnreachable() {
 }
 
 void GamePlayScene::prepareQuickRetryFeedback() {
+  if (!quickRetryReasonText) {
+    quickRetryReasonText = std::make_unique<TextView>(
+        app_theme::boldFont, 34, TextView::FontWeight::Bold);
+    quickRetryReasonText->setDeferredTextureMaterialization(true);
+    quickRetryReasonText->setGlyphAtlasEnabled(true);
+    quickRetryReasonText->setMinimumFontSize(16);
+    quickRetryReasonText->setAlign(TextView::CENTER);
+    quickRetryReasonText->setVAlign(TextView::MIDDLE);
+    quickRetryReasonText->setColor({255, 239, 205, 255});
+  }
   auto &feedback = context.quickRetryFeedback;
   if (feedback.loadAttempted) return;
   feedback.loadAttempted = true;
@@ -5472,7 +5484,7 @@ void GamePlayScene::playQuickRetryFeedback() {
   }
 }
 
-void GamePlayScene::renderQuickRetryFeedback() {
+void GamePlayScene::renderQuickRetryFeedback(RenderContext &renderContext) {
   auto &started = context.quickRetryFeedback.startedMicros;
   if (!started) return;
   constexpr float durationMicros = 320'000.0F;
@@ -5488,6 +5500,7 @@ void GamePlayScene::renderQuickRetryFeedback() {
   const float width = rendering::window_width;
   const float height = rendering::window_height;
   const float edge = std::min(28.0F + 30.0F * progress, std::min(width, height) * 0.5F);
+  renderContext.flushUiBatch();
   auto &batch = quickRetryFeedbackBatch;
   batch.setSubmitView(rendering::ui_view);
   batch.begin();
@@ -5511,6 +5524,13 @@ void GamePlayScene::renderQuickRetryFeedback() {
   batch.addRect(0, rimWidth, rimWidth, height - 2 * rimWidth, rim);
   batch.addRect(width - rimWidth, rimWidth, rimWidth, height - 2 * rimWidth, rim);
   batch.end();
+  if (quickRetryReasonText && !context.quickRetryFeedback.reason.empty()) {
+    quickRetryReasonText->setText(context.quickRetryFeedback.reason);
+    quickRetryReasonText->setSize(static_cast<int>(std::max(1.0F, width - 64.0F)), 64);
+    quickRetryReasonText->setPosition(32, static_cast<int>((height - 64.0F) * 0.5F));
+    RenderContext::OpacityScope opacity(renderContext, fade);
+    quickRetryReasonText->render(renderContext);
+  }
 }
 
 void GamePlayScene::configureSkinIrTarget() {
@@ -7487,7 +7507,7 @@ void GamePlayScene::renderScene() {
 #endif
   updateSkinResetLayoutVisibility();
   renderCoursePauseHoldRing();
-  renderQuickRetryFeedback();
+  renderQuickRetryFeedback(renderContext);
   if (laneStateText != nullptr) {
     laneStateText->render(renderContext);
   }

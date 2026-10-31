@@ -29,6 +29,38 @@ GameplayScoreConfig beatorajaScoreConfig(int totalNotes, int keyMode,
           .keyMode = keyMode};
 }
 
+void testQuickRetryReason() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  state.stagePassedNotes = 99;
+  state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 78;
+  quick_retry::Targets targets{.pacemakerScore = 2, .requireGaugeClear = true};
+  require(quick_retry::failureReason(state, 100, targets, {}, "AAA") ==
+              "NORMAL CLEAR UNREACHABLE",
+          "retry reason identifies failed gauge while score remains reachable");
+  targets.allConditionsFail = true;
+  require(quick_retry::failureReason(state, 100, targets, {}, "AAA").empty(),
+          "all-fail policy has no reason while a target remains reachable");
+  targets.pacemakerScore = 3;
+  require(quick_retry::failureReason(state, 100, targets, {}, "AAA") ==
+              "ALL TARGETS UNREACHABLE",
+          "all-fail reason describes the combined failure");
+  state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 79;
+  targets.allConditionsFail = false;
+  require(quick_retry::failureReason(state, 100, targets, {}, "AAA") ==
+              "AAA UNREACHABLE",
+          "reachable gauge leaves the failed pacemaker as the reason");
+  require(quick_retry::failureReason(state, 100, {.lamp = kClearTypeFullComboRank}) ==
+              "FULL COMBO UNREACHABLE",
+          "goal-only retry names the unavailable lamp");
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::SurvivalToGroove);
+  state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
+  state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 78;
+  require(quick_retry::failureReason(state, 100, {.requireGaugeClear = true}) ==
+              "NORMAL CLEAR UNREACHABLE",
+          "survival-to-groove reason names the final fallback gauge");
+}
+
 void requireSame(const GameplayScoreState &left,
                  const GameplayScoreState &right) {
   require(left.judgeCount == right.judgeCount, "judge counts match");
@@ -621,6 +653,7 @@ int main() {
   testQuickRetryProjectedSurvivalToGroove();
   testQuickRetryRequiredGauge();
   testQuickRetryFailurePolicy();
+  testQuickRetryReason();
   testQuickRetryDeferredBadGaugeFloor();
   testQuickRetryReachability();
   static_assert(kClearTypeLightAssistedEasyClearRank == 50);

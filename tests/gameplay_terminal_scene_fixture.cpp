@@ -239,6 +239,7 @@ public:
     struct {
       std::optional<int> sound = 1;
       std::optional<long long> startedMicros;
+      std::string reason;
     } quickRetryFeedback;
     std::function<void()> requestImprovedFramePacing;
     std::atomic_bool appInBackground{false};
@@ -506,6 +507,7 @@ public:
   std::int64_t quickRetryRemainingHellChargeTicks = 0;
   quick_retry::Projection currentQuickRetryProjection() const;
   quick_retry::Targets quickRetryTargets;
+  pacemaker::Target activePacemakerTarget;
   bool quickRetryNewPattern = false;
   int reshuffles = 0;
   void playQuickRetryFeedback();
@@ -2725,6 +2727,8 @@ void testAutomaticRetryCue() {
     scene.context.jukebox.paused = false;
     require(scene.retryIfTargetsUnreachable() && scene.context.systemSounds.plays == 1,
             "automatic Keep and Reshuffle each trigger a cue immediately");
+    require(scene.context.quickRetryFeedback.reason == "GOAL SCORE UNREACHABLE",
+            "automatic Keep and Reshuffle retain the failed target reason before reset");
     require(scene.retryIfTargetsUnreachable() && scene.context.systemSounds.plays == 1,
             "a pending retry never retriggers the cue");
     require(reshuffle ? scene.reshuffles == 1 : scene.deferred.size() == 1,

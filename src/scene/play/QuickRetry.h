@@ -4,6 +4,8 @@
 #include "QuickRetryProjection.h"
 #include <limits>
 #include <span>
+#include <string>
+#include <string_view>
 
 namespace quick_retry {
 // Each unfinished condition is an alternative opportunity for progress.
@@ -144,6 +146,31 @@ inline bool shouldRetry(const GameplayScoreState &state, int totalNotes,
     include(!scoreReachable && !lampReachable);
   }
   return targets.allConditionsFail ? allFailed : anyFailed;
+}
+
+// Called only when presenting a retry, using the same projection as its trigger.
+inline std::string failureReason(const GameplayScoreState &state, int totalNotes,
+                                 const Targets &targets, const Projection &projection = {},
+                                 std::string_view pacemakerLabel = "PACEMAKER") {
+  if (!shouldRetry(state, totalNotes, targets, projection)) return {};
+  const bool hasGoals = targets.score >= 0 || targets.lamp >= 0;
+  const int groups = int(targets.requireGaugeClear) + int(targets.pacemakerScore >= 0) + int(hasGoals);
+  if (targets.allConditionsFail && groups > 1) return "ALL TARGETS UNREACHABLE";
+  if (targets.requireGaugeClear &&
+      shouldRetry(state, totalNotes, {.requireGaugeClear = true}, projection)) {
+    auto gauge = requiredGaugeType(state.selectedGaugeType, state.gaugeAutoShift,
+                                  state.gaugeAutoShiftLowerBound);
+    if (state.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
+        state.gaugeRules().gauges[gaugeTypeIndex(gauge)].survival)
+      gauge = GaugeType::Normal;
+    return std::string(gaugeTypeToLabel(gauge)) + " CLEAR UNREACHABLE";
+  }
+  if (targets.pacemakerScore >= 0 &&
+      shouldRetry(state, totalNotes, {.pacemakerScore = targets.pacemakerScore}, projection))
+    return std::string(pacemakerLabel.empty() ? "PACEMAKER" : pacemakerLabel) + " UNREACHABLE";
+  if (targets.score >= 0 && targets.lamp >= 0) return "GOAL TARGETS UNREACHABLE";
+  if (targets.lamp >= 0) return std::string(clearTypeRankToLabel(targets.lamp)) + " UNREACHABLE";
+  return "GOAL SCORE UNREACHABLE";
 }
 
 inline Targets armReachableTargets(const GameplayScoreState &state, int totalNotes,
