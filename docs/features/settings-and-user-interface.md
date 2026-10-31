@@ -53,9 +53,9 @@ targets and reachability rules.
 
 ## Quick Retry
 
-Play Options offers **Quick Retry** (Off/On, default Off) and **Retry Pattern**
-(Same/New, default Same). Same preserves the current random layout; New uses the
-normal retry path to generate another layout. The child options are grouped below
+Play Options offers **Quick Retry** (Off/On, default Off) and **Randomization on retry**
+(Keep/Reshuffle, default Keep). Keep preserves the current random layout; Reshuffle
+uses the normal retry path to generate another layout. The child options are grouped below
 the master switch with indentation and a vertical rule. Three condition checkboxes—**Gauge**, **Pacemaker Target**, and
 **Goals**—default checked. **Retry when** offers **Any fails** (default) and
 **All fail**. All preferences are saved with the profile. Child controls are
