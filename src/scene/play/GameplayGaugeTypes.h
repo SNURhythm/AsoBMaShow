@@ -106,6 +106,8 @@ enum class ClearType {
   HardClear,
   ExHardClear,
   FullCombo,
+  Perfect,
+  Max,
 };
 
 // Kept distinct from the selected gauge: Beatoraja's BPM Guide changes the
@@ -125,6 +127,8 @@ inline constexpr int kClearTypeNormalClearRank = clearLampRank<300>();
 inline constexpr int kClearTypeHardClearRank = clearLampRank<400>();
 inline constexpr int kClearTypeExHardClearRank = clearLampRank<500>();
 inline constexpr int kClearTypeFullComboRank = clearLampRank<600>();
+inline constexpr int kClearTypePerfectRank = clearLampRank<700>();
+inline constexpr int kClearTypeMaxRank = clearLampRank<800>();
 inline constexpr std::size_t kGaugeTypeCount = 9;
 
 namespace clear_policy {
@@ -170,6 +174,23 @@ fullComboRankForPlayback(int rank, bool fullComboAchieved,
   if (fullComboAchieved && rank >= kClearTypeAssistedEasyClearRank &&
       rank != kClearTypeLightAssistedEasyClearRank) {
     rank = std::max(rank, kClearTypeFullComboRank);
+  }
+  return capRankForPlayback(rank, playback);
+}
+// Counts must describe this entire chart (or completed course), not a prefix.
+// Callers must establish combo qualification separately: KPOOR may reset combo
+// under the active ruleset/mode without contributing to comboBreak.
+[[nodiscard]] inline int completedClearRank(
+    int rank, int totalNotes, int pGreat, int great, int good, int bad,
+    int poor, int comboBreak, const audio::PlaybackRate &playback = {}) {
+  rank = normalizeClearLamp(rank);
+  const bool complete = totalNotes > 0 && pGreat >= 0 && great >= 0 &&
+      good >= 0 && bad == 0 && poor == 0 && comboBreak == 0 &&
+      static_cast<long long>(pGreat) + great + good == totalNotes;
+  if (complete && rank >= kClearTypeAssistedEasyClearRank) {
+    const int achievement = good != 0 ? kClearTypeFullComboRank
+        : great != 0 ? kClearTypePerfectRank : kClearTypeMaxRank;
+    rank = std::max(rank, achievement);
   }
   return capRankForPlayback(rank, playback);
 }
@@ -387,6 +408,10 @@ inline int clearTypeToRank(ClearType clearType) {
     return kClearTypeHardClearRank;
   case ClearType::ExHardClear:
     return kClearTypeExHardClearRank;
+  case ClearType::Perfect:
+    return kClearTypePerfectRank;
+  case ClearType::Max:
+    return kClearTypeMaxRank;
   case ClearType::FullCombo:
     return kClearTypeFullComboRank;
   case ClearType::Failed:
@@ -409,6 +434,10 @@ inline const char *clearTypeToLabel(ClearType clearType) {
     return "HARD CLEAR";
   case ClearType::ExHardClear:
     return "EX-HARD CLEAR";
+  case ClearType::Perfect:
+    return "PERFECT";
+  case ClearType::Max:
+    return "MAX";
   case ClearType::FullCombo:
     return "FULL COMBO";
   case ClearType::Failed:
@@ -419,6 +448,8 @@ inline const char *clearTypeToLabel(ClearType clearType) {
 
 inline const char *clearTypeRankToLabel(int rank) {
   rank = normalizeClearLamp(rank);
+  if (rank >= kClearTypeMaxRank) return "MAX";
+  if (rank >= kClearTypePerfectRank) return "PERFECT";
   if (rank >= kClearTypeFullComboRank) {
     return "FULL COMBO";
   }

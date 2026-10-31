@@ -281,12 +281,14 @@ inline int courseStageClearRank(
                                state.judgeCount.at(Great) +
                                state.judgeCount.at(Good);
   const bool fullCombo = meta.TotalNotes >= 0 &&
-                         comboNotes == meta.TotalNotes && state.comboBreak == 0;
+                         comboNotes == meta.TotalNotes && state.comboBreak == 0 &&
+                         (state.gaugeRules().ruleset != GameplayRuleset::Beatoraja ||
+                          state.stageCombo == meta.TotalNotes);
   return fullCombo && state.currentGauge > 0.0F &&
                  state.getClearTypeRank() >= kClearTypeAssistedEasyClearRank &&
                  !state.assistClearMark && !state.lightAssistClearMark &&
                  playback.neutral()
-             ? kClearTypeFullComboRank
+             ? state.completedClearTypeRank(meta.TotalNotes, playback)
              : kNoClearTypeRank;
 }
 

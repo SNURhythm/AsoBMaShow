@@ -427,6 +427,15 @@ void testOutboxRowsRequireReceiptResolutionBeforeRemoval() {
 } // namespace
 
 int main() {
+  for (int lamp : {700, 800}) {
+    auto local = localCandidate();
+    local.lampRank = lamp;
+    auto remote = remoteScore("perfect", 'b', 'a', 150, 600);
+    const auto plan = ir::planScoreReconciliation(kProvider, kOrigin,
+        std::vector{local}, std::vector{remote}, kConfirmedAt);
+    assert(plan.upsertedReceipts.size() == 1);
+  }
+
   testExactRemoteIdIsObserved();
   testEligibleLocalProofCreatesSnapshotReceipt();
   testIneligibleCustomModeDoesNotInvalidateEligibleHistory();

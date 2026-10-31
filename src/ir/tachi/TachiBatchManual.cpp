@@ -34,6 +34,9 @@ std::optional<std::string_view> lampForClearRank(int clearType) {
     return "HARD CLEAR";
   case kClearTypeExHardClearRank:
     return "EX HARD CLEAR";
+  // Tachi BMS lamps stop at FULL COMBO.
+  case kClearTypePerfectRank:
+  case kClearTypeMaxRank:
   case kClearTypeFullComboRank:
     return "FULL COMBO";
   default:

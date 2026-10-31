@@ -936,6 +936,21 @@ public:
     return recalledClearTypeRank_.value_or(clearTypeToRank(getClearType()));
   }
 
+  [[nodiscard]] int completedClearTypeRank(
+      int totalNotes, const audio::PlaybackRate &playback = {}) const {
+    // Beatoraja compares the surviving combo, not just BAD/MISS counts.
+    // Empty POOR resets it in 5K/10K/PMS, including after the last note;
+    // a carried course maximum cannot establish this stage's achievement.
+    if (assistClearMark || lightAssistClearMark ||
+        (gaugeRules_.ruleset == GameplayRuleset::Beatoraja && combo < totalNotes)) {
+      return clear_policy::capRankForPlayback(getClearTypeRank(), playback);
+    }
+    return clear_policy::completedClearRank(
+        getClearTypeRank(), totalNotes, judgeCount.at(PGreat),
+        judgeCount.at(Great), judgeCount.at(Good), judgeCount.at(Bad),
+        judgeCount.at(Poor), comboBreak, playback);
+  }
+
   [[nodiscard]] const char *getClearTypeLabel() const {
     return recalledClearTypeRank_ ? clearTypeRankToLabel(*recalledClearTypeRank_)
                                   : clearTypeToLabel(getClearType());

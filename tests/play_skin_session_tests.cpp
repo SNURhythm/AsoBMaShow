@@ -10445,6 +10445,7 @@ void testCourseStageClearLampsPreserveComboAchievements() {
     state.judgeCount[Good] = test.good;
     state.judgeCount[Poor] = test.poor;
     state.comboBreak = test.poor;
+    state.combo = state.stageCombo = test.poor == 0 ? 10 : 0;
     state.stagePassedNotes = 10;
     // The carried course maximum must not hide this stage's broken combo.
     state.maxCombo = 100;
@@ -10461,6 +10462,23 @@ void testCourseStageClearLampsPreserveComboAchievements() {
     const auto clear = bridge.booleanProperty({90});
     expect(clear.supported && clear.value == (test.gauge > 0.0F),
            "course-stage clear animation depends on survival independently of lamp");
+  }
+  chart.Meta.KeyMode = 5;
+  for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    RhythmState state(&chart, false, ruleset);
+    state.configureGauge(GaugeType::Grade, GaugeAutoShiftMode::None,
+                         GaugeProfile::CourseDefault);
+    state.combo = state.maxCombo = 100;
+    for (int note = 0; note < 10; ++note) {
+      if (note == 5) state.commitJudgeCounters(JudgeResult(Kpoor, 0));
+      state.commitJudgeCounters(JudgeResult(PGreat, 0));
+    }
+    state.currentGauge = 50.0F;
+    ResultSkinStateBridge bridge(
+        {.state = &state, .meta = &chart.Meta, .courseMode = true}, 1, 0);
+    const auto lamp = bridge.integerProperty({370}, SkinIntegerPropertyDomain::ImageIndex);
+    expect(lamp.supported && lamp.value == (ruleset == GameplayRuleset::Beatoraja ? 0 : 10),
+           "carried course maximum cannot hide a Beatoraja stage's empty POOR combo reset");
   }
 }
 

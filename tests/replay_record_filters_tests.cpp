@@ -84,6 +84,15 @@ ResultRecordSummary makeRemoteResultRecordForFilter(
 } // namespace
 
 int main() {
+  const std::vector achievements{makeSummary(1, 600, 100, 200, 100),
+      makeSummary(2, 700, 190, 200, 100), makeSummary(3, 800, 200, 200, 100)};
+  for (int rank : {600, 700, 800}) {
+    ReplayRecordFilters filter; filter.clearMarkRank = rank;
+    const auto matching = replay_record_filters::apply(achievements, filter);
+    ASSERT_EQ(1, matching.size(), "achievement filters remain distinct");
+    ASSERT_EQ(rank, matching.front().clearType, "achievement filter selects exact lamp");
+  }
+
   for (const auto criterion : {ReplayRecordSortCriterion::ClearMark,
                                ReplayRecordSortCriterion::Score,
                                ReplayRecordSortCriterion::MaxCombo}) {

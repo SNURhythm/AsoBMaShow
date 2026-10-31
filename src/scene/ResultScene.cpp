@@ -502,6 +502,8 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   aggregate.stagePassedNotes = session.resultPassedNotes();
 
   for (const auto &result : session.completedResults) {
+    aggregate.assistClearMark |= result.state.assistClearMark;
+    aggregate.lightAssistClearMark |= result.state.lightAssistClearMark;
     for (int i = 0; i < JudgementCount; ++i) {
       aggregate.addJudgeCountFrom(result.state, static_cast<Judgement>(i));
     }
@@ -534,8 +536,9 @@ int courseResultClearTypeForSession(const CoursePlaySession &session,
       static_cast<int>(session.completedResults.size()),
       static_cast<int>(session.entries.size()), session.entries.size(),
       resultState, courseMeta);
-  const int derivedRank = clear_policy::fullComboRankForPlayback(
-      resultState.getClearTypeRank(), fullCombo, provenance.playback);
+  const int derivedRank = fullCombo
+      ? resultState.completedClearTypeRank(courseMeta.TotalNotes, provenance.playback)
+      : clear_policy::capRankForPlayback(resultState.getClearTypeRank(), provenance.playback);
   return session.finalClearTypeForPresentation(derivedRank);
 }
 
@@ -667,12 +670,8 @@ ResultScene::ResultScene(
     local.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
     local.currentClearRankOverride = clearRank;
   } else {
-    const int maximumScore =
-        result_contract::maximumScoreForNotes(local.meta.TotalNotes).value_or(0);
-    const int clearRank = replay_clear_mark::effectiveClearRank(
-        local.resultState.getClearTypeRank(), local.resultState.maxCombo,
-        local.resultState.comboBreak, maximumScore,
-        local.attemptProvenance.playback);
+    const int clearRank = local.resultState.completedClearTypeRank(
+        local.meta.TotalNotes, local.attemptProvenance.playback);
     if (clearRank != local.resultState.getClearTypeRank()) {
       local.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
       local.currentClearRankOverride = clearRank;
@@ -2840,7 +2839,8 @@ void ResultScene::openRankings() {
           .maxScore = result_contract::maximumScoreForNotes(
                           local->meta.TotalNotes)
                           .value_or(0),
-          .clearType = local->resultState.getClearTypeRank(),
+          .clearType = local->currentClearRankOverride.value_or(
+              local->resultState.getClearTypeRank()),
           .badPoints = rankingBadPoints(local->resultState, local->meta.TotalNotes),
           .maxCombo = local->resultState.maxCombo,
       };

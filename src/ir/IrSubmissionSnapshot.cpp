@@ -230,6 +230,18 @@ serializeIrSubmissionSnapshot(const IrSubmissionSnapshot &snapshot,
     auto actual = snapshot.submission;
     actual.clearType = normalizeClearLamp(actual.clearType);
     expected.value->clearType = normalizeClearLamp(expected.value->clearType);
+    // Before Perfect/Max were native lamps, snapshots used the FC projection.
+    // Accept that original representation only for an owner from that domain;
+    // authentication above still covers the exact original serialized bytes.
+    const auto &score = owner.score;
+    const bool fullCombo = score.comboBreak == 0 && score.maxScore > 0 &&
+        score.maxScore % 2 == 0 && score.maxCombo >= score.maxScore / 2;
+    const int historicalRank = clear_policy::fullComboRankForPlayback(
+        score.clearType, fullCombo, score.provenance.playback);
+    if (normalizeClearLamp(score.clearType) <= kClearTypeFullComboRank &&
+        actual.clearType == historicalRank) {
+      expected.value->clearType = historicalRank;
+    }
     if (actual != *expected.value) {
       diagnostic = "IR snapshot disagrees with modern result";
       return std::nullopt;

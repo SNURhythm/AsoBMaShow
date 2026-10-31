@@ -64,6 +64,8 @@ bool isKnownLampRank(int value) noexcept {
       kClearTypeHardClearRank,
       kClearTypeExHardClearRank,
       kClearTypeFullComboRank,
+      kClearTypePerfectRank,
+      kClearTypeMaxRank,
   };
   return std::ranges::find(ranks, normalizeClearLamp(value)) != ranks.end();
 }

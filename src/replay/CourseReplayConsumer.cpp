@@ -2,6 +2,7 @@
 
 #include "../CourseConstraintUtils.h"
 #include "../CoursePlaySession.h"
+#include "../ResultClearLamp.h"
 
 #include <algorithm>
 #include <numeric>
@@ -81,9 +82,14 @@ rebuildJudgedCourseResult(
       std::all_of(stages.begin(), stages.end(), [](const auto &stage) {
         return stage.score.comboBreak == 0;
       });
+  // A stage achievement is not the course's gauge result.
+  const auto &last = stages.back();
+  const int baseRank = last.score.clearType >= kClearTypeFullComboRank
+      ? clearTypeToRank(clearTypeForGauge(last.adoptedGaugeType,
+            last.score.finalGauge, false, saved.gaugeProfile))
+      : last.score.clearType;
   const int clearType = completeCourse
-      ? clear_policy::fullComboRankForPlayback(stages.back().score.clearType,
-                                               fullCombo, saved.provenance.playback)
+      ? clear_policy::fullComboRankForPlayback(baseRank, fullCombo, saved.provenance.playback)
       : kClearTypeFailedRank;
   result_persistence::ModernCourseResultCapture capture{
       .attemptId = saved.attemptId,
@@ -107,6 +113,10 @@ rebuildJudgedCourseResult(
   auto judged =
       result_persistence::captureModernCourseResult(capture, diagnostic);
   if (judged) {
+    const int effective = result_clear_lamp::effectiveRank(*judged);
+    judged->clearType = effective == result_clear_lamp::effectiveRank(saved)
+        ? saved.clearType : effective;
+    judged->resultFingerprint = result_persistence::modernResultFingerprint(*judged);
     judged->resultId = saved.resultId;
   }
   return judged;

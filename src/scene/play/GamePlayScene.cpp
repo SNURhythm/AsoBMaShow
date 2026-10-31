@@ -5938,10 +5938,7 @@ void GamePlayScene::finishReplayRecording() {
   recordedReplay.clearType = state->getClearTypeRank();
   const int totalNotes =
       chart != nullptr ? std::max(0, chart->Meta.TotalNotes) : 0;
-  const bool fullCombo =
-      totalNotes > 0 && state->comboBreak == 0 && state->maxCombo >= totalNotes;
-  recordedReplay.clearType = clear_policy::fullComboRankForPlayback(
-      recordedReplay.clearType, fullCombo, options.playback);
+  recordedReplay.clearType = state->completedClearTypeRank(totalNotes, options.playback);
 }
 
 GamePlayScene::CompletedModernReplayCapture

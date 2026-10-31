@@ -6,6 +6,7 @@
 #include "../ReplayData.h"
 #include "../ScoreHistoryTime.h"
 #include "../ResultContracts.h"
+#include "../ResultClearLamp.h"
 #include "../bms_parser.hpp"
 #include "../scene/play/GameplayCandidateSelection.h"
 #include "../scene/play/GameplayDefinition.h"
@@ -467,7 +468,15 @@ ReplayPlaybackMaterializer::materializeForConsumers(
           judged.score.kPoor + *maximumScore / 2 - state.stagePassedNotes;
     }
     judged.score.finalGauge = state.currentGauge;
-    judged.score.clearType = state.getClearTypeRank();
+    // Historical captures stored the gauge lamp. Keep that representation
+    // while re-judging; effective lamps are derived separately for display.
+    judged.score.clearType = savedResult.score.clearType <= kClearTypeFullComboRank
+        ? state.getClearTypeRank()
+        : state.completedClearTypeRank(*maximumScore / 2, savedResult.score.provenance.playback);
+    if (result_clear_lamp::effectiveRank(judged.score) ==
+        result_clear_lamp::effectiveRank(savedResult.score)) {
+      judged.score.clearType = savedResult.score.clearType;
+    }
     judged.adoptedGaugeType = state.gaugeType;
     judged.adoptedGaugeHistory = state.gaugeHistoryFor(state.gaugeType);
     judged.judgementTiming = judgementTiming(state);

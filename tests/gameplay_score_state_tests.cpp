@@ -533,6 +533,13 @@ void testQuickRetryReachability() {
           "resolved heads and earned ticks update cached totals");
   GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
   state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  require(!quick_retry::shouldRetry(state, 100, {.lamp = 800}), "Max lamp remains reachable at start");
+  quick_retry::Projection deferred;
+  deferred.pendingClassicJudgements[Great] = 1;
+  require(quick_retry::shouldRetry(state, 100, {.lamp = 800}, deferred), "deferred GREAT loses Max lamp");
+  require(!quick_retry::shouldRetry(state, 100, {.lamp = 700}, deferred), "deferred GREAT retains Perfect");
+  deferred.pendingClassicJudgements[Good] = 1;
+  require(quick_retry::shouldRetry(state, 100, {.lamp = 700}, deferred), "deferred GOOD loses Perfect");
   const std::array score{quick_retry::Condition{.score = 199}};
   require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(score)), "perfect start can reach target");
   quick_retry::Projection pending;
