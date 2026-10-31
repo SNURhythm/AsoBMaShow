@@ -1337,6 +1337,8 @@ void testQuickRetryRoundTrip() {
          "existing profiles do not automatically retry and default to same pattern");
   expect(settings.quickRetryGauge && settings.quickRetryPacemaker && settings.quickRetryGoals,
          "all retry conditions default on behind the disabled master switch");
+  expect(!settings.quickRetryAllConditionsFail, "existing profiles retry on any failed condition");
+  settings.quickRetryAllConditionsFail = true;
   settings.quickRetryEnabled = true;
   settings.quickRetryNewPattern = true;
   settings.quickRetryGauge = false;
@@ -1345,6 +1347,7 @@ void testQuickRetryRoundTrip() {
   std::string error;
   expect(AppSettingsStore::Save(path, settings, error), "quick retry settings save");
   const auto loaded = AppSettingsStore::Load(path).settings;
+  expect(loaded.quickRetryAllConditionsFail, "All failure policy survives settings reload");
   expect(loaded.quickRetryEnabled && loaded.quickRetryNewPattern,
          "quick retry and new pattern survive settings reload");
   expect(!loaded.quickRetryGauge && !loaded.quickRetryPacemaker && !loaded.quickRetryGoals,

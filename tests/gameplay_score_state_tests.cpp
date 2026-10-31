@@ -383,6 +383,44 @@ void testQuickRetryRequiredGauge() {
           "Survival-to-Groove retries when Normal fallback cannot recover");
 }
 
+void testQuickRetryFailurePolicy() {
+  GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  state.stagePassedNotes = 99;
+  state.comboBreak = 1;
+  for (int enabled = 0; enabled < 8; ++enabled) {
+    for (int failed = 0; failed < 8; ++failed) {
+      state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] =
+          (failed & 1) ? 78 : 79;
+      for (const bool all : {false, true}) {
+        const quick_retry::Targets targets{
+            .score = (enabled & 4) ? ((failed & 4) ? 3 : 2) : -1,
+            .pacemakerScore = (enabled & 2) ? ((failed & 2) ? 3 : 2) : -1,
+            .requireGaugeClear = bool(enabled & 1), .allConditionsFail = all};
+        const bool expected = enabled != 0 &&
+            (all ? (enabled & failed) == enabled : (enabled & failed) != 0);
+        require(quick_retry::shouldRetry(state, 100, targets) == expected,
+                "Any/All combines only enabled gauge, pacemaker and goal groups");
+      }
+    }
+  }
+  const quick_retry::Targets alternatives{.score = 3, .lamp = kClearTypeNormalClearRank,
+      .pacemakerScore = 3, .allConditionsFail = true};
+  state.currentGauge = state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 79;
+  require(!quick_retry::shouldRetry(state, 100, alternatives),
+          "All waits while an alternative goal lamp remains reachable");
+  require(!quick_retry::shouldRetry(state, 100,
+              {.score = 0, .pacemakerScore = 3, .allConditionsFail = true}),
+          "a goal already reached this attempt keeps All mode from retrying");
+  GameplayScoreState initial(beatorajaScoreConfig(100, 7, 100.0));
+  const auto armed = quick_retry::armReachableTargets(initial, 100,
+      {.score = 201, .pacemakerScore = 199, .allConditionsFail = true});
+  require(armed.allConditionsFail && armed.score < 0 && armed.pacemakerScore == 199,
+          "All mode preserves its policy while discarding impossible starting conditions");
+  require(quick_retry::shouldRetry(state, 100, armed),
+          "discarded starting conditions do not prevent All mode from retrying");
+}
+
 void testQuickRetryDeferredBadGaugeFloor() {
   struct Case { float gauge; int remaining; int bads; int hcnTicks; bool clears; };
   for (const auto &test : std::array{
@@ -499,6 +537,7 @@ void testQuickRetryReachability() {
 int main() {
   testQuickRetryProjectedSurvivalToGroove();
   testQuickRetryRequiredGauge();
+  testQuickRetryFailurePolicy();
   testQuickRetryDeferredBadGaugeFloor();
   testQuickRetryReachability();
   static_assert(kClearTypeLightAssistedEasyClearRank == 50);

@@ -401,6 +401,7 @@ public:
   std::string selectedLnMode = kDefaultLnMode;
   std::string selectedAssistOption = kDefaultAssistOption;
   bool quickRetryEnabled = false;
+  bool quickRetryAllConditionsFail = false;
   bool quickRetryGauge = true;
   bool quickRetryPacemaker = true;
   bool quickRetryGoals = true;

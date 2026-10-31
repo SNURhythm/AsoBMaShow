@@ -55,16 +55,19 @@ targets and reachability rules.
 
 Play Options offers **Quick Retry** (Off/On, default Off) and **Retry Pattern**
 (Same/New, default Same). Same preserves the current random layout; New uses the
-normal retry path to generate another layout. Both preferences are saved with
-the profile. Three independent On/Off condition toggles—**Gauge**, **Pacemaker
-Target**, and **Goals**—default On and are saved with the profile too. They are
-disabled while the master switch is Off; turning all three Off prevents automatic
-retries even with the master switch On.
+normal retry path to generate another layout. The child options are grouped below
+the master switch with indentation and a vertical rule. Three condition checkboxes—**Gauge**, **Pacemaker Target**, and
+**Goals**—default checked. **Retry when** offers **Any fails** (default) and
+**All fail**. All preferences are saved with the profile. Child controls are
+disabled while the master switch is Off; unchecking all three conditions prevents
+automatic retries even with the master switch On.
 
-During ordinary single-chart manual play, Quick Retry restarts as soon as the
-enabled gauge clear, pacemaker target, or every unfinished goal condition becomes
-unreachable with the best possible remaining judgements. The gauge requirement
-works even without a pacemaker or unfinished goals. It uses the selected gauge for Off and Continue,
+During ordinary single-chart manual play, **Any fails** restarts as soon as one
+enabled condition group becomes unreachable with the best possible remaining
+judgements. **All fail** waits until every enabled, available condition group is
+unreachable. Disabled conditions and unavailable targets do not count. The gauge
+requirement works even without a pacemaker or unfinished goals. It uses the
+selected gauge for Off and Continue,
 and the effective lower-bound gauge for Select-to-Under and Best Clear.
 Survival-to-Groove permits either the selected survival gauge or its Normal
 fallback to clear. Assist lamp caps do not change the physical gauge requirement.
@@ -72,12 +75,14 @@ fallback to clear. Assist lamp caps do not change the physical gauge requirement
 Pacemaker Target uses the selected numeric pacemaker's final EX target. The Goals
 condition considers all unfinished score and lamp conditions for this chart and long-note
 mode, independently of the pacemaker selection. **GOAL** pacemaker selections are
-governed by the Goals toggle, not duplicated as a single pacemaker condition.
+governed by the Goals checkbox, not duplicated as a single pacemaker condition.
 Within Goals, conditions are alternatives: an impossible score does not end an
 attempt that can still earn an unfinished clear lamp, and vice versa. Conditions
-already fulfilled by saved results are excluded. The three enabled condition
-groups trigger independently: for example, an unreachable required gauge retries
-even if a score or goal remains reachable or has already been reached this attempt.
+already fulfilled by saved results are excluded. In **Any fails**, the three enabled
+groups trigger independently: an unreachable
+required gauge retries even if a score or goal remains reachable. In **All fail**,
+a reachable or already achieved score/goal keeps the attempt going while that
+group is enabled.
 
 The check includes deferred classic-LN head judgements, remaining HCN recovery,
 gauge auto-shift, and assist lamp limits. Requirements already impossible before

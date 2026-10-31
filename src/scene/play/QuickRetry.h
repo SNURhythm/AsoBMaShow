@@ -18,6 +18,7 @@ struct Targets {
   int lamp = -1;
   int pacemakerScore = -1;
   bool requireGaugeClear = false;
+  bool allConditionsFail = false;
   bool empty() const noexcept { return score < 0 && lamp < 0 && pacemakerScore < 0 && !requireGaugeClear; }
   void add(Condition condition) {
     if (condition.score >= 0 && (score < 0 || condition.score < score)) score = condition.score;
@@ -120,18 +121,26 @@ inline bool shouldRetry(const GameplayScoreState &state, int totalNotes,
   if (targets.empty() || totalNotes <= 0) return false;
   const int remaining = state.activeGaugeFailed() ? 0 :
       std::max(0, totalNotes - state.stagePassedNotes);
-  if (targets.requireGaugeClear && !canClearRequiredGauge(state, remaining, projection)) return true;
+  bool anyFailed = false;
+  bool allFailed = true;
+  const auto include = [&](bool failed) {
+    anyFailed |= failed;
+    allFailed &= failed;
+  };
+  if (targets.requireGaugeClear) include(!canClearRequiredGauge(state, remaining, projection));
   auto maximumScore = std::int64_t(state.getScore()) + 2LL * remaining;
   if (!state.activeGaugeFailed()) {
     maximumScore -= projection.pendingClassicJudgements[Great] +
         2LL * (projection.pendingClassicJudgements[Good] + projection.pendingClassicJudgements[Bad]);
   }
-  if (targets.pacemakerScore >= 0 && maximumScore < targets.pacemakerScore) return true;
-  if (targets.score < 0 && targets.lamp < 0) return false;
-  if (targets.score >= 0 && maximumScore >= targets.score) return false;
-  if (targets.lamp >= 0 && clearLampOrder(maximumClear(state, remaining, projection)) >=
-                              clearLampOrder(targets.lamp)) return false;
-  return true;
+  if (targets.pacemakerScore >= 0) include(maximumScore < targets.pacemakerScore);
+  if (targets.score >= 0 || targets.lamp >= 0) {
+    const bool scoreReachable = targets.score >= 0 && maximumScore >= targets.score;
+    const bool lampReachable = targets.lamp >= 0 &&
+        clearLampOrder(maximumClear(state, remaining, projection)) >= clearLampOrder(targets.lamp);
+    include(!scoreReachable && !lampReachable);
+  }
+  return targets.allConditionsFail ? allFailed : anyFailed;
 }
 
 inline Targets armReachableTargets(const GameplayScoreState &state, int totalNotes,

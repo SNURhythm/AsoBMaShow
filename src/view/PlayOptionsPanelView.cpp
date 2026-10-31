@@ -9,6 +9,7 @@
 #include "ActionButtonContent.h"
 #include "ToggleButtonContent.h"
 #include "ChoiceControlView.h"
+#include "CheckboxButtonContent.h"
 #include "ClearLampColors.h"
 #include "DropdownView.h"
 #include "OverlayPortal.h"
@@ -294,34 +295,67 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     }, overlayPortal, 18, 0, true, "on");
     quickRetryChoice->setName("quick-retry-choice");
     addView(quickRetryChoice);
-    addView(makeLabel(i18n::message("play_options.quick_retry.gauge.label")));
-    quickRetryGaugeChoice = new ChoiceControlView([this](const std::string &id) {
-      if (callbacks.onQuickRetryGaugeSelected) callbacks.onQuickRetryGaugeSelected(id == "on");
+    auto *children = new View();
+    children->setName("quick-retry-children");
+    children->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
+    children->setMargin(Edge::Left, 12)->setPadding(Edge::Left, 16)->setGap(8);
+    auto *rule = new View();
+    rule->setPositionType(YGPositionTypeAbsolute);
+    rule->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+    rule->setWidth(2);
+    YGNodeStyleSetHeightPercent(rule->getNode(), 100);
+    rule->setThemedBackgroundColor(app_theme::hairlineStrong);
+    children->addView(rule);
+    const auto addChildLabel = [&](const char *key) {
+      auto *label = new TextView(kFont, 16);
+      label->setLocalizedText(i18n::message(key));
+      label->setThemedColor(app_theme::textSecondary);
+      label->setVAlign(TextView::MIDDLE);
+      label->setHeight(24);
+      children->addView(label);
+    };
+    addChildLabel("play_options.quick_retry.when.label");
+    quickRetryFailurePolicyChoice = new ChoiceControlView([this](const std::string &id) {
+      if (callbacks.onQuickRetryFailurePolicySelected) callbacks.onQuickRetryFailurePolicySelected(id == "all");
       return true;
-    }, overlayPortal, 18, 0, true, "on");
-    quickRetryGaugeChoice->setName("quick-retry-gauge-choice");
-    addView(quickRetryGaugeChoice);
-    addView(makeLabel(i18n::message("play_options.quick_retry.pacemaker.label")));
-    quickRetryPacemakerChoice = new ChoiceControlView([this](const std::string &id) {
-      if (callbacks.onQuickRetryPacemakerSelected) callbacks.onQuickRetryPacemakerSelected(id == "on");
-      return true;
-    }, overlayPortal, 18, 0, true, "on");
-    quickRetryPacemakerChoice->setName("quick-retry-pacemaker-choice");
-    addView(quickRetryPacemakerChoice);
-    addView(makeLabel(i18n::message("play_options.quick_retry.goals.label")));
-    quickRetryGoalsChoice = new ChoiceControlView([this](const std::string &id) {
-      if (callbacks.onQuickRetryGoalsSelected) callbacks.onQuickRetryGoalsSelected(id == "on");
-      return true;
-    }, overlayPortal, 18, 0, true, "on");
-    quickRetryGoalsChoice->setName("quick-retry-goals-choice");
-    addView(quickRetryGoalsChoice);
-    addView(makeLabel(i18n::message("play_options.retry_pattern.label")));
+    }, overlayPortal, 16);
+    quickRetryFailurePolicyChoice->setName("quick-retry-failure-policy-choice");
+    children->addView(quickRetryFailurePolicyChoice);
+    const auto addCondition = [&](const char *name, const char *key,
+                                  std::function<void(bool)> onChanged) {
+      auto *content = new CheckboxButtonContent(i18n::tr(key), 18, 22);
+      content->labelView()->setLocalizedText(i18n::message(key));
+      content->labelView()->setFlex(1)->setMinWidth(0)->setHeight(48);
+      content->iconView()->setHeight(48)->setFlexShrink(0);
+      content->setJustifyContent(YGJustifyFlexStart);
+      content->setPadding(Edge::Left, 8)->setPadding(Edge::Right, 8);
+      auto *button = new Button();
+      button->setName(name);
+      button->setHeight(std::max(48.0f, rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 0.0f));
+      button->setCornerRadius(app_theme::controlRadius());
+      button->setContentView(content);
+      button->setOnClickListener([content, onChanged = std::move(onChanged)] {
+        const bool checked = !content->checked();
+        content->setChecked(checked);
+        if (onChanged) onChanged(checked);
+      });
+      children->addView(button);
+      return button;
+    };
+    quickRetryGaugeCheckbox = addCondition("quick-retry-gauge-checkbox",
+        "play_options.quick_retry.gauge.label", callbacks.onQuickRetryGaugeSelected);
+    quickRetryPacemakerCheckbox = addCondition("quick-retry-pacemaker-checkbox",
+        "play_options.quick_retry.pacemaker.label", callbacks.onQuickRetryPacemakerSelected);
+    quickRetryGoalsCheckbox = addCondition("quick-retry-goals-checkbox",
+        "play_options.quick_retry.goals.label", callbacks.onQuickRetryGoalsSelected);
+    addChildLabel("play_options.retry_pattern.label");
     retryPatternChoice = new ChoiceControlView([this](const std::string &id) {
       if (callbacks.onRetryPatternSelected) callbacks.onRetryPatternSelected(id == "new");
       return true;
     }, overlayPortal);
     retryPatternChoice->setName("retry-pattern-choice");
-    addView(retryPatternChoice);
+    children->addView(retryPatternChoice);
+    addView(children);
 
     addView(makeSectionHeader(makeLabel(i18n::message("play_options.pacemaker.label")), ui_icons::kFlagCheckered));
     pacemakerChoice = new ChoiceControlView([this](const std::string &id) {
@@ -439,15 +473,23 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     quickRetryChoice->refresh({.selectedId = state.quickRetryEnabled ? "on" : "off",
         .options = {{.id = "off", .label = i18n::message("play_options.quick_retry.off")},
                     {.id = "on", .label = i18n::message("play_options.quick_retry.on")}}});
-    const auto refreshCondition = [&](ChoiceControlView *choice, bool enabled) {
-      choice->refresh({.selectedId = enabled ? "on" : "off",
-          .options = {{.id = "off", .label = i18n::message("play_options.quick_retry.off")},
-                      {.id = "on", .label = i18n::message("play_options.quick_retry.on")}},
-          .enabled = state.quickRetryEnabled});
+    quickRetryFailurePolicyChoice->refresh({.selectedId = state.quickRetryAllConditionsFail ? "all" : "any",
+        .options = {{.id = "any", .label = i18n::message("play_options.quick_retry.when.any")},
+                    {.id = "all", .label = i18n::message("play_options.quick_retry.when.all")}},
+        .enabled = state.quickRetryEnabled});
+    const auto refreshCondition = [&](Button *button, bool checked) {
+      button->setEnabled(state.quickRetryEnabled);
+      auto *content = static_cast<CheckboxButtonContent *>(button->getContentView());
+      content->setChecked(checked);
+      content->setThemedColor(state.quickRetryEnabled ? app_theme::textPrimary : app_theme::textMuted);
+      const auto background = state.quickRetryEnabled ? app_theme::control : app_theme::panelSubtle;
+      button->setThemedBackgroundColors(background,
+          state.quickRetryEnabled ? app_theme::controlHover : background,
+          state.quickRetryEnabled ? app_theme::controlPressed : background);
     };
-    refreshCondition(quickRetryGaugeChoice, state.quickRetryGauge);
-    refreshCondition(quickRetryPacemakerChoice, state.quickRetryPacemaker);
-    refreshCondition(quickRetryGoalsChoice, state.quickRetryGoals);
+    refreshCondition(quickRetryGaugeCheckbox, state.quickRetryGauge);
+    refreshCondition(quickRetryPacemakerCheckbox, state.quickRetryPacemaker);
+    refreshCondition(quickRetryGoalsCheckbox, state.quickRetryGoals);
     retryPatternChoice->refresh({.selectedId = state.quickRetryNewPattern ? "new" : "same",
         .options = {{.id = "same", .label = i18n::message("play_options.retry_pattern.same")},
                     {.id = "new", .label = i18n::message("play_options.retry_pattern.new")}},
@@ -479,8 +521,8 @@ void PlayOptionsPanelView::setLaneOrderMessage(std::string message,
 void PlayOptionsPanelView::closeDropdowns() {
   for (auto *choice : {rulesetChoice, gaugeChoice, gaugeAutoShiftChoice,
                       gaugeLowerBoundChoice, longNoteModeChoice,
-                      assistOptionChoice, quickRetryChoice, quickRetryGaugeChoice,
-                      quickRetryPacemakerChoice, quickRetryGoalsChoice, retryPatternChoice, pacemakerChoice, pacemakerDisplayChoice}) {
+                      assistOptionChoice, quickRetryChoice, quickRetryFailurePolicyChoice,
+                      retryPatternChoice, pacemakerChoice, pacemakerDisplayChoice}) {
     if (choice) choice->closeMenu();
   }
   if (playOptionSection) playOptionSection->closeDropdowns();

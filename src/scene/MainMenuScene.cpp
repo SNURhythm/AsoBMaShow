@@ -4751,6 +4751,7 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .playbackLocked = playbackLocked,
        .clubMode = context.settings.gameplayClubModeEnabled,
        .quickRetryEnabled = context.settings.quickRetryEnabled,
+       .quickRetryAllConditionsFail = context.settings.quickRetryAllConditionsFail,
        .quickRetryGauge = context.settings.quickRetryGauge,
        .quickRetryPacemaker = context.settings.quickRetryPacemaker,
        .quickRetryGoals = context.settings.quickRetryGoals,
@@ -7316,6 +7317,11 @@ void MainMenuScene::buildPlayOptionsModal() {
        .onQuickRetrySelected = [this](bool enabled) {
          context.settings.quickRetryEnabled = enabled;
          if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry selection");
+         refreshPlayOptionsPanel();
+       },
+       .onQuickRetryFailurePolicySelected = [this](bool all) {
+         context.settings.quickRetryAllConditionsFail = all;
+         if (!context.saveSettings()) SDL_Log("Failed to save Quick Retry failure policy");
          refreshPlayOptionsPanel();
        },
        .onQuickRetryGaugeSelected = [this](bool enabled) {

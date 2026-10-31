@@ -5359,6 +5359,7 @@ void GamePlayScene::configureQuickRetry() {
       options.practiceMode || options.practiceSession != nullptr || options.startPosition != 0)
     return;
 
+  quickRetryTargets.allConditionsFail = context.settings.quickRetryAllConditionsFail;
   quickRetryTargets.requireGaugeClear = context.settings.quickRetryGauge;
   if (context.settings.quickRetryGoals) {
     std::string error;

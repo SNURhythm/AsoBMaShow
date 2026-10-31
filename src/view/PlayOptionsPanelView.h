@@ -34,6 +34,7 @@ struct PlayOptionsPanelState {
   bool playbackLocked = false;
   bool clubMode = false;
   bool quickRetryEnabled = false;
+  bool quickRetryAllConditionsFail = false;
   bool quickRetryGauge = true;
   bool quickRetryPacemaker = true;
   bool quickRetryGoals = true;
@@ -59,6 +60,7 @@ struct PlayOptionsPanelCallbacks {
   std::function<void(const std::string &)> onPlaybackModeSelected;
   std::function<void()> onClubModeToggled;
   std::function<void(bool)> onQuickRetrySelected;
+  std::function<void(bool)> onQuickRetryFailurePolicySelected;
   std::function<void(bool)> onQuickRetryGaugeSelected;
   std::function<void(bool)> onQuickRetryPacemakerSelected;
   std::function<void(bool)> onQuickRetryGoalsSelected;
@@ -100,9 +102,10 @@ private:
   ChoiceControlView *longNoteModeChoice = nullptr;
   ChoiceControlView *assistOptionChoice = nullptr;
   ChoiceControlView *quickRetryChoice = nullptr;
-  ChoiceControlView *quickRetryGaugeChoice = nullptr;
-  ChoiceControlView *quickRetryPacemakerChoice = nullptr;
-  ChoiceControlView *quickRetryGoalsChoice = nullptr;
+  ChoiceControlView *quickRetryFailurePolicyChoice = nullptr;
+  Button *quickRetryGaugeCheckbox = nullptr;
+  Button *quickRetryPacemakerCheckbox = nullptr;
+  Button *quickRetryGoalsCheckbox = nullptr;
   ChoiceControlView *retryPatternChoice = nullptr;
   ChoiceControlView *pacemakerChoice = nullptr;
   ChoiceControlView *pacemakerDisplayChoice = nullptr;
