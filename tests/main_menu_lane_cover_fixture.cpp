@@ -66,6 +66,7 @@ struct MainMenuScene {
   void refreshPlaybackSelectionControls() { refreshPlayOptionsPanel(); }
   void refreshPacemakerTargetButtons() { refreshPlayOptionsPanel(); }
   void buildPlayOptionsModal();
+  void refreshQuickRetryStartButton() {}
   void refreshPlayOptionsPanel();
   void showPlayOptionsModal();
   void hidePlayOptionsModal();

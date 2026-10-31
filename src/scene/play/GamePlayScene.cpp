@@ -8,6 +8,7 @@
 //
 
 #include "GamePlayScene.h"
+#include "QuickRetrySummary.h"
 #include "../../input/SDLPointerEvent.h"
 #include "BestReplayLoad.h"
 
@@ -5369,17 +5370,9 @@ void GamePlayScene::configureQuickRetry() {
     }
     if (goals) {
       const int mode = scoreLongNoteModeForClearLamp(chart->Meta, options.longNoteMode);
-      for (const auto &entry : *goals) {
-        if (entry.goal.longNoteMode != mode || entry.progress.achieved) continue;
-        const auto &target = entry.goal.target;
-        if (!entry.progress.scoreMet && target.scoreNumerator > 0 && target.scoreDenominator > 0) {
-          const auto required = (2LL * chart->Meta.TotalNotes * target.scoreNumerator +
-                                 target.scoreDenominator - 1) / target.scoreDenominator;
-          quickRetryTargets.add({.score = static_cast<int>(required)});
-        }
-        if (!entry.progress.lampMet && target.lamp >= 0)
-          quickRetryTargets.add({.lamp = target.lamp});
-      }
+      const auto compiled = quick_retry::compileGoalTargets(*goals, mode, chart->Meta.TotalNotes);
+      quickRetryTargets.score = compiled.targets.score;
+      quickRetryTargets.lamp = compiled.targets.lamp;
     }
   }
   // GOAL is governed by the Goals toggle and its alternative unfinished conditions,

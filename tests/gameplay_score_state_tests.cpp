@@ -2,6 +2,7 @@
 #include "scene/play/GameplayScoreState.h"
 #include "scene/play/RhythmState.h"
 #include "scene/play/QuickRetry.h"
+#include "scene/play/QuickRetrySummary.h"
 
 #include <bit>
 #include <cstdint>
@@ -534,7 +535,64 @@ void testQuickRetryReachability() {
   require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(hard)), "dead hard gauges cannot recover after shift");
 }
 
+void testQuickRetrySummaryCollapsesActualHurdles() {
+  using namespace quick_retry;
+  const Hurdle aa{HurdleKind::Score, 140, "AA"}, aaa{HurdleKind::Score, 160, "AAA"};
+  const Hurdle clear{HurdleKind::Clear, 300, "CLEAR"}, hard{HurdleKind::Clear, 400, "HARD"};
+  const std::vector<HurdleAlternatives> groups{{{aa}}, {{aaa}}};
+  require(hurdleText(summarizeHurdles(groups, false), "or") == "AAA",
+          "Any-fails uses the strictest independent score hurdle");
+  require(hurdleText(summarizeHurdles(groups, true), "or") == "AA",
+          "All-fail uses the easiest independent score hurdle");
+  require(hurdleText(summarizeHurdles({{{hard}}, {{clear}}}, false), "or") == "HARD" &&
+              hurdleText(summarizeHurdles({{{hard}}, {{clear}}}, true), "or") == "CLEAR",
+          "comparable clear requirements follow the same strict/easy policy");
+  const std::vector<HurdleAlternatives> mixed{{{hard}}, {{aaa}}, {{aa}, {clear}}};
+  require(hurdleText(summarizeHurdles(mixed, false), "or") == "HARD / AAA",
+          "a stricter score hurdle subsumes weaker alternative goals");
+  const auto all = summarizeHurdles(mixed, true);
+  require(hurdleText(all, "or") == "AA or CLEAR",
+          "All-fail retains the weakest score and clear alternatives");
+  const Hurdle physical{HurdleKind::Gauge, 300, "NORMAL gauge"};
+  require(summarizeHurdles({{{physical}}, {{hard}}}, false).front().size() == 2,
+          "auto-shift physical gauge checks are not conflated with a clear lamp");
+  // Compare the simplified expression with the original groups at boundaries.
+  for (bool allFail : {false, true}) {
+    const auto summary = summarizeHurdles(mixed, allFail);
+    for (int score : {139, 140, 159, 160, 200}) {
+      for (int lamp : {0, 300, 400, 600}) {
+        const auto satisfied = [&](const HurdleClause &clause) {
+          return std::all_of(clause.begin(), clause.end(), [&](const Hurdle &h) {
+            return (h.kind == HurdleKind::Score ? score : lamp) >= h.value;
+          });
+        };
+        const bool original = allFail
+            ? (lamp >= 400 || score >= 160 || score >= 140 || lamp >= 300)
+            : (lamp >= 400 && score >= 160 && (score >= 140 || lamp >= 300));
+        require(std::any_of(summary.begin(), summary.end(), satisfied) == original,
+                "concise hurdles preserve the original retry boundaries");
+      }
+    }
+  }
+  std::vector<chart_goals::GoalProgress> goals(4);
+  goals[0].goal.longNoteMode = 1;
+  goals[0].goal.target = {.lamp = 400, .scoreNumerator = 24};
+  goals[0].progress.lampMet = true;
+  goals[1].goal.longNoteMode = 1;
+  goals[1].goal.target = {.scoreNumerator = 21};
+  goals[2].goal.longNoteMode = 2;
+  goals[2].goal.target = {.scoreNumerator = 18};
+  goals[3].goal.longNoteMode = 1;
+  goals[3].goal.target = {.lamp = 300};
+  goals[3].progress.achieved = true;
+  const auto compiled = compileGoalTargets(goals, 1, 100);
+  require(compiled.targets.score == 156 && compiled.targets.lamp < 0 &&
+              compiled.scoreLabel->scoreNumerator == 21,
+          "summary and gameplay share unfinished, mode-specific goal thresholds");
+}
+
 int main() {
+  testQuickRetrySummaryCollapsesActualHurdles();
   testQuickRetryProjectedSurvivalToGroove();
   testQuickRetryRequiredGauge();
   testQuickRetryFailurePolicy();

@@ -1,4 +1,5 @@
 #include "view/Button.h"
+#include "view/PlayStartButton.h"
 #include "PlayOptionUtils.h"
 #include "scene/PracticePanelView.h"
 #include "view/ToggleButtonContent.h"
@@ -86,6 +87,41 @@ void click(Button &button) {
   up.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
   button.handleEvents(down);
   button.handleEvents(up);
+}
+
+void testQuickRetryStartButtonLayoutAndActivation() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Korean, i18n::Language::Japanese,
+                              i18n::Language::SimplifiedChinese, i18n::Language::TraditionalChinese}) {
+    i18n::setLanguage(language);
+    for (const int width : {200, 472}) {
+      View root(0, 0, width, 120);
+      auto *button = new PlayStartButton(width, width == 200 ? 64 : 120);
+      root.addView(button);
+      int launches = 0;
+      button->setOnClickListener([&] { ++launches; });
+      button->setQuickRetry(true, i18n::format("menu.selector.retry.summary", {{"targets", "HARD / AAA"}}));
+      root.applyYogaLayout();
+      auto *summary = static_cast<TextView *>(button->getContentView()->findViewByName("quickRetryStartSummary"));
+      auto *icon = static_cast<TextView *>(button->getContentView()->findViewByName("selectorButtonIcon"));
+      require(summary->getVisible() && summary->getText().find("HARD / AAA") != std::string::npos &&
+                  icon->getText() == ui_icons::textForCodepoint(0xf071),
+              "Quick Retry presents actual hurdles and a warning symbol");
+      require(summary->getWidth() > 0 && summary->getHeight() >= 24 &&
+                  summary->getX() >= button->getX() &&
+                  summary->getX() + summary->getWidth() <= button->getX() + button->getWidth() &&
+                  summary->getY() + summary->getHeight() <= button->getY() + button->getHeight(),
+              "localized retry summary stays inside narrow and wide Play buttons");
+      require(button->label()->getHeight() >= 20,
+              "compact warning still leaves a readable primary Play label");
+      click(*button);
+      require(launches == 1, "warning presentation preserves single-click launch");
+      button->setQuickRetry(false, {});
+      root.applyYogaLayout();
+      require(!summary->getVisible() && icon->getText() == ui_icons::textForCodepoint(ui_icons::kPlay),
+              "turning Quick Retry off restores the ordinary Play presentation");
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testStoragePolicyDirectSelection() {
@@ -1741,6 +1777,7 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
+  testQuickRetryStartButtonLayoutAndActivation();
   testDropdownPreservesAllocatedWidthAcrossRefreshes();
   testNaturalDropdownsRemainVisibleAcrossParentLayouts();
   testSettingsChoicePresentationAndSelection();

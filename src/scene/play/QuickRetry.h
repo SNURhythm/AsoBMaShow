@@ -66,16 +66,19 @@ inline bool canClearGauge(const GameplayScoreState &state, GaugeType type, int r
   return value > 0 && value >= definition.clearBorder;
 }
 
+inline GaugeType requiredGaugeType(GaugeType selected, GaugeAutoShiftMode mode, GaugeType lowerBound) {
+  if (mode == GaugeAutoShiftMode::BestClear || mode == GaugeAutoShiftMode::SelectToUnder) {
+    const int upper = mode == GaugeAutoShiftMode::SelectToUnder
+                          ? gaugeTypeIndex(selected) : gaugeTypeIndex(GaugeType::Hazard);
+    return gaugeTypeAtIndex(std::min(gaugeTypeIndex(lowerBound), upper));
+  }
+  return selected;
+}
+
 inline bool canClearRequiredGauge(const GameplayScoreState &state, int remaining,
                                   const Projection &projection = {}) {
-  auto required = state.selectedGaugeType;
-  if (state.gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
-      state.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder) {
-    const int upper = state.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder
-                          ? gaugeTypeIndex(state.selectedGaugeType)
-                          : gaugeTypeIndex(GaugeType::Hazard);
-    required = gaugeTypeAtIndex(std::min(gaugeTypeIndex(state.gaugeAutoShiftLowerBound), upper));
-  }
+  const auto required = requiredGaugeType(state.selectedGaugeType, state.gaugeAutoShift,
+                                          state.gaugeAutoShiftLowerBound);
   if (canClearGauge(state, required, remaining, projection)) return true;
   return state.gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
          state.gaugeRules().gauges[gaugeTypeIndex(required)].survival &&
