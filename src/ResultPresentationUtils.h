@@ -274,6 +274,13 @@ inline bms_parser::ChartMeta courseResultMeta(
 inline int courseStageClearRank(
     const RhythmState &state, const bms_parser::ChartMeta &meta,
     const audio::PlaybackRate &playback = {}) {
+  // Live gauge ranks never reach FC. A recalled achievement comes from the
+  // authenticated result; recall does not reconstruct surviving combo counters.
+  const int recordedRank = state.getClearTypeRank();
+  if (recordedRank >= kClearTypeFullComboRank &&
+      !state.assistClearMark && !state.lightAssistClearMark && playback.neutral()) {
+    return recordedRank;
+  }
   // BMSPlayer retains combo achievements for course stages; MusicResult
   // changes all other stage results from Failed to NoPlay. Judge counts are
   // stage-local even when maxCombo carries a previous course stage's value.
