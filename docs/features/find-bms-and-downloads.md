@@ -9,8 +9,12 @@ chart folder.
 
 ## Mobile browsing and downloads
 
-On iOS and Android, **Browse Sites** opens an embedded browser with GingerRush and
-Manbow bookmarks, navigation, an address field, and an external-browser action.
+On iOS and Android, **Browse Sites** opens an embedded browser with Manbow and
+GingerRush bookmarks, navigation, an address field, and an external-browser action.
+Manbow appears first and is the default on each app launch. Reopening the browser
+within the same app session resumes the last page; the URL is not saved to disk. Native URL-entry controls provide clear/edit/go
+behavior, navigation icons reflect available history, and loading shows progress
+and a Stop action. Sites, table import and Downloads remain available.
 The standard selector's **Add BMS** menu (plus icon) contains **Add Folder** and
 **Browse Sites**. Android also keeps **Manage Files** in that menu, with direct folder
 linking only in all-files builds. The skin selector exposes browsing in its More menu. **Import table** is enabled for the active page when it declares a
@@ -56,16 +60,24 @@ or locked, with notification cancellation. Import/indexing resumes while the app
 is active. Pending transfers wait for foreground admission when the OS cannot
 legally start them in the background.
 
-iOS preserves legacy HTTP support and HTTPS downgrade protection. Anonymous HTTP
-requests can use a persistent background URLSession. HTTPS and session-bound
-requests use a redirect-controlled foreground session: keep the app open unless
-iOS 26+ grants continued processing. When that runtime ends, retry from Downloads;
+iOS preserves legacy HTTP support and HTTPS downgrade protection. Anonymous Find
+BMS HTTP requests can use a persistent background URLSession. HTTPS and
+session-bound Find BMS requests use a redirect-controlled foreground session.
+Browser downloads retain the actual WebKit transfer, including service-worker
+responses that cannot be reproduced by requesting their URL again. The shared
+queue owns the browser engine during transfer, independently of the browser UI.
+Keep the app open unless iOS 26+ grants continued processing. When that runtime ends, retry from Downloads;
 the retained archive or resumable transfer is reused. The notice appears before
 admission. Force-quit is not a promise of continued execution on either platform.
 
 Attachment downloads from embedded frames (including OneDrive) use the download
 request itself rather than the main page's method. iOS obtains this from WebKit;
 Android requires matching navigation evidence and rejects ambiguous requests.
+iOS stores an opaque browser-transfer identity and bounded private resume data.
+Retry uses WebKit resume data when available; an expired/unresumable browser
+session requires choosing the download again. It never silently replays that URL
+through another HTTP client. Cross-origin redirects after WebKit download admission
+require a new browser action because its delegate cannot strip request headers.
 Only replayable HTTP(S) GET downloads enter the service. POST, blob, and uncertain
 browser requests offer an explicit external-browser fallback. Cookies and referrers
 are scoped to their origin and stripped on cross-origin redirects. Private request

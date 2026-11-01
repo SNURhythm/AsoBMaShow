@@ -15,15 +15,17 @@ void configureBrowser(Request defaults) {
   std::lock_guard lock(browserMutex);
   browserDefaults = std::move(defaults);
 }
+std::optional<Request> browserDownloadRequest(const std::string &method, const std::string &url,
+    const std::string &filename, const std::string &userAgent, const std::string &cookie,
+    const std::string &referrer) {
+  std::lock_guard lock(browserMutex);
+  if (!browserDefaults) return {};
+  return makeBrowserRequest(*browserDefaults, method, url, filename, userAgent, cookie, referrer);
+}
 std::string acceptBrowserDownload(const std::string &method, const std::string &url,
     const std::string &filename, const std::string &userAgent, const std::string &cookie,
     const std::string &referrer) {
-  std::optional<Request> request;
-  {
-    std::lock_guard lock(browserMutex);
-    if (!browserDefaults) return "Return to the app and reopen Browse Sites before downloading.";
-    request = makeBrowserRequest(*browserDefaults, method, url, filename, userAgent, cookie, referrer);
-  }
+  auto request = browserDownloadRequest(method, url, filename, userAgent, cookie, referrer);
   if (!request) return "This request cannot be repeated safely. Open the page in your external browser.";
   try {
     const auto job = service()->submit(std::move(*request));

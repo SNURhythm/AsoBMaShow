@@ -20,6 +20,8 @@ struct Request {
   std::filesystem::path libraryRoot;
   std::vector<std::pair<std::string, std::string>> headers;
   std::vector<std::string> fallbackUrls;
+  // A captured browser-engine transfer must never fall back to replaying its URL.
+  std::string browserTransferId;
   bool skipUnarchiving = false;
   storage_management::StoragePolicy storagePolicy;
 };

@@ -6,6 +6,7 @@
 #include "DownloadPlatform.h"
 #include "DownloadService.h"
 #include "DownloadIOSDispatch.h"
+#include "DownloadWebKitIOS.h"
 #include "BrowserPolicy.h"
 #include "../AtomicFile.h"
 #include <charconv>
@@ -323,6 +324,7 @@ std::filesystem::path privateRoot() {
 }
 void initialize() { [host() reconcile]; }
 std::string startTransfer(const Job &job, const std::filesystem::path &) {
+  if (!job.request.browserTransferId.empty()) return startWebKitTransfer(job);
   @autoreleasepool {
     const auto requestValue = downloads::transferRequest(job);
     NSURL *url = [NSURL URLWithString:[NSString stringWithUTF8String:requestValue.url.c_str()]];
@@ -349,7 +351,10 @@ std::string startTransfer(const Job &job, const std::filesystem::path &) {
     return {};
   }
 }
-void cancelTransfer(const Job &job) { [host() stop:descriptor(job)]; }
+void cancelTransfer(const Job &job) {
+  if (!job.request.browserTransferId.empty()) cancelWebKitTransfer(job);
+  [host() stop:descriptor(job)];
+}
 void beginImport(const Job &job) {
   dispatchOwnedJob(dispatch_get_main_queue(), job, ^(const Job &snapshot) {
     [host() requestRuntime:snapshot];
@@ -404,6 +409,13 @@ void prepareApplicationLaunch() {
   [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:NSOperationQueue.mainQueue
       usingBlock:^(NSNotification *) {
     try { setGameForeground(false); } catch (...) {}
+    try {
+      for (const auto &job : service()->jobs()) {
+        if (job.state == State::Transferring && !job.request.browserTransferId.empty() &&
+            !host().continued[descriptor(job)])
+          service()->interrupt(job.id, "Browser download paused. Retry when the app is open, or choose it again from Source.");
+      }
+    } catch (...) {}
     [host().foreground getAllTasksWithCompletionHandler:^(NSArray<__kindof NSURLSessionTask *> *tasks) {
       dispatch_async(dispatch_get_main_queue(), ^{
         for (NSURLSessionTask *task in tasks) {

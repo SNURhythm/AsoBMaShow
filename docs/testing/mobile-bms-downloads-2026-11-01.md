@@ -214,3 +214,38 @@ iOS build, and Android debug-variant Java compilation pass. The final fresh
 source review found no actionable findings.
 The production Android app was not replaced during this probe session; physical
 iOS continued-processing and lock behavior remain untested.
+
+
+## Native browser controls and actual WebKit transfer ownership
+
+Browser URLs now live only in process memory; Manbow is the launch default and
+first bookmark. iOS uses a native search field configured for URL entry, SF Symbol
+navigation items, disabled history controls and progress/Stop state. Android uses
+SearchView/Toolbar controls, standard overflow menus, history icons and progress.
+A separate probe built from the Android activity source verified the rendered
+controls, Manbow-first menu, GingerRush after closing/reopening, and Manbow after
+force-stopping/restarting the probe. The installed production app was not replaced.
+iOS accessibility inspection found the Website address, clear, Sites and Reload
+controls; its simulator frontend could not open for screenshot inspection.
+
+The reported OneDrive failure was reproduced beyond admission: replaying its URL
+through URLSession returned HTTP 200 with about 35 KB of HTML. Keeping the original
+WKDownload instead produced a 57,124,223-byte ZIP with 1,077 entries and nine BMS
+charts. The new application-owned WebKit adapter and real DownloadCoordinator
+then retained that same full archive in Ready to import state after detaching the
+browser UI. The harness stopped at durable handoff, before library import.
+
+A synthetic 2 MiB HTTP archive tested interruption followed by immediate Retry.
+The old writer stopped, WebKit resumed with Range starting at byte 1,048,576,
+and attempt 1 completed with the full 2,097,423-byte archive. The adapter preserves
+attempt identity, rejects non-2xx responses, persists bounded private resume tokens,
+and never falls back to URLSession for a captured browser request. Cancellation
+during asynchronous resume waits for the new writer before collecting its token.
+Without usable resume data, the job explicitly asks to choose the source download
+again. Existing jobs containing the old HTML response likewise need a fresh download.
+
+All 15 download tests and the desktop application build pass. Persisted request
+identity and validation have new coverage. The full unsigned iOS build, final iOS
+browser source check and Android Java compilation pass. A fresh source review
+found no actionable findings. Physical iOS background/lock behavior and importing
+the OneDrive package into the installed player library remain separate checks.

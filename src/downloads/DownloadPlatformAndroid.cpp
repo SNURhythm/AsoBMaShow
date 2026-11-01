@@ -49,6 +49,7 @@ void initialize() {
   if (clearException(env)) throw std::runtime_error("Could not restore Android downloads.");
 }
 std::string startTransfer(const Job &job, const std::filesystem::path &) {
+  if (!job.request.browserTransferId.empty()) return "Open Source and choose this browser download again on this device.";
   Environment bridge; auto *env = bridge.env;
   if (!env || !downloadClass) return "Android download host is unavailable.";
   auto method = env->GetStaticMethodID(downloadClass, "schedule", "(Ljava/lang/String;J)Ljava/lang/String;");

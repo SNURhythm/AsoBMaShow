@@ -51,7 +51,7 @@ json requestJson(const Request &r) {
           {"archiveName", r.archiveName}, {"expectedHash", r.expectedHash},
           {"storageIdentity", r.storageIdentity}, {"libraryRoot", utf8(r.libraryRoot)},
           {"fallbackUrls", r.fallbackUrls}, {"headers", r.headers}, {"skipUnarchiving", r.skipUnarchiving},
-          {"storagePolicy", policyJson(r.storagePolicy)}};
+          {"storagePolicy", policyJson(r.storagePolicy)}, {"browserTransferId", r.browserTransferId}};
 }
 Request readRequest(const json &j) {
   Request r;
@@ -61,6 +61,7 @@ Request readRequest(const json &j) {
   r.libraryRoot = pathAt(j, "libraryRoot");
   j.at("headers").get_to(r.headers); j.at("skipUnarchiving").get_to(r.skipUnarchiving);
   if (j.contains("fallbackUrls")) j.at("fallbackUrls").get_to(r.fallbackUrls);
+  if (j.contains("browserTransferId")) j.at("browserTransferId").get_to(r.browserTransferId);
   r.storagePolicy = readPolicy(j.at("storagePolicy"));
   if (!validRequest(r)) throw std::runtime_error("Invalid saved download request.");
   return r;
@@ -185,6 +186,7 @@ Request transferRequest(const Job &job) {
   return request;
 }
 bool validRequest(const Request &r) {
+  if (!r.browserTransferId.empty() && (!validId(r.browserTransferId) || !r.fallbackUrls.empty())) return false;
   if (!httpOrigin(r.url) || (!r.displayUrl.empty() && !httpOrigin(r.displayUrl)) ||
       r.title.size() > 1024 || r.storageIdentity.size() > 16384 ||
       r.archiveName != safeArchiveName(r.archiveName) || r.archiveName.size() > 240 ||

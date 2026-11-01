@@ -126,3 +126,9 @@
   iframe download handling were added with regressions. The final fresh review
   found no actionable findings; platform probe scope is recorded in the
   verification document.
+
+- Follow-up: browser URL resets to Manbow at process restart, native controls were
+  improved, and actual OneDrive transfer testing identified URL replay returning
+  HTML. An application-owned WKDownload adapter now preserves that browser response
+  through the existing queue. Durable handoff, browser detachment, and immediate
+  cancel/retry were verified with real native transfers; see verification notes.

@@ -57,7 +57,14 @@ int main() {
       ("asobms-download-jobs-" + std::to_string(std::random_device{}()));
   {
     JobStore store(root);
-    const auto first = store.submit(request());
+    auto browser = request();
+    browser.browserTransferId = std::string(32, 'b');
+    assert(validRequest(browser));
+    auto invalidBrowser = browser; invalidBrowser.browserTransferId = "../session";
+    assert(!validRequest(invalidBrowser));
+    invalidBrowser = browser; invalidBrowser.fallbackUrls = {browser.url};
+    assert(!validRequest(invalidBrowser));
+    const auto first = store.submit(browser);
     auto second = store.submit(request());
     assert(first.id != second.id);
     assert(store.jobs().at(0).id == first.id);
@@ -78,6 +85,8 @@ int main() {
     assert(store.update(second));
     { std::ofstream legacy(root / second.id / "archive"); legacy << "retained"; }
     JobStore reopened(root);
+    assert(reopened.get(first.id)->request.browserTransferId == browser.browserTransferId);
+    assert(reopened.get(second.id)->request.browserTransferId.empty());
     assert(reopened.get(first.id)->state == State::Cancelled);
     assert(reopened.get(second.id)->downloadedBytes == 123);
     assert(reopened.archivePath(second.id) == root / second.id / "archive.zip");

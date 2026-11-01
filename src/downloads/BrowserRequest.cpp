@@ -11,6 +11,7 @@ std::optional<Request> makeBrowserRequest(const Request &defaults, const std::st
   request.displayUrl = httpOrigin(referrer) ? referrer : url;
   request.title = request.archiveName = safeArchiveName(filename);
   request.expectedHash.clear(); request.storageIdentity = url;
+  request.browserTransferId.clear();
   request.headers.clear();
   if (!userAgent.empty()) request.headers.emplace_back("User-Agent", userAgent);
   if (!cookie.empty()) request.headers.emplace_back("Cookie", cookie);

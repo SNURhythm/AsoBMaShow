@@ -9,8 +9,6 @@ import android.view.inputmethod.EditorInfo;
 import android.webkit.*;
 import android.widget.*;
 import org.json.*;
-import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public final class BmsBrowserActivity extends Activity {
@@ -19,9 +17,12 @@ public final class BmsBrowserActivity extends Activity {
     private static final String MANBOW = "https://manbow.nothing.sh/event/event.cgi";
     private final ArrayDeque<WebView> pages = new ArrayDeque<>();
     private LinearLayout layout;
-    private EditText address;
-    private Button importTable;
-    private File lastPage;
+    private SearchView address;
+    private MenuItem importTable, backItem, forwardItem, reloadItem;
+    private ProgressBar progress;
+    private WebView loadingPage;
+    // Resume within this process only; a new app launch starts at Manbow.
+    private static String lastPage = MANBOW;
     private String tableUrl = "", tablePageUrl;
     private long tableProbe;
 
@@ -32,9 +33,18 @@ public final class BmsBrowserActivity extends Activity {
                 uri.getHost() != null && uri.getUserInfo() == null;
     }
     private WebView page() { return pages.peekLast(); }
-    private Button button(LinearLayout row, String label, Runnable action) {
-        Button button = new Button(this); button.setText(label); button.setAllCaps(false);
-        button.setOnClickListener(view -> action.run()); row.addView(button); return button;
+    private MenuItem action(Menu menu, String label, Runnable run) {
+        return menu.add(label).setOnMenuItemClickListener(item -> { run.run(); return true; });
+    }
+    private void updateControls() {
+        WebView web = page(); if (web == null) return;
+        backItem.setEnabled(web.canGoBack() || pages.size() > 1);
+        forwardItem.setEnabled(web.canGoForward());
+        reloadItem.setTitle(loadingPage == web ? "Stop loading" : "Reload");
+        reloadItem.setIcon(loadingPage == web ? android.R.drawable.ic_menu_close_clear_cancel : R.drawable.ic_browser_reload);
+        progress.setVisibility(loadingPage == web ? View.VISIBLE : View.INVISIBLE);
+        progress.setProgress(web.getProgress());
+        if (!address.hasFocus()) address.setQuery(web.getUrl(), false);
     }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -44,52 +54,60 @@ public final class BmsBrowserActivity extends Activity {
                 WebView.setDataDirectorySuffix("bms_browser"); webStorageConfigured = true;
             }
         }
-        lastPage = new File(getNoBackupFilesDir(), "bms-browser-url");
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         layout.setFitsSystemWindows(true);
-        HorizontalScrollView controls = new HorizontalScrollView(this);
-        controls.setHorizontalScrollBarEnabled(false);
-        LinearLayout row = new LinearLayout(this);
-        button(row, "Close", this::finish);
-        button(row, "Back", this::back);
-        button(row, "Forward", () -> { if (page().canGoForward()) page().goForward(); });
-        button(row, "Reload", () -> page().reload());
-        button(row, "GingerRush", () -> load(GINGER));
-        button(row, "Manbow", () -> load(MANBOW));
-        importTable = button(row, "Import table", this::importCurrentTable);
-        button(row, "Downloads", () -> { nativeShowDownloads(); finish(); });
-        button(row, "Open externally", () -> external(page().getUrl()));
-        controls.addView(row); layout.addView(controls);
-        address = new EditText(this); address.setSingleLine(true);
+        Toolbar controls = new Toolbar(this);
+        controls.setNavigationIcon(android.R.drawable.ic_menu_close_clear_cancel);
+        controls.setNavigationContentDescription("Close browser");
+        controls.setNavigationOnClickListener(view -> finish());
+        Menu menu = controls.getMenu();
+        SubMenu sites = menu.addSubMenu("Sites");
+        action(sites, "Manbow", () -> load(MANBOW));
+        action(sites, "GingerRush", () -> load(GINGER));
+        importTable = action(menu, "Import table", this::importCurrentTable);
+        importTable.setEnabled(false);
+        action(menu, "Downloads", () -> { nativeShowDownloads(); finish(); });
+        action(menu, "Open externally", () -> external(page().getUrl()));
+        address = new SearchView(this); address.setIconifiedByDefault(false);
+        address.setQueryHint("Enter URL"); address.setContentDescription("Website address");
         address.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        address.setImeOptions(EditorInfo.IME_ACTION_GO);
-        address.setTextSize(14);
-        address.setOnEditorActionListener((view, action, event) -> {
-            boolean enter = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
-            if (action != EditorInfo.IME_ACTION_GO && !enter) return false;
-            if (enter && event.getAction() != KeyEvent.ACTION_DOWN) return true;
-            String url = address.getText().toString().trim();
-            if (!url.contains("://")) url = "https://" + url;
-            load(url); return true;
+        address.setImeOptions(EditorInfo.IME_ACTION_GO); address.setMaxWidth(Integer.MAX_VALUE);
+        address.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+            @Override public boolean onQueryTextChange(String value) { return false; }
+            @Override public boolean onQueryTextSubmit(String value) {
+                String url = value.trim(); if (url.isEmpty()) return true;
+                if (!url.contains("://")) url = "https://" + url;
+                address.clearFocus(); load(url); return true;
+            }
         });
-        layout.addView(address);
+        controls.addView(address, new Toolbar.LayoutParams(-1, -2)); layout.addView(controls);
+        Toolbar navigation = new Toolbar(this);
+        backItem = action(navigation.getMenu(), "Back", this::back);
+        backItem.setIcon(R.drawable.ic_browser_back).setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+        forwardItem = action(navigation.getMenu(), "Forward", () -> { if (page().canGoForward()) page().goForward(); });
+        forwardItem.setIcon(R.drawable.ic_browser_forward).setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+        reloadItem = action(navigation.getMenu(), "Reload", () -> {
+            if (loadingPage == page()) { page().stopLoading(); loadingPage = null; updateControls(); }
+            else page().reload();
+        });
+        reloadItem.setIcon(R.drawable.ic_browser_reload).setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
+        layout.addView(navigation);
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(100);
+        layout.addView(progress, new LinearLayout.LayoutParams(-1, Math.max(1, (int)(2 * getResources().getDisplayMetrics().density))));
         setContentView(layout);
         attach(newPage());
-        String initial = GINGER;
-        if (lastPage.isFile() && lastPage.length() <= 16384) {
-            try { initial = new String(java.nio.file.Files.readAllBytes(lastPage.toPath()), StandardCharsets.UTF_8); }
-            catch (IOException ignored) {}
-        }
-        load(http(initial) ? initial : GINGER);
+        address.clearFocus(); load(lastPage);
     }
     private void attach(WebView web) {
         if (page() != null) { layout.removeView(page()); page().onPause(); }
         pages.add(web);
         clearTable();
-        layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
+        layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1)); updateControls();
     }
     private void load(String url) {
         if (!http(url)) { Toast.makeText(this, "Use an HTTP or HTTPS page.", Toast.LENGTH_SHORT).show(); return; }
+        address.clearFocus(); address.setQuery(url, false);
         clearTable();
         page().loadUrl(url);
     }
@@ -122,7 +140,7 @@ public final class BmsBrowserActivity extends Activity {
             @Override public void onPageCommitVisible(WebView view, String url) { requests.pageCommitted(); }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 loading[0] = true;
-                if (view == page()) clearTable();
+                if (view == page()) { loadingPage = view; clearTable(); updateControls(); }
             }
             @Override public void doUpdateVisitedHistory(WebView view, String url, boolean reload) {
                 updatePage(view, url, !loading[0]);
@@ -130,22 +148,17 @@ public final class BmsBrowserActivity extends Activity {
             @Override public void onPageFinished(WebView view, String url) {
                 if (!Objects.equals(url, view.getUrl())) return;
                 loading[0] = false;
+                if (loadingPage == view) loadingPage = null;
                 updatePage(view, url, true);
             }
             private void updatePage(WebView view, String url, boolean inspectDocument) {
                 if (view != page() || !Objects.equals(url, view.getUrl())) return;
-                address.setText(url); refreshTable(view, inspectDocument);
-                if (http(url)) {
-                    try {
-                        android.util.AtomicFile file = new android.util.AtomicFile(lastPage);
-                        FileOutputStream output = file.startWrite();
-                        try { output.write(url.getBytes(StandardCharsets.UTF_8)); file.finishWrite(output); }
-                        catch (IOException error) { file.failWrite(output); }
-                    } catch (IOException ignored) {}
-                }
+                updateControls(); refreshTable(view, inspectDocument);
+                if (http(url)) lastPage = url;
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
+            @Override public void onProgressChanged(WebView view, int value) { if (view == page()) updateControls(); }
             @Override public boolean onCreateWindow(WebView view, boolean dialog, boolean userGesture, Message result) {
                 if (!userGesture || pages.size() >= 4) return false;
                 WebView child = newPage(); attach(child);
@@ -214,7 +227,8 @@ public final class BmsBrowserActivity extends Activity {
         if (pages.size() < 2) return false;
         WebView child = pages.removeLast(); layout.removeView(child); child.destroy();
         layout.addView(page(), new LinearLayout.LayoutParams(-1, 0, 1)); page().onResume();
-        address.setText(page().getUrl()); refreshTable(page(), page().getProgress() == 100);
+        loadingPage = page().getProgress() < 100 ? page() : null;
+        updateControls(); refreshTable(page(), page().getProgress() == 100);
         return true;
     }
     private void back() { if (page().canGoBack()) page().goBack(); else if (!closePopup()) finish(); }

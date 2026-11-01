@@ -9,6 +9,9 @@ void openBrowser();
 std::optional<Request> makeBrowserRequest(const Request &defaults, const std::string &method,
     const std::string &url, const std::string &filename, const std::string &userAgent,
     const std::string &cookie, const std::string &referrer);
+std::optional<Request> browserDownloadRequest(const std::string &method, const std::string &url,
+    const std::string &filename, const std::string &userAgent, const std::string &cookie,
+    const std::string &referrer);
 // Empty return means success. These are native UI callbacks, never page-script bridges.
 std::string acceptBrowserDownload(const std::string &method, const std::string &url,
     const std::string &filename, const std::string &userAgent, const std::string &cookie,
