@@ -1,6 +1,7 @@
 #include "goals/GoalPacemaker.h"
 #include "ResultImageExporter.h"
 #include "ExportFileName.h"
+#include "AndroidNatives.h"
 
 #include "PlayOptionUtils.h"
 #include "RAII.h"
@@ -541,7 +542,8 @@ ResultImageExportResult renderResultImageWithSkinData(
     const std::optional<result_gauge_history::ResultGaugeGraph> &gaugeGraph,
     const std::optional<practice::ResultModel> &analyticsModel,
     bool attachGaugeAsView, const std::filesystem::path &path,
-    const result_image_export::SkinRenderBackend &renderSkin = {}) {
+    const result_image_export::SkinRenderBackend &renderSkin = {},
+    bool saveToPhotos = true) {
   const int width = rendering::render_width;
   const bool mobileTarget =
       TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android;
@@ -767,6 +769,9 @@ ResultImageExportResult renderResultImageWithSkinData(
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  if (!saveToPhotos) {
+    return {.success = true, .outputPath = path, .message = "Rendered"};
+  }
   if (!SaveImageToIOSPhotos(fspath_to_utf8(path), errorMessage)) {
     return {.success = false, .outputPath = path, .message = errorMessage};
   }
@@ -858,6 +863,63 @@ ResultImageExportResult exportResultImage(
       std::move(gameplayGraph), analyticsModel, outputPath);
 }
 } // namespace
+
+ResultImageExportResult ResultImageExporter::Share(
+    ApplicationContext &context, const ResultPresentationModel &presentation,
+    const std::string &text,
+    const result_image_export::SkinRenderBackend &renderSkin) {
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::error_code error;
+#if TARGET_OS_ANDROID
+  const auto cache = std::filesystem::path(GetAndroidCacheDir());
+#else
+  const auto cache = std::filesystem::temp_directory_path(error);
+#endif
+  if (error || cache.empty()) {
+    return {.message = "Share cache is unavailable"};
+  }
+  const auto directory = cache / "result_shares";
+  std::filesystem::create_directories(directory, error);
+  if (error) return {.message = "Could not create share cache"};
+  // Receivers may read after the chooser closes; retain recent attachments.
+  for (std::filesystem::directory_iterator entry(directory, error), end;
+       !error && entry != end; entry.increment(error)) {
+    const auto modified = entry->last_write_time(error);
+    if (!error && std::filesystem::file_time_type::clock::now() - modified >
+                      std::chrono::hours(24 * 7)) {
+      std::filesystem::remove_all(entry->path(), error);
+    }
+    error.clear();
+  }
+  auto result = Export(
+      presentation,
+      {.outputDirectory = directory / std::to_string(
+           std::chrono::steady_clock::now().time_since_epoch().count()),
+       .timestamp = makeTimestamp()},
+      [&](ResultSkinData skinData,
+          std::optional<result_gauge_history::ResultGaugeGraph> gauge,
+          const std::filesystem::path &path) {
+        skinData.context = &context;
+        skinData.configuration = makeResultSkinConfiguration(context.settings);
+        skinData.configuration->irAccountName = context.irAccountNameSnapshot();
+        return renderResultImageWithSkinData(
+            context, std::move(skinData), gauge, presentation.timingAnalytics,
+            true, path, renderSkin, false);
+      });
+  if (!result.success) return result;
+#if TARGET_OS_ANDROID
+  result.success = ShareAndroidResultImage(fspath_to_utf8(result.outputPath),
+                                           text, result.message);
+#else
+  result.success = ShareIOSResultImage(fspath_to_utf8(result.outputPath),
+                                       text, result.message);
+#endif
+  if (!result.success) std::filesystem::remove(result.outputPath, error);
+  return result;
+#else
+  return {.message = "Result sharing is available on mobile"};
+#endif
+}
 
 ResultImageExportResult ResultImageExporter::ExportSkin(
     ApplicationContext &context, const std::string &title,

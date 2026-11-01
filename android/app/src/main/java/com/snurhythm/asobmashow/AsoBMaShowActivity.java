@@ -96,6 +96,31 @@ public class AsoBMaShowActivity extends SDLActivity {
     boolean nativeDocumentDestroyed;
     private boolean nativeDocumentBackKey;
 
+    public String shareResultImage(String path, String text) {
+        java.util.concurrent.FutureTask<String> present = new java.util.concurrent.FutureTask<>(() -> {
+            try {
+                android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                        this, getPackageName() + ".resultshare", new java.io.File(path));
+                Intent share = new Intent(Intent.ACTION_SEND);
+                share.setType("image/png");
+                share.putExtra(Intent.EXTRA_TEXT, text);
+                share.putExtra(Intent.EXTRA_STREAM, uri);
+                share.setClipData(android.content.ClipData.newRawUri("Result", uri));
+                share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(Intent.createChooser(share, null));
+                return "";
+            } catch (RuntimeException error) {
+                return "Could not open result sharing: " + error.getMessage();
+            }
+        });
+        runOnUiThread(present);
+        try {
+            return present.get();
+        } catch (Exception error) {
+            return "Could not open result sharing";
+        }
+    }
+
     public NativeDocumentView openNativeDocument(long id, byte[] text,
             float x, float y, float width, float height,
             int foreground, int background, int highlight, float fontSize) {

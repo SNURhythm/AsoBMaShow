@@ -5303,6 +5303,36 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
       }, errorMessage);
 }
 
+bool ShareIOSResultImage(const std::string &path, const std::string &text,
+                          std::string &error) {
+  @autoreleasepool {
+    NSURL *url = [NSURL fileURLWithPath:NSStringFromUtf8(path)];
+    NSString *caption = NSStringFromUtf8(text);
+    __block bool presented = false;
+    void (^present)(void) = ^{
+      UIViewController *controller = TopViewController(FindActiveWindow().rootViewController);
+      if (controller == nil || controller.view.window == nil) return;
+      UIActivityViewController *sheet = [[UIActivityViewController alloc]
+          initWithActivityItems:@[caption, url] applicationActivities:nil];
+      sheet.popoverPresentationController.sourceView = controller.view;
+      sheet.popoverPresentationController.sourceRect = CGRectMake(
+          CGRectGetMidX(controller.view.bounds),
+          CGRectGetMidY(controller.view.bounds), 1, 1);
+      sheet.popoverPresentationController.permittedArrowDirections = 0;
+      sheet.completionWithItemsHandler = ^(UIActivityType type, BOOL completed,
+                                           NSArray *items, NSError *shareError) {
+        [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+      };
+      [controller presentViewController:sheet animated:YES completion:nil];
+      presented = true;
+    };
+    if ([NSThread isMainThread]) present();
+    else dispatch_sync(dispatch_get_main_queue(), present);
+    if (!presented) error = "Could not open the share sheet";
+    return presented;
+  }
+}
+
 bool SaveImageToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage) {
   @autoreleasepool {

@@ -1390,6 +1390,7 @@
 {"result.save_state.prefix", "Save state: ", "저장 상태: ", "保存状態: ", "保存状态： ", "儲存狀態： "},
 {"result.section.label", "Section", "구간", "区間", "区段", "區段"},
 {"result.select_section.label", "Select Section", "구간 선택", "区間を選択", "选择区段", "選擇區段"},
+{"result.share.label", "Share", "공유", "共有", "分享", "分享"},
 {"result.show_details.label", "Show Details", "상세 보기", "詳細を表示", "显示详情", "顯示詳細資訊"},
 {"result.submission_failed_scheduled_retry.message", "This submission could not be scheduled for retry.", "이 점수의 재제출을 예약하지 못했습니다.", "この送信の再試行を予約できませんでした。", "无法安排重新提交。", "無法排程重新提交。"},
 {"result.submit.label", "Submit", "제출", "送信", "提交", "提交"},

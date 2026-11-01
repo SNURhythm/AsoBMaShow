@@ -9,6 +9,17 @@
 #include <string>
 #include <utility>
 
+ASOBMS_SHARE_TEXT_HELPER
+struct Presentation {
+  std::string title = "Title";
+  struct Comparison { struct { std::string value = "HARD CLEAR"; } current; };
+  std::optional<Comparison> lampComparison = Comparison{};
+};
+struct Grade { std::string grade = "AAA"; };
+std::optional<Grade> gradeCard(const Presentation &) { return Grade{}; }
+namespace i18n { const char *tr(const char *) { return "Share"; } }
+constexpr int SDL_MESSAGEBOX_ERROR = 1;
+template<class... Args> void SDL_ShowSimpleMessageBox(Args &&...) {}
 #define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1
 struct RenderContext {
   struct UiBatchScope { explicit UiBatchScope(RenderContext &) {} };
@@ -52,6 +63,16 @@ struct ResultSkinSession {
 };
 struct ResultImageExporter {
   static inline int nativeExports = 0;
+  static inline int shares = 0;
+  static inline std::string sharedText;
+  static ResultImageExportResult Share(
+      ApplicationContext &, const Presentation &, const std::string &text,
+      const std::function<bool(RenderContext &)> &draw = {}) {
+    ++shares;
+    sharedText = text;
+    RenderContext context;
+    return {.success = !draw || draw(context)};
+  }
   static inline int skinExports = 0;
   template<class... Args>
   static ResultImageExportResult Export(Args &&...) {
@@ -68,14 +89,15 @@ struct ResultImageExporter {
 };
 struct LocalSource {
   bool autoPlayResult = false;
-  struct { std::string Title = "Local chart"; } meta;
+  struct { std::string Title = "Local chart", SubTitle = "Subtitle"; } meta;
+  Presentation presentation;
   int resultState = 0;
   std::string playModeLabel, laneOrderLabel, difficultyLabel;
   int previousBest = 0, previousLampBest = 0;
   int currentClearLabelOverride = 0, currentClearRankOverride = 0;
   int headerDifficultyLabelOverride = 0;
 };
-struct RemoteSource { struct { std::string title = "Remote chart"; } presentation; };
+struct RemoteSource { Presentation presentation; };
 struct View {
   int renders = 0;
   void applyYogaLayout() {}
@@ -105,7 +127,7 @@ struct ResultScene {
   void setResultPhotoExportPresentation(ResultPhotoExportPresentation value) { status = value; }
   void appendResultSkinRenderDiagnostics() { ++diagnosticPublications; }
   template<class Callback> void defer(Callback, int, bool) {}
-  void exportPhoto();
+  void exportPhoto(bool share = false);
   bool drawOnscreen() {
     RenderContext renderContext;
     auto skinData = makeResultSkinData();
@@ -188,6 +210,21 @@ int main() {
     expect(ResultImageExporter::nativeExports == 1,
            "results without an active skin retain native image export");
   }
+  ResultScene sharing;
+  sharing.resultSkinSession = std::make_unique<ResultSkinSession>();
+  sharing.exportPhoto(true);
+  expect(ResultImageExporter::shares == 1 &&
+             ResultImageExporter::sharedText == "Title Subtitle HARD CLEAR AAA\n#AsoBMaShow" &&
+             sharing.resultSkinSession->captures == 1 &&
+             !sharing.resultSkinSession->controls && !sharing.resultPhotoExportInProgress,
+         "sharing hands off requested text and the current skin without controls");
+  sharing.local.autoPlayResult = true;
+  sharing.exportPhoto(true);
+  expect(ResultImageExporter::shares == 1, "autoplay cannot share results");
+  sharing.local.autoPlayResult = false;
+  sharing.resultSkinSession.reset();
+  sharing.exportPhoto(true);
+  expect(ResultImageExporter::shares == 2, "default result layout can be shared");
   View nativeRoot;
   int skinDraws = 0;
   auto image = drawExportFrame(&nativeRoot, [&](RenderContext &) {

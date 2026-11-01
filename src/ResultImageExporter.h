@@ -124,6 +124,10 @@ presentationPlanFor(const ResultPresentationModel &presentation,
 
 class ResultImageExporter {
 public:
+  static ResultImageExportResult Share(
+      ApplicationContext &context, const ResultPresentationModel &presentation,
+      const std::string &text,
+      const result_image_export::SkinRenderBackend &renderSkin = {});
   static ResultImageExportResult ExportSkin(
       ApplicationContext &context, const std::string &title,
       const result_image_export::SkinRenderBackend &renderSkin);
