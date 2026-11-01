@@ -9,10 +9,10 @@ chart folder.
 
 ## Mobile browsing and downloads
 
-On iOS and Android, **Browse BMS** opens an embedded browser with GingerRush and
+On iOS and Android, **Browse Sites** opens an embedded browser with GingerRush and
 Manbow bookmarks, navigation, an address field, and an external-browser action.
 The standard selector's **Add BMS** menu (plus icon) contains **Add Folder** and
-**Browse BMS**. Android also keeps **Manage Files** in that menu, with direct folder
+**Browse Sites**. Android also keeps **Manage Files** in that menu, with direct folder
 linking only in all-files builds. The skin selector exposes browsing in its More menu. **Import table** is enabled for the active page when it declares a
 `bmstable` header link or displays difficulty-table header JSON (`name`, `symbol`,
 and `data_url`). GingerRush table URLs also retain their direct recognition.

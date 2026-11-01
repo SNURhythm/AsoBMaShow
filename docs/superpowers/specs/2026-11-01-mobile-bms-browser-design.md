@@ -29,7 +29,7 @@ the same application-owned download service.
 
 ## Browser behavior
 
-Add a mobile Browse BMS entry with GingerRush and Manbow bookmarks. Provide
+Add a mobile Browse Sites entry with GingerRush and Manbow bookmarks. Provide
 back, forward, reload, close, and open externally. Retain the current page while
 the app lives; persist the last navigable HTTP(S) URL for reopening after launch.
 Closing the browser does not cancel accepted downloads. A shared Downloads view

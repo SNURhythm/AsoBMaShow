@@ -86,7 +86,7 @@
 
 - [ ] Test scene detachment/recreation, retry and artifact decisions, duplicate library completion and duplicate table import.
 - [ ] Run relevant tests; expected failures at missing integration.
-- [ ] Add Browse BMS and Downloads controls on mobile; render real phases and recoverable states. Closing a browser/dialog detaches; explicit Cancel cancels.
+- [ ] Add Browse Sites and Downloads controls on mobile; render real phases and recoverable states. Closing a browser/dialog detaches; explicit Cancel cancels.
 - [ ] Run download/library/UI affected tests and desktop main build. Expected: pass.
 - [ ] Commit UI and delivery.
 

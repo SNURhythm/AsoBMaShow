@@ -21,7 +21,7 @@ std::string acceptBrowserDownload(const std::string &method, const std::string &
   std::optional<Request> request;
   {
     std::lock_guard lock(browserMutex);
-    if (!browserDefaults) return "Return to the app and reopen Browse BMS before downloading.";
+    if (!browserDefaults) return "Return to the app and reopen Browse Sites before downloading.";
     request = makeBrowserRequest(*browserDefaults, method, url, filename, userAgent, cookie, referrer);
   }
   if (!request) return "This request cannot be repeated safely. Open the page in your external browser.";

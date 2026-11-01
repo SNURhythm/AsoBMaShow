@@ -60,7 +60,7 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
     [self.web.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
     [self.web.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
     [self.web.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor]]];
-  self.address = [UITextField new]; self.address.placeholder = @"Browse BMS";
+  self.address = [UITextField new]; self.address.placeholder = @"Browse Sites";
   self.address.keyboardType = UIKeyboardTypeURL; self.address.returnKeyType = UIReturnKeyGo;
   self.address.autocapitalizationType = UITextAutocapitalizationTypeNone;
   self.address.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -155,7 +155,7 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   if (http(url)) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
 }
 - (void)sites {
-  UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"Browse BMS" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+  UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"Browse Sites" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
   [menu addAction:[UIAlertAction actionWithTitle:@"GingerRush" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://gingerrush.com/"]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Manbow" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://manbow.nothing.sh/event/event.cgi"]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Downloads" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { downloads::requestDownloadsPresentation(); [self close]; }]];
