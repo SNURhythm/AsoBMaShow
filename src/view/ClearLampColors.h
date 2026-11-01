@@ -12,7 +12,7 @@ inline Color clearLampColorForRank(int clearTypeRank) {
   if (clearTypeRank >= kClearTypeMaxRank) return Color(255, 126, 182, 242);
   if (clearTypeRank >= kClearTypePerfectRank) return Color(255, 240, 170, 242);
   if (clearTypeRank >= kClearTypeFullComboRank) {
-    return Color(102, 218, 255, 242);
+    return Color(110, 255, 210, 242);
   }
   if (clearTypeRank >= kClearTypeExHardClearRank) {
     return Color(255, 205, 37, 242);
