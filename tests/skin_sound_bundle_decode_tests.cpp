@@ -192,7 +192,71 @@ void testChunkedDecodeMatchesOneShot() {
     const auto reference = readOneShotPcm(truncated);
     expect(reference.framesRead > 4096 && reference.framesRead < reference.info.frames,
            "truncated FLAC exercises a short read after complete chunks");
-    compareFileAndMemoryDecode(truncated, reference);
+    std::ifstream input(truncated, std::ios::binary);
+    const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)), {});
+    for (const bool fromMemory : {false, true}) {
+      std::vector<short> pcm;
+      SF_INFO info{};
+      std::atomic<bool> cancelled{false};
+      const bool decoded = fromMemory
+          ? decodeAudioBytesToPCM(fspath_to_path_t(truncated), bytes, pcm, info, cancelled)
+          : decodeAudioToPCM(fspath_to_path_t(truncated), pcm, info, cancelled);
+      expect(!decoded && pcm.empty(),
+             "truncated audio is rejected without publishing a fabricated silent tail");
+    }
+  }
+}
+
+void testForgedFrameCountDoesNotAllocateDeclaredPcm() {
+  SoundSandbox sandbox;
+  const auto path = sandbox.root() / "forged.flac";
+  if (!writeAudioFixture(path, SF_FORMAT_FLAC | SF_FORMAT_PCM_16, 1, 32)) return;
+  std::ifstream input(path, std::ios::binary);
+  const std::string original((std::istreambuf_iterator<char>(input)), {});
+  input.close();
+  std::vector<unsigned char> bytes(original.begin(), original.end());
+  expect(bytes.size() >= 42 && original.starts_with("fLaC"), "FLAC has a STREAMINFO header");
+  if (bytes.size() < 42) return;
+  // STREAMINFO packs total samples in the low 36 bits of bytes 18..25.
+  // The actual payload still contains only 32 mono frames.
+  std::uint64_t packed = 0;
+  for (std::size_t index = 18; index < 26; ++index) packed = (packed << 8) | bytes[index];
+  packed = (packed & ~((std::uint64_t{1} << 36) - 1)) | (std::uint64_t{1} << 31);
+  for (std::size_t index = 26; index-- > 18;) {
+    bytes[index] = static_cast<unsigned char>(packed);
+    packed >>= 8;
+  }
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+  }
+  SF_INFO advertised{};
+  auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, advertised);
+  expect(file && advertised.frames == (sf_count_t{1} << 31),
+         "real decoder accepts the forged multi-gigabyte PCM declaration");
+  file.reset();
+  const auto displayPath = fspath_to_path_t(path);
+  for (const int source : {0, 1, 2}) {
+    std::vector<short> pcm;
+    SF_INFO info{};
+    std::atomic<bool> cancelled{false};
+    bool decoded = false, threw = false;
+    std::size_t largest = 0;
+    {
+      test_support::AllocationSizeLimit limit(1024 * 1024);
+      test_support::AllocationSizeObserver observer;
+      try {
+        decoded = source == 0 ? decodeAudioToPCM(displayPath, pcm, info, cancelled)
+            : source == 1 ? decodeAudioBytesToPCM(displayPath, bytes, pcm, info, cancelled)
+                          : decodeSkinSoundBundleAware(displayPath, pcm, info, cancelled, {});
+      } catch (const std::bad_alloc &) {
+        threw = true;
+      }
+      largest = observer.largest();
+    }
+    expect(!threw && largest <= 1024 * 1024,
+           "file, memory and preview decoding allocate from produced audio, not forged frame count");
+    expect(!decoded && pcm.empty(), "forged FLAC is rejected without partial PCM or silent tail");
   }
 }
 
@@ -635,6 +699,7 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
   testBundleOnlyPreviewExtensionFallback(argv[0]);
 #endif
+  testForgedFrameCountDoesNotAllocateDeclaredPcm();
   testChunkedDecodeMatchesOneShot();
   testPcm16DecodeWithoutFloatingScratch();
   testLongDecodeUsesBoundedScratch();

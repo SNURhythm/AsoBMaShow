@@ -113,8 +113,9 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   const std::size_t sampleCount =
       static_cast<std::size_t>(fileInfo.frames) *
       static_cast<std::size_t>(fileInfo.channels);
-  // Prepare a buffer to hold the PCM data
-  buffer.resize(sampleCount, 0);
+  // Header frame counts are untrusted (for example FLAC STREAMINFO). Grow
+  // alongside decoding instead of zero-filling the entire declared duration.
+  buffer.clear();
   // PCM16 WAV can be read directly into the final buffer. Preserve the old
   // normalized-double scaling below rather than exposing sf_readf_short's
   // different amplitude convention. Vorbis already decodes to float internally;
@@ -136,6 +137,13 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
       return false;
     }
     const sf_count_t requested = std::min(chunkFrames, fileInfo.frames - numFrames);
+    const auto needed = static_cast<std::size_t>(numFrames + requested) * channels;
+    if (needed > buffer.capacity()) {
+      const auto grown = buffer.capacity() > sampleCount / 2
+          ? sampleCount : buffer.capacity() * 2;
+      buffer.reserve(std::max(needed, grown));
+    }
+    buffer.resize(needed);
     auto *output = buffer.data() + static_cast<std::size_t>(numFrames) * channels;
     const sf_count_t read = ASOBM_AUDIO_MEASURE(read,
         pcm16 ? sf_readf_short(fileHandle.get(), output, requested) :
@@ -181,9 +189,10 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
             " frames",
             path_t_to_utf8(displayPath).c_str(),
             static_cast<std::int64_t>(numFrames));
-    // Zero out the remaining buffer
-    std::fill(buffer.begin() + static_cast<std::size_t>(numFrames) * channels,
-              buffer.end(), 0);
+    // A truncated payload cannot substantiate its advertised duration. Do not
+    // allocate a potentially enormous silent tail or publish partial audio.
+    buffer.clear();
+    return false;
   }
 
   return true;
