@@ -907,7 +907,9 @@ std::optional<difficulty_table::Document> difficulty_table::Parse(
       .dataUrl = jsonStringAt(header, "data_url"),
       .levelOrder = readLevelOrder(header),
   };
-  if (document.name.empty() || document.symbol.empty()) {
+  // Event collections may explicitly omit a display prefix with symbol: "".
+  if (document.name.empty() || !header.contains("symbol") ||
+      !header["symbol"].is_string()) {
     errorMessage = "Difficulty table is missing name or symbol";
     return std::nullopt;
   }

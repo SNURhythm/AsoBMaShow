@@ -301,6 +301,47 @@ void testLegacyHtmlDiscoversUtf8TableAndRejectsInvalidJson() {
   assert(snapshotDifficultyTables(repository.DatabasePath()) == before);
 }
 
+void testEventTableWithEmptySymbolImportsAndUpdates() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  const std::string sourceUrl = "https://example.test/table/meta/header/72.json";
+  const std::string dataUrl = "https://example.test/table/meta/data/72.json";
+  // GingerRush event exports have an explicitly empty symbol and Ungrouped charts.
+  nlohmann::json header = {{"name", "Event Collection"}, {"symbol", ""},
+                           {"header_url", dataUrl}, {"data_url", dataUrl}};
+  nlohmann::json data = nlohmann::json::array({
+      {{"level", "Ungrouped"}, {"md5", std::string(32, 'a')},
+       {"sha256", std::string(64, 'b')}, {"title", "Event Chart"}}});
+  DifficultyTableImporter importer(
+      [&](const std::string &url, std::string *) -> std::optional<std::string> {
+        if (url == sourceUrl) return header.dump();
+        if (url == dataUrl) return data.dump();
+        return std::nullopt;
+      });
+  std::string error;
+  assert(importer.ImportFromUrl(*session, sourceUrl, &error));
+  auto tables = session->SelectDifficultyTables();
+  assert(tables.size() == 1);
+  assert(tables.front().symbol.empty());
+  assert(tables.front().name == "Event Collection");
+  assert(tables.front().chartCount == 1);
+  const auto id = tables.front().id;
+  data.push_back({{"level", "Ungrouped"}, {"md5", std::string(32, 'c')},
+                  {"sha256", std::string(64, 'd')}, {"title", "Second Chart"}});
+  assert(importer.UpdateFromSourceUrl(*session, id, &error));
+  tables = session->SelectDifficultyTables();
+  assert(tables.size() == 1);
+  assert(tables.front().id == id);
+  assert(tables.front().chartCount == 2);
+  const auto before = snapshotDifficultyTables(repository.DatabasePath());
+  header["name"] = "";
+  assert(!importer.ImportFromUrl(*session, sourceUrl, &error));
+  assert(snapshotDifficultyTables(repository.DatabasePath()) == before);
+}
+
 void testParseAndReplacementRollback() {
   const Fixture fixture;
   std::string error;
@@ -768,6 +809,7 @@ void testCompletedOnlineRevisionPreventsBundledRestoration() {
 }
 
 int main() {
+  testEventTableWithEmptySymbolImportsAndUpdates();
   testGenocideLegacyUrlsImportAndUpdateMirrorTables();
   testLegacyHtmlDiscoversUtf8TableAndRejectsInvalidJson();
   testBundledDefaultsSurviveOfflineAndYieldToUpdates();
