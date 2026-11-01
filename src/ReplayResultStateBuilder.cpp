@@ -287,15 +287,9 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
     }
 
     const JudgeResult judgeResult(event.judgement, event.diffMicros);
-    state.judgeCount[event.judgement]++;
-    if (judgeResult.isComboBreak()) {
-      state.combo = 0;
-      state.comboBreak++;
-    } else if (event.judgement != Kpoor) {
-      state.combo++;
-      state.maxCombo = std::max(state.maxCombo, state.combo);
-    }
-    state.recordFastSlow(judgeResult);
+    // Keep stage-local combo semantics aligned with live play; the retained
+    // result count above supplies passed notes independently of replay events.
+    state.commitJudgeCounters(judgeResult, false);
     state.applyGaugeJudgement(event.judgement);
     state.combo = event.combo;
     state.maxCombo = std::max(state.maxCombo, event.combo);
