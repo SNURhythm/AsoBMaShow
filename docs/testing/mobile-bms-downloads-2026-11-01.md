@@ -182,3 +182,35 @@ iOS and Android compile checks cover publication, staging, workflow, coordinator
 import, both affected modals, and storage integration. Failure injection and
 process-boundary reconstruction exercise recovery; physical power-loss and device
 UI retests were not performed for this follow-up.
+
+
+## Review loop, completed-history cleanup, and iframe downloads
+
+The review loop identified and fixed publication ancestry durability, preservation
+of rollback material after a successful rename followed by failed directory sync,
+and iOS runtime admission for retained-file Retry/Keep. Failure-injection tests
+cover both backup and install renames and recovery while sync still fails. A
+coordinator regression checks runtime admission for initial import and retained
+retry/keep. Runtime leases carry revisions so stale completion or expiration
+callbacks cannot finish a newer attempt.
+
+Clear completed is enabled only on the Downloads tab when an acknowledged,
+completed job exists. The real-view regression covers mixed complete, unindexed,
+queued, failed and cancelled jobs, retained files and persisted history.
+
+An iOS simulator harness compiled from the actual browser source captured the
+provided public OneDrive archive as a GET and displayed the native confirmation
+with its correct filename. The generic WebKit download delegate now handles
+attachments from hidden iframes. Synthetic iframe GET/POST cases were checked.
+A separate Android WebView probe on the connected Android 13 device uses the
+production request policy: the OneDrive attachment and synthetic iframe GET were
+accepted; a POST preserved through a 307 redirect was rejected. Java regressions
+also cover historical URL evidence, unrelated metadata POSTs and overlapping
+GET/POST ambiguity. These probes stop before durable transfer/import, so they do
+not establish a new end-to-end OneDrive import result.
+
+The desktop app build, all 15 download tests, localization catalog, unsigned
+iOS build, and Android debug-variant Java compilation pass. The final fresh
+source review found no actionable findings.
+The production Android app was not replaced during this probe session; physical
+iOS continued-processing and lock behavior remain untested.

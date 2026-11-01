@@ -84,6 +84,7 @@
 {"downloads.ui.background_notice", "Closing this view keeps downloads running. Import finishes when the app is open.", "이 창을 닫아도 다운로드는 계속됩니다. 가져오기는 앱을 열면 완료됩니다.", "閉じてもダウンロードは続きます。インポートはアプリを開くと完了します。", "关闭此窗口后下载仍会继续。打开应用后完成导入。", "關閉此視窗後下載仍會繼續。開啟應用程式後完成匯入。"},
 {"downloads.ui.browse", "Browse Sites", "사이트 둘러보기", "サイトを見る", "浏览网站", "瀏覽網站"},
 {"downloads.ui.cancelled", "Cancelled", "취소됨", "キャンセル済み", "已取消", "已取消"},
+{"downloads.ui.clear_completed", "Clear completed", "완료 기록 지우기", "完了した履歴を削除", "清除已完成记录", "清除已完成記錄"},
 {"downloads.ui.complete", "Complete", "완료", "完了", "完成", "完成"},
 {"downloads.ui.downloaded", "Ready to import", "가져오기 대기 중", "インポート待機中", "等待导入", "等待匯入"},
 {"downloads.ui.empty", "No downloads yet. Choose a package in Browse Sites or Find BMS.", "아직 다운로드가 없습니다. 사이트 둘러보기나 채보 다운로드에서 파일을 선택하세요.", "ダウンロードはありません。サイトを見るか譜面のダウンロードから選んでください。", "暂无下载。请在浏览网站 或查找 BMS 中选择文件。", "尚無下載。請在瀏覽網站 或尋找 BMS 中選擇檔案。"},

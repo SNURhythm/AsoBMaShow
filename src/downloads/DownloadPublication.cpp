@@ -92,15 +92,17 @@ std::vector<std::filesystem::path> readRemovals(const json &record, const std::f
   }
   return result;
 }
-bool renameSync(const std::filesystem::path &from, const std::filesystem::path &to) {
+bool renameSync(const std::filesystem::path &from, const std::filesystem::path &to,
+                const PublicationJournal::DirectorySync &syncDirectory) {
   std::string error;
   return atomic_file::renameDurably(from, to, error) &&
-      atomic_file::syncDirectory(to.parent_path(), error) &&
-      (from.parent_path() == to.parent_path() || atomic_file::syncDirectory(from.parent_path(), error));
+      syncDirectory(to.parent_path(), error) &&
+      (from.parent_path() == to.parent_path() || syncDirectory(from.parent_path(), error));
 }
 }
-PublicationJournal::PublicationJournal(std::filesystem::path journal, std::filesystem::path destination)
-    : journal_(std::move(journal)), destination_(std::move(destination)) {}
+PublicationJournal::PublicationJournal(std::filesystem::path journal, std::filesystem::path destination, DirectorySync syncDirectory)
+    : journal_(std::move(journal)), destination_(std::move(destination)),
+      syncDirectory_(syncDirectory ? std::move(syncDirectory) : atomic_file::syncDirectory) {}
 bool PublicationJournal::beginCopy(const std::filesystem::path &transaction) {
   if (!safeTransaction(transaction, destination_)) return false;
   const auto old = identity(destination_);
@@ -111,6 +113,7 @@ bool PublicationJournal::beginCopy(const std::filesystem::path &transaction) {
 void PublicationJournal::rename(const std::filesystem::path &from, const std::filesystem::path &to,
                                  std::error_code &error) {
   error.clear();
+  bool durabilityPending = false;
   try {
     const auto sourceIdentity = identity(from);
     const bool backup = from == destination_ && to.filename() == "backup";
@@ -120,6 +123,18 @@ void PublicationJournal::rename(const std::filesystem::path &from, const std::fi
     if (!sourceIdentity || !(backup || install || restore) || !safeTransaction(transaction, destination_)) {
       error = std::make_error_code(std::errc::invalid_argument);
       return;
+    }
+    if (backup || install) {
+      // The UUID directory and transaction root may both be new. Persist their
+      // entries up through the existing library folder before the old install
+      // can move into this tree (or a first install can become recoverable).
+      const auto libraryFolder = transaction.parent_path().parent_path().parent_path();
+      std::string message;
+      for (auto directory = transaction; !directory.empty(); directory = directory.parent_path()) {
+        if (!syncDirectory_(directory, message))
+          throw std::runtime_error("Could not sync publication ancestry: " + message);
+        if (directory == libraryFolder || directory == directory.parent_path()) break;
+      }
     }
     json record = {{"version", 1}, {"destination", utf8(destination_)},
                    {"transaction", utf8(transaction)}, {"phase", backup ? "backup" : install ? "install" : "restore"},
@@ -139,11 +154,16 @@ void PublicationJournal::rename(const std::filesystem::path &from, const std::fi
       std::string message;
       if (!atomic_file::syncFile(from, message)) throw std::runtime_error("Could not sync publication.");
     }
-    // A post-rename directory-sync failure must not tell the legacy publisher
-    // that the rename never happened: it could discard the only old backup.
-    if (!save(journal_, record) || (!renameSync(from, to) && identity(to) != sourceIdentity))
-      error = std::make_error_code(std::errc::io_error);
+    if (!save(journal_, record)) error = std::make_error_code(std::errc::io_error);
+    else if (!renameSync(from, to, syncDirectory_)) {
+      if (identity(to) == sourceIdentity) durabilityPending = true;
+      else error = std::make_error_code(std::errc::io_error);
+    }
   } catch (...) { error = std::make_error_code(std::errc::io_error); }
+  // An ordinary rename error permits the legacy publisher to roll back and
+  // clean up. After the move, neither success nor that cleanup is safe until
+  // directory durability is known. Unwind with the journal and backup intact.
+  if (durabilityPending) throw std::runtime_error("Publication directory sync failed. Retry to recover.");
 }
 bool PublicationJournal::recordRemovals(const std::vector<std::filesystem::path> &paths, std::string &error) {
   try {
@@ -179,16 +199,23 @@ PublicationRecovery PublicationJournal::recover() {
     const auto source = record.at("identity").get<Identity>();
     const auto destination = identity(destination_);
     if (phase == "install" && destination == source) {
-      std::error_code ignored;
-      std::filesystem::remove_all(transaction, ignored);
-      return PublicationRecovery::Installed;
+      std::string message;
+      if (!syncDirectory_(destination_.parent_path(), message) ||
+          (std::filesystem::exists(transaction) && !syncDirectory_(transaction, message)))
+        return PublicationRecovery::Conflict;
+      std::error_code error;
+      std::filesystem::remove_all(transaction, error);
+      return error ? PublicationRecovery::Conflict : PublicationRecovery::Installed;
     }
     const auto old = record.at("oldIdentity").is_null()
         ? std::optional<Identity>{} : std::optional(record.at("oldIdentity").get<Identity>());
     if (old) {
       if (!destination && identity(transaction / "backup") == old) {
-        if (!renameSync(transaction / "backup", destination_)) return PublicationRecovery::Conflict;
+        if (!renameSync(transaction / "backup", destination_, syncDirectory_)) return PublicationRecovery::Conflict;
       } else if (destination != old) return PublicationRecovery::Conflict;
+      // A previous recovery may have restored the name but failed its fsync.
+      std::string message;
+      if (!syncDirectory_(destination_.parent_path(), message)) return PublicationRecovery::Conflict;
     } else if (destination) return PublicationRecovery::Conflict;
     if (phase != "copy" && phase != "backup" && phase != "install" && phase != "restore") return PublicationRecovery::Conflict;
     std::error_code error;

@@ -9,6 +9,7 @@
 #include "BrowserPolicy.h"
 #include "../AtomicFile.h"
 #include <charconv>
+#include <algorithm>
 #include <map>
 
 namespace {
@@ -62,6 +63,7 @@ void failTransfer(const Identity &key, const char *message) {
 @property(nonatomic, copy) void (^backgroundCompletion)(void);
 @property(nonatomic, strong) NSMutableDictionary<NSString *, BGTask *> *continued;
 @property(nonatomic, strong) NSMutableSet<NSString *> *registered;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *runtimeRevisions;
 - (void)reconcile;
 - (void)requestRuntime:(downloads::Job)job;
 - (void)finishRuntime:(NSString *)description success:(BOOL)success;
@@ -81,6 +83,7 @@ AsoDownloadHost *host() {
   self = [super init];
   if (!self) return nil;
   _continued = [NSMutableDictionary new]; _registered = [NSMutableSet new];
+  _runtimeRevisions = [NSMutableDictionary new];
   NSOperationQueue *queue = [NSOperationQueue new]; queue.maxConcurrentOperationCount = 1;
   NSURLSessionConfiguration *background = [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:sessionIdentifier];
   background.sessionSendsLaunchEvents = YES; background.discretionary = NO;
@@ -119,20 +122,33 @@ AsoDownloadHost *host() {
 - (void)requestRuntime:(downloads::Job)job {
   if (@available(iOS 26.0, *)) {
     if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
-    NSString *description = descriptor(job), *identifier = continuedIdentifier(description);
+    NSString *description = descriptor(job);
+    if (self.runtimeRevisions[description]) return; // Keep the transfer's existing lease through import.
+    const auto current = downloads::service()->get(job.id);
+    if (!current || current->attempt != job.attempt || downloads::terminal(current->state) ||
+        current->state == downloads::State::NeedsAttention) return;
+    NSNumber *revision = @(job.revision);
+    NSString *identifier = [continuedIdentifier(description) stringByAppendingFormat:@".%llu", job.revision];
+    self.runtimeRevisions[description] = revision;
     if (![self.registered containsObject:identifier]) {
       BOOL registered = [BGTaskScheduler.sharedScheduler registerForTaskWithIdentifier:identifier
           usingQueue:dispatch_get_main_queue() launchHandler:^(__kindof BGTask *task) {
         try {
           auto owner = downloads::service(); const auto current = owner->get(job.id);
-          if (!current || current->attempt != job.attempt || downloads::terminal(current->state) ||
+          if (![self.runtimeRevisions[description] isEqualToNumber:revision] ||
+              !current || current->attempt != job.attempt || downloads::terminal(current->state) ||
               current->state == downloads::State::NeedsAttention) {
             [task setTaskCompletedWithSuccess:NO]; return;
           }
           self.continued[description] = task;
           task.expirationHandler = ^{
             dispatch_async(dispatch_get_main_queue(), ^{
-              try { downloads::service()->interrupt(job.id, "Background runtime ended. Retry to continue."); } catch (...) {}
+              if (![self.runtimeRevisions[description] isEqualToNumber:revision]) return;
+              try {
+                const auto current = downloads::service()->get(job.id);
+                if (current && current->attempt == job.attempt)
+                  downloads::service()->interrupt(job.id, "Background runtime ended. Retry to continue.");
+              } catch (...) {}
               [self stop:description];
               [self finishRuntime:description success:NO];
             });
@@ -144,7 +160,7 @@ AsoDownloadHost *host() {
           }
         } catch (...) { [task setTaskCompletedWithSuccess:NO]; }
       }];
-      if (!registered) return;
+      if (!registered) { [self.runtimeRevisions removeObjectForKey:description]; return; }
       [self.registered addObject:identifier];
     }
     BGContinuedProcessingTaskRequest *request = [[BGContinuedProcessingTaskRequest alloc]
@@ -152,15 +168,18 @@ AsoDownloadHost *host() {
     request.strategy = BGContinuedProcessingTaskRequestSubmissionStrategyFail;
     request.requiredResources = BGContinuedProcessingTaskRequestResourcesDefault;
     NSError *error = nil;
-    [BGTaskScheduler.sharedScheduler submitTaskRequest:request error:&error];
+    if (![BGTaskScheduler.sharedScheduler submitTaskRequest:request error:&error])
+      [self.runtimeRevisions removeObjectForKey:description];
     // Admission failure leaves the explicit foreground fallback available.
   }
 }
 - (void)finishRuntime:(NSString *)description success:(BOOL)success {
   if (@available(iOS 26.0, *)) {
-    [BGTaskScheduler.sharedScheduler cancelTaskRequestWithIdentifier:continuedIdentifier(description)];
+    NSNumber *revision = self.runtimeRevisions[description];
+    if (revision) [BGTaskScheduler.sharedScheduler cancelTaskRequestWithIdentifier:
+        [continuedIdentifier(description) stringByAppendingFormat:@".%llu", revision.unsignedLongLongValue]];
+    [self.runtimeRevisions removeObjectForKey:description];
     BGTask *task = self.continued[description];
-    if (!task) return;
     [self.continued removeObjectForKey:description];
     if (success && [task isKindOfClass:BGContinuedProcessingTask.class]) {
       ((BGContinuedProcessingTask *)task).progress.completedUnitCount = 1000;
@@ -168,7 +187,13 @@ AsoDownloadHost *host() {
     [task setTaskCompletedWithSuccess:success];
   }
   const auto key = identity(description);
-  if (key) { try { downloads::service()->setContinuedProcessing(key->first, false); } catch (...) {} }
+  if (key) {
+    try {
+      const auto current = downloads::service()->get(key->first);
+      if (current && current->attempt == key->second)
+        downloads::service()->setContinuedProcessing(key->first, false);
+    } catch (...) {}
+  }
 }
 - (void)stop:(NSString *)description {
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -325,9 +350,19 @@ std::string startTransfer(const Job &job, const std::filesystem::path &) {
   }
 }
 void cancelTransfer(const Job &job) { [host() stop:descriptor(job)]; }
+void beginImport(const Job &job) {
+  dispatchOwnedJob(dispatch_get_main_queue(), job, ^(const Job &snapshot) {
+    [host() requestRuntime:snapshot];
+  });
+}
 void finishActivity(const Job &job, bool success) {
   NSString *description = descriptor(job);
-  dispatch_async(dispatch_get_main_queue(), ^{ [host() finishRuntime:description success:success]; });
+  const auto revision = job.revision;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSNumber *activeRevision = host().runtimeRevisions[description];
+    if (activeRevision && activeRevision.unsignedLongLongValue > revision) return;
+    [host() finishRuntime:description success:success];
+  });
 }
 void reportProgress(const Job &job) {
   static std::mutex mutex; static std::chrono::steady_clock::time_point last;

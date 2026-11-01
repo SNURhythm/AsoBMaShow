@@ -3,6 +3,7 @@
 #include <system_error>
 #include <string>
 #include <vector>
+#include <functional>
 
 namespace downloads {
 enum class PublicationRecovery { Retry, Installed, Conflict };
@@ -11,8 +12,10 @@ enum class PublicationRecovery { Retry, Installed, Conflict };
 // before rename, and refuses to overwrite a user's subsequent replacement.
 class PublicationJournal {
 public:
-  PublicationJournal(std::filesystem::path journal, std::filesystem::path destination);
+  using DirectorySync = std::function<bool(const std::filesystem::path &, std::string &)>;
+  PublicationJournal(std::filesystem::path journal, std::filesystem::path destination, DirectorySync syncDirectory = {});
   bool beginCopy(const std::filesystem::path &transaction);
+  // Throws after a moved-but-unsynced rename; caller must preserve recovery material.
   void rename(const std::filesystem::path &from, const std::filesystem::path &to,
               std::error_code &error);
   PublicationRecovery recover();
@@ -20,5 +23,6 @@ public:
   std::vector<std::filesystem::path> removedPaths() const;
 private:
   std::filesystem::path journal_, destination_;
+  DirectorySync syncDirectory_;
 };
 } // namespace downloads

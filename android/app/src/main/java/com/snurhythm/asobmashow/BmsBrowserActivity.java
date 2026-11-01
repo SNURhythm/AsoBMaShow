@@ -106,14 +106,20 @@ public final class BmsBrowserActivity extends Activity {
         final boolean[] loading = {false};
         web.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                if (request.isForMainFrame()) requests.started(request.getMethod());
+                requests.observed(request.getUrl().toString(), request.getMethod(),
+                        request.isForMainFrame() || BmsBrowserRequestPolicy.navigationHeaders(request.getRequestHeaders()));
                 return null;
             }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                if (http(request.getUrl().toString())) return false;
+                if (http(request.getUrl().toString())) {
+                    requests.observed(request.getUrl().toString(), request.getMethod(), true);
+                    return false;
+                }
+                if ("about:blank".equals(request.getUrl().toString())) return false;
                 if (request.isForMainFrame()) unsupported(view.getUrl());
                 return true;
             }
+            @Override public void onPageCommitVisible(WebView view, String url) { requests.pageCommitted(); }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 loading[0] = true;
                 if (view == page()) clearTable();
@@ -148,7 +154,7 @@ public final class BmsBrowserActivity extends Activity {
             @Override public void onCloseWindow(WebView window) { if (page() == window) closePopup(); }
         });
         web.setDownloadListener((url, userAgent, disposition, mime, length) -> {
-            if (!http(url) || !requests.replayable()) { unsupported(web.getUrl()); return; }
+            if (!http(url) || !requests.consume(url)) { unsupported(web.getUrl()); return; }
             String filename = URLUtil.guessFileName(url, disposition, mime);
             String referrer = web.getUrl();
             new AlertDialog.Builder(this).setTitle("Download BMS archive?")

@@ -402,6 +402,7 @@ void DownloadCoordinator::importLoop() {
     BmsSearchResult result;
     std::string continuation;
     try {
+      if (hooks_.beginImport) hooks_.beginImport(job);
       const BeforePublication prepare = [this, id = job.id](const auto &artifact) { return preparePublication(id, artifact); };
       const auto progress = [this, id = job.id](const BmsSearchDownloadProgress &event) {
         auto current = store_.get(id);

@@ -109,8 +109,20 @@ TasksModal::TasksModal(View *parent, std::function<void()> refreshLibrary,
     if (refreshLibrary) refreshLibrary();
     hide();
   });
+  clearCompleted_ = action(footer, i18n::message("downloads.ui.clear_completed"), [this] {
+    try {
+      if (!owner_) return;
+      for (const auto &job : owner_->jobs()) {
+        if (job.state == downloads::State::Complete && job.libraryAcknowledged && !owner_->forget(job.id))
+          throw std::runtime_error("Could not remove completed download history.");
+      }
+      snapshot_.clear(); nextRefresh_ = 0;
+      update();
+    } catch (...) { error_->setLocalizedText(i18n::message("downloads.ui.storage_error")); }
+  });
+  static_cast<TextView *>(clearCompleted_->getContentView())->setAutoFitText(true);
   auto *close = action(footer, i18n::message("menu.tasks.close.label"), [this] { hide(); });
-  for (auto *button : {refreshLibrary_, close}) button->setWidth(0)->setFlex(1)->setMinWidth(0);
+  for (auto *button : {refreshLibrary_, clearCompleted_, close}) button->setWidth(0)->setFlex(1)->setMinWidth(0);
   panel_->addView(footer); root_->addView(panel_); parent->addView(root_);
   selectTab(Tab::Library);
   resize(rendering::window_width, rendering::window_height);
@@ -134,6 +146,7 @@ void TasksModal::selectTab(Tab tab) {
   libraryScroll_->setVisible(library); libraryScroll_->setDisplay(library ? YGDisplayFlex : YGDisplayNone);
   downloadsContent_->setVisible(!library); downloadsContent_->setDisplay(library ? YGDisplayNone : YGDisplayFlex);
   refreshLibrary_->setVisible(library); refreshLibrary_->setDisplay(library ? YGDisplayFlex : YGDisplayNone);
+  clearCompleted_->setVisible(!library); clearCompleted_->setDisplay(library ? YGDisplayNone : YGDisplayFlex);
   const auto style = [](Button *button, TextView *text, bool selected) {
     if (!button) return;
     button->setSelected(selected);
@@ -187,6 +200,11 @@ void TasksModal::update() {
 }
 void TasksModal::refresh() {
   auto jobs = owner_->jobs();
+  const bool canClear = std::any_of(jobs.begin(), jobs.end(), [](const auto &job) {
+    return job.state == downloads::State::Complete && job.libraryAcknowledged;
+  });
+  modal_view::styleThemedActionButton(clearCompleted_, static_cast<TextView *>(clearCompleted_->getContentView()), canClear,
+      app_theme::control, app_theme::controlHover, app_theme::controlPressed, app_theme::hairlineStrong);
   std::reverse(jobs.begin(), jobs.end());
   std::ostringstream snapshot;
   snapshot << i18n::revision();

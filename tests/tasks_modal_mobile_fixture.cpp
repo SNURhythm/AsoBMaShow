@@ -151,5 +151,51 @@ void testTasksModalTabs() {
     }
     testDownloads.reset();
   }
+  {
+    const auto directory = path / "clear-completed";
+    const auto installed = directory / "library/chart.bms";
+    std::filesystem::create_directories(installed.parent_path());
+    std::ofstream(installed) << "player chart";
+    std::vector<std::string> completed, retained;
+    {
+      downloads::JobStore store(directory / "jobs");
+      for (int index = 0; index < 3; ++index) {
+        auto job = store.submit(request);
+        job.state = downloads::State::Failed;
+        assert(store.update(job));
+        job = *store.get(job.id);
+        job.state = downloads::State::Complete;
+        job.libraryAcknowledged = index < 2;
+        job.result = BmsSearchResult{.status = BmsSearchResult::Status::Downloaded, .outputPath = installed};
+        assert(store.update(job));
+        (index < 2 ? completed : retained).push_back(job.id);
+      }
+      for (const auto state : {downloads::State::Queued, downloads::State::Failed, downloads::State::Cancelled}) {
+        auto job = store.submit(request);
+        job.state = state;
+        assert(store.update(job));
+        retained.push_back(job.id);
+      }
+    }
+    testDownloads = std::make_shared<downloads::DownloadCoordinator>(directory / "jobs", downloads::CoordinatorHooks{});
+    {
+      View parent;
+      TasksModal modal(&parent, {}, {});
+      modal.show(TasksModal::Tab::Downloads);
+      auto *clear = findAction(modal.root(), i18n::tr("downloads.ui.clear_completed"));
+      assert(clear && clear->getVisible() && clear->isEnabled());
+      click(modal, clear);
+      for (const auto &id : completed) assert(!testDownloads->get(id));
+      for (const auto &id : retained) assert(testDownloads->get(id));
+      assert(std::filesystem::exists(installed));
+      modal.show(TasksModal::Tab::Downloads);
+      assert(!clear->isEnabled());
+      modal.show(TasksModal::Tab::Library);
+      assert(!clear->getVisible());
+    }
+    testDownloads.reset();
+    downloads::JobStore reopened(directory / "jobs");
+    assert(reopened.jobs().size() == retained.size());
+  }
   std::filesystem::remove_all(path);
 }

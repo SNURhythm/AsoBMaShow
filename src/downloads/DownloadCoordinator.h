@@ -14,6 +14,7 @@ struct CoordinatorHooks {
   std::function<std::string(const Job &, const std::filesystem::path &)> startTransfer;
   std::function<void(const Job &)> cancelTransfer;
   std::function<void(const Job &, bool)> finishActivity;
+  std::function<void(const Job &)> beginImport;
   std::function<void(const Job &)> reportProgress;
   std::function<std::string(const Job &, const std::filesystem::path &)> continueTransfer;
   std::function<void(const Job &)> cleanup;

@@ -2,6 +2,7 @@
 #if TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 #include "BmsBrowser.h"
 #include "BrowserPolicy.h"
 #include "DownloadPlatform.h"
@@ -10,6 +11,7 @@
 #include <fstream>
 
 namespace {
+char downloadReferrerKey;
 NSString *text(const std::string &value) { return [NSString stringWithUTF8String:value.c_str()] ?: @""; }
 bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.UTF8String).has_value(); }
 NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
@@ -31,15 +33,13 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   return [NSHTTPCookie requestHeaderFieldsWithCookies:matching][@"Cookie"] ?: @"";
 }
 }
-@interface AsoBmsBrowser : UIViewController <WKNavigationDelegate, WKUIDelegate, UITextFieldDelegate>
+@interface AsoBmsBrowser : UIViewController <WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, UITextFieldDelegate>
 @property(nonatomic, strong) WKWebView *web;
 @property(nonatomic, strong) UITextField *address;
 @property(nonatomic, strong) UIBarButtonItem *importItem;
 @property(nonatomic, copy) NSString *tableUrl;
 @property(nonatomic, copy) NSString *tablePageUrl;
 @property(nonatomic) NSUInteger tableProbe;
-@property(nonatomic, copy) NSString *method;
-@property(nonatomic, copy) NSString *referrer;
 - (void)load:(NSString *)url;
 @end
 @implementation AsoBmsBrowser
@@ -188,9 +188,8 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   [alert addAction:[UIAlertAction actionWithTitle:@"Open externally" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self external:source]; }]];
   [self presentViewController:alert animated:YES completion:nil];
 }
-- (void)download:(NSURL *)url filename:(NSString *)filename method:(NSString *)method {
+- (void)download:(NSURL *)url filename:(NSString *)filename method:(NSString *)method referrer:(NSString *)referrer {
   if (!http(url) || ![method isEqualToString:@"GET"]) { [self unsupported]; return; }
-  NSString *referrer = self.referrer ?: self.web.URL.absoluteString ?: @"";
   NSString *notice = @"Keep the app open. On iOS 26 or later, the system may grant continued background processing. If runtime ends, reopen Downloads and retry.";
   UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Download BMS archive?"
       message:[NSString stringWithFormat:@"%@\n\n%@", filename, notice] preferredStyle:UIAlertControllerStyleAlert];
@@ -216,13 +215,8 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   if (!http(action.request.URL) && ![action.request.URL.absoluteString isEqualToString:@"about:blank"]) {
     decision(WKNavigationActionPolicyCancel); if (action.targetFrame.mainFrame || !action.targetFrame) [self unsupported]; return;
   }
-  if (action.targetFrame.mainFrame || !action.targetFrame) {
-    self.method = action.request.HTTPMethod ?: @"GET";
-    self.referrer = [action.request valueForHTTPHeaderField:@"Referer"] ?: web.URL.absoluteString;
-  }
   if (action.shouldPerformDownload) {
-    decision(WKNavigationActionPolicyCancel);
-    [self download:action.request.URL filename:action.request.URL.lastPathComponent method:action.request.HTTPMethod]; return;
+    decision(WKNavigationActionPolicyDownload); return;
   }
   if (action.navigationType == WKNavigationTypeLinkActivated &&
       (action.targetFrame.mainFrame || !action.targetFrame) &&
@@ -240,11 +234,45 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   const bool attachment = [[disposition lowercaseString] hasPrefix:@"attachment"];
   const bool archive = downloads::archiveResponse((response.response.MIMEType ?: @"").UTF8String,
       (response.response.suggestedFilename ?: @"").UTF8String);
-  if (response.isForMainFrame && (attachment || !response.canShowMIMEType || archive)) {
-    decision(WKNavigationResponsePolicyCancel);
-    [self download:response.response.URL filename:response.response.suggestedFilename method:self.method]; return;
+  // Sites such as OneDrive start attachment downloads in hidden iframes.
+  // WebKit supplies the actual download request for every frame; the main
+  // page's last method is not evidence that an iframe request is replayable.
+  if (attachment || !response.canShowMIMEType || archive) {
+    decision(WKNavigationResponsePolicyDownload); return;
   }
   decision(WKNavigationResponsePolicyAllow);
+}
+- (void)prepareDownload:(WKDownload *)download fromWebView:(WKWebView *)web {
+  NSString *source = [download.originalRequest valueForHTTPHeaderField:@"Referer"] ?: web.URL.absoluteString ?: @"";
+  objc_setAssociatedObject(download, &downloadReferrerKey, source, OBJC_ASSOCIATION_COPY_NONATOMIC);
+  download.delegate = self;
+}
+- (void)webView:(WKWebView *)web navigationAction:(WKNavigationAction *)action didBecomeDownload:(WKDownload *)download {
+  [self prepareDownload:download fromWebView:web];
+}
+- (void)webView:(WKWebView *)web navigationResponse:(WKNavigationResponse *)response didBecomeDownload:(WKDownload *)download {
+  [self prepareDownload:download fromWebView:web];
+}
+- (void)download:(WKDownload *)download decideDestinationUsingResponse:(NSURLResponse *)response
+    suggestedFilename:(NSString *)filename completionHandler:(void (^)(NSURL *))completion {
+  NSURLRequest *request = download.originalRequest;
+  NSString *source = objc_getAssociatedObject(download, &downloadReferrerKey) ?: @"";
+  // Stop the browser probe before admitting the durable, cancellable transfer.
+  // Never replay a POST as GET or borrow method evidence from another frame.
+  completion(nil);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!http(request.URL) || !http(response.URL) ||
+        !downloads::allowedRedirect(request.URL.absoluteString.UTF8String, response.URL.absoluteString.UTF8String)) {
+      [self unsupported]; return;
+    }
+    [self download:response.URL filename:filename method:request.HTTPMethod referrer:source];
+  });
+}
+- (void)download:(WKDownload *)download willPerformHTTPRedirection:(NSHTTPURLResponse *)response
+    newRequest:(NSURLRequest *)request decisionHandler:(void (^)(WKDownloadRedirectPolicy))decision {
+  decision(http(response.URL) && http(request.URL) &&
+      downloads::allowedRedirect(response.URL.absoluteString.UTF8String, request.URL.absoluteString.UTF8String)
+      ? WKDownloadRedirectPolicyAllow : WKDownloadRedirectPolicyCancel);
 }
 - (WKWebView *)webView:(WKWebView *)web createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration
     forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)features {

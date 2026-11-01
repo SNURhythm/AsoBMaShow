@@ -18,6 +18,7 @@ std::shared_ptr<DownloadCoordinator> service() {
       hooks.startTransfer = platform::startTransfer;
       hooks.cancelTransfer = platform::cancelTransfer;
       hooks.finishActivity = platform::finishActivity;
+      hooks.beginImport = platform::beginImport;
       hooks.reportProgress = platform::reportProgress;
       hooks.cleanup = cleanupArchiveJob;
       hooks.useFallback = [](const Job &job, long status) {

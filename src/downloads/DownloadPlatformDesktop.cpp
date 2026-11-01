@@ -9,6 +9,7 @@ std::string startTransfer(const Job &, const std::filesystem::path &) {
   return "Background download jobs are available on mobile. Use Find BMS on this platform.";
 }
 void cancelTransfer(const Job &) {}
+void beginImport(const Job &) {}
 void finishActivity(const Job &, bool) {}
 void reportProgress(const Job &) {}
 }

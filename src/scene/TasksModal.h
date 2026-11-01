@@ -38,7 +38,7 @@ private:
   View *panel_ = nullptr, *downloadsContent_ = nullptr;
   ScrollView *libraryScroll_ = nullptr;
   TextView *libraryText_ = nullptr;
-  Button *libraryTab_ = nullptr, *downloadsTab_ = nullptr, *refreshLibrary_ = nullptr;
+  Button *libraryTab_ = nullptr, *downloadsTab_ = nullptr, *refreshLibrary_ = nullptr, *clearCompleted_ = nullptr;
   TextView *libraryTabText_ = nullptr, *downloadsTabText_ = nullptr;
   TextView *libraryBadge_ = nullptr, *downloadsBadge_ = nullptr;
   std::array<int, 6> lastLayout_{-1, -1, -1, -1, -1, -1};

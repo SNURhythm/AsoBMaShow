@@ -271,5 +271,42 @@ int main() {
     service.releaseMaintenance();
     assert(next.wait_for(5s) == std::future_status::ready);
   }
+  for (const bool keep : {false, true}) {
+    std::atomic<int> admissions = 0, imports = 0, transfers = 0;
+    std::promise<void> finished;
+    CoordinatorHooks runtime;
+    runtime.startTransfer = [&](const Job &, const auto &) { ++transfers; return std::string{}; };
+    runtime.beginImport = [&](const Job &) { ++admissions; };
+    runtime.importArchive = [&](const Job &, const auto &, auto &, auto, auto) {
+      const int count = ++imports;
+      assert(admissions == count);
+      if (count == 1) {
+        BmsSearchResult result{.status = BmsSearchResult::Status::HashMismatch};
+        if (keep) result.pendingArtifact = BmsSearchPendingArtifact{};
+        return result;
+      }
+      return BmsSearchResult{.status = BmsSearchResult::Status::Downloaded, .outputPath = root / "installed"};
+    };
+    runtime.resolveArtifact = [&](const Job &, auto decision, auto &, auto) {
+      assert(decision == BmsSearchPendingArtifactDecision::Keep && admissions == 2);
+      return BmsSearchResult{.status = BmsSearchResult::Status::Downloaded, .outputPath = root / "installed"};
+    };
+    runtime.finishActivity = [&](const Job &, bool success) { if (success) finished.set_value(); };
+    DownloadCoordinator service(root / (keep ? "runtime-keep" : "runtime-retry"), runtime);
+    service.setForeground(true); service.enableImports(true);
+    const auto job = service.submit(request(root));
+    const auto file = root / "runtime-completed";
+    std::ofstream(file) << "archive";
+    assert(service.acceptFile(job.id, job.attempt, file));
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (service.get(job.id)->state != State::NeedsAttention && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    bool admitted = false;
+    while (!(admitted = keep ? service.decide(job.id, BmsSearchPendingArtifactDecision::Keep) : service.retry(job.id)) &&
+           std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    assert(admitted);
+    assert(finished.get_future().wait_for(5s) == std::future_status::ready);
+    assert(admissions == 2 && transfers == 1);
+  }
   std::filesystem::remove_all(root);
 }

@@ -69,6 +69,7 @@ void cancelTransfer(const Job &job) {
   if (method) env->CallStaticVoidMethod(downloadClass, method, id);
   env->DeleteLocalRef(id); clearException(env);
 }
+void beginImport(const Job &) {}
 void finishActivity(const Job &, bool) {}
 void reportProgress(const Job &) {}
 }

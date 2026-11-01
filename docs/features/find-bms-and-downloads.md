@@ -37,7 +37,8 @@ finishes, **Locate** closes Downloads and opens the imported folder or packed
 archive in the current selector, clearing filters that could hide its charts.
 Missing files leave Downloads open with a refresh-library message. Remove discards the
 job's private retained files and history after completion; it does not remove an
-installed chart from the library.
+installed chart from the library. **Clear completed** removes all completed, indexed
+entries together, preserving installed content and every unfinished or unacknowledged job.
 
 Find BMS stays open after queuing a mobile download and follows that shared job's
 progress, cancellation, retry and keep/delete decisions. **View Downloads** opens
@@ -62,6 +63,9 @@ iOS 26+ grants continued processing. When that runtime ends, retry from Download
 the retained archive or resumable transfer is reused. The notice appears before
 admission. Force-quit is not a promise of continued execution on either platform.
 
+Attachment downloads from embedded frames (including OneDrive) use the download
+request itself rather than the main page's method. iOS obtains this from WebKit;
+Android requires matching navigation evidence and rejects ambiguous requests.
 Only replayable HTTP(S) GET downloads enter the service. POST, blob, and uncertain
 browser requests offer an explicit external-browser fallback. Cookies and referrers
 are scoped to their origin and stripped on cross-origin redirects. Private request
@@ -76,7 +80,7 @@ excluded from backup. No private catalog API is polled by the browser integratio
   download/artifact workflow on desktop.
 - `src/downloads/` owns durable jobs, native transports, publication recovery,
   browser request policy, and application-level library delivery.
-- `src/scene/DownloadsModal.*` observes jobs without owning their lifetime.
+- `src/scene/TasksModal.*` observes jobs without owning their lifetime.
 - Native browser and transfer hosts live beside the downloads adapters on iOS
   and in Android's `com.snurhythm.asobmashow` Java package.
 - `src/scene/FindBmsDialogPolicy.*` and progress presentation code connect

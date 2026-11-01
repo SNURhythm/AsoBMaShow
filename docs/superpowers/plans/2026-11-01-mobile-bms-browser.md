@@ -120,3 +120,9 @@
 - Final Android checks passed for retained import without redownload, notification
   cancellation, popup confirmation, POST fallback, and Manbow navigation. Final
   documentation records the remaining physical iOS and Android 14+ boundaries.
+
+- Follow-up review loop fixed publication ancestor/post-rename durability and
+  retained-import iOS runtime admission. Clear completed and request-specific
+  iframe download handling were added with regressions. The final fresh review
+  found no actionable findings; platform probe scope is recorded in the
+  verification document.
