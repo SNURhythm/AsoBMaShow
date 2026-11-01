@@ -3255,45 +3255,45 @@ void ResultScene::exportPhoto(bool share) {
       presentation.title, local != nullptr ? local->meta.SubTitle : "",
       presentation.lampComparison ? presentation.lampComparison->current.value : "",
       grade ? grade->grade : "");
-  ResultImageExportResult result;
+  const auto exportImage = [&](const result_image_export::ExportOptions &options) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  if (resultSkinSession) {
-    auto skinData = makeResultSkinData();
-    skinData.showControls = false;
-    const long long elapsedMillis =
-        std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
-    const auto renderSkin =
-        [this, &skinData, elapsedMillis](RenderContext &renderContext) {
-          if (resultSkinSession->requiresRuntimeStringRefresh(skinData) &&
-              !resultSkinSession->refreshRuntimeStrings(skinData)) {
+    if (resultSkinSession) {
+      auto skinData = makeResultSkinData();
+      skinData.showControls = false;
+      const long long elapsedMillis =
+          std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+      const auto renderSkin =
+          [this, &skinData, elapsedMillis](RenderContext &renderContext) {
+            if (resultSkinSession->requiresRuntimeStringRefresh(skinData) &&
+                !resultSkinSession->refreshRuntimeStrings(skinData)) {
+              appendResultSkinRenderDiagnostics();
+              return false;
+            }
+            const bool rendered = resultSkinSession->renderForExport(
+                renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
             appendResultSkinRenderDiagnostics();
-            return false;
-          }
-          const bool rendered = resultSkinSession->renderForExport(
-              renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
-          appendResultSkinRenderDiagnostics();
-          return rendered;
-        };
-    result = share
-        ? ResultImageExporter::Share(context, presentation, shareText, renderSkin)
-        : ResultImageExporter::ExportSkin(context, presentation.title, renderSkin);
-  } else
+            return rendered;
+          };
+      return ResultImageExporter::ExportSkin(
+          context, presentation.title, renderSkin, options);
+    } else
 #endif
-  if (share) {
-    result = ResultImageExporter::Share(context, presentation, shareText);
-  } else if (remote != nullptr) {
-    result = ResultImageExporter::Export(context, remote->presentation);
-  } else {
-    const std::optional<ResultPacemakerData> pacemaker =
-        pacemakerDataForCurrentResult();
-    const auto analyticsModel = makeTimingAnalyticsModel();
-    result = ResultImageExporter::Export(
-        context, local->meta, local->resultState, local->playModeLabel,
-        local->laneOrderLabel, local->difficultyLabel, local->previousBest,
-        local->previousLampBest,
-        local->currentClearLabelOverride, local->currentClearRankOverride,
-        local->headerDifficultyLabelOverride, pacemaker, analyticsModel);
-  }
+    if (remote != nullptr) {
+      return ResultImageExporter::Export(context, remote->presentation, options);
+    } else {
+      const std::optional<ResultPacemakerData> pacemaker =
+          pacemakerDataForCurrentResult();
+      const auto analyticsModel = makeTimingAnalyticsModel();
+      return ResultImageExporter::Export(
+          context, local->meta, local->resultState, local->playModeLabel,
+          local->laneOrderLabel, local->difficultyLabel, local->previousBest,
+          local->previousLampBest,
+          local->currentClearLabelOverride, local->currentClearRankOverride,
+          local->headerDifficultyLabelOverride, pacemaker, analyticsModel, options);
+    }
+  };
+  const auto result = share ? ResultImageExporter::Share(shareText, exportImage)
+                            : exportImage({});
   resultPhotoExportInProgress = false;
   if (share) {
     if (!result.success) {
