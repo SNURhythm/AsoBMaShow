@@ -8,6 +8,8 @@
 #include "AppDatabaseInitializer.h"
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
+#include "downloads/DownloadService.h"
+#include "downloads/DownloadPlatform.h"
 #include "DifficultyTableImporter.h"
 #include "input/InputLifecycle.h"
 #include "replay/ReplayFileReconciler.h"
@@ -788,6 +790,20 @@ static void reportResultRecoveryWarning(
 
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  std::shared_ptr<downloads::DownloadCoordinator> downloadService;
+  try {
+    downloadService = downloads::service();
+    downloads::platform::initialize();
+    downloadService->setForeground(!context.appInBackground.load());
+    downloadService->enableImports(true);
+  } catch (const std::exception &) {
+    SDL_Log("Saved downloads are unavailable; preserving their state for recovery.");
+  }
+  auto detachDownloads = makeScopeExit([&] {
+    if (downloadService) downloadService->enableImports(false);
+  });
+#endif
 #if TARGET_OS_IPHONE
   platform::IOSSceneMetalPolicy iosSceneMetal;
   context.requestImprovedFramePacing = [&] {
@@ -1040,6 +1056,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
     const bool previous =
         context.appInBackground.exchange(background, std::memory_order_acq_rel);
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+    if (downloadService) downloadService->setForeground(!background);
+#endif
 #if TARGET_OS_IPHONE
     if (background) {
       iosDisplayLink.pause();
@@ -1077,6 +1096,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+    if (downloadService) downloadService->enableImports(
+        !context.storageMaintenanceActive.load() &&
+        !context.backgroundTasksPausedForForegroundScene.load());
+#endif
     if (!context.appInBackground.load(std::memory_order_acquire))
       reminderCoordinator.update(context);
     storage_management::PollStorageTask(context);

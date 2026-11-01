@@ -6473,6 +6473,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_search/Common.cpp
         src/bms_search/ArchiveDecision.cpp
         src/bms_search/DownloadedArchiveWorkflow.cpp
+        src/downloads/DownloadImport.cpp
+        src/downloads/DownloadPublication.cpp
         src/storage/StoragePolicy.cpp
         src/bms_search/DownloadStorageOptimization.cpp
         src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp src/storage/StorageWorkScheduler.cpp

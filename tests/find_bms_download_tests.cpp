@@ -1604,6 +1604,8 @@ int main(int argc, char **argv) {
   testUnknownSizeStreamIsBounded();
 #endif
   testDownloadAttemptExtractionCleanup();
+  testResolvedDownloadHandoffDoesNotStartSceneOwnedTransfer();
+  testDurableDownloadImportsExistingFileWithoutTransport();
   testStorageNamesDistinguishSameNamedPackages();
   testStorageNamesPreserveLongAndCompoundExtensions();
   testPackageCandidateRespectsBuildArchiveSupport();

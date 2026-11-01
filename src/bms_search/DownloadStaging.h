@@ -31,4 +31,9 @@ bool commitFindBmsPendingArtifact(
 bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
                                   std::string &errorMessage);
 
+// Idempotent cleanup after a journal has verified that the destination was
+// installed. Does not read or copy published payloads.
+bool finishFindBmsPendingArtifactPublication(const BmsSearchPendingArtifact &artifact,
+    std::string &errorMessage, std::vector<std::filesystem::path> *removedPaths);
+
 } // namespace asobmshow::bms_search

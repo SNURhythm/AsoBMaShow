@@ -2,6 +2,8 @@
 
 #include "bms_search/ArchiveExtraction.h"
 #include "bms_search/GoogleDriveDriver.h"
+#include "downloads/DownloadJobs.h"
+#include "downloads/DownloadImport.h"
 #include "RAII.h"
 #include "../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
 
@@ -39,6 +41,31 @@ bool GoogleDriveDriver::resolveWarningDownload(
 }
 
 namespace {
+
+void testResolvedDownloadHandoffDoesNotStartSceneOwnedTransfer() {
+  using namespace asobmshow::bms_search;
+  observedDownloadAttempt.clear();
+  std::optional<downloads::Request> submitted;
+  BmsSearchDownloadOptions options;
+  options.skipUnarchivingForNonSolidArchives = true;
+  options.storagePolicy.bga = storage_management::BgaAction::Delete;
+  options.enqueueDownload = [&](const downloads::Request &request) {
+    submitted = request;
+    return "durable-job";
+  };
+  std::atomic_bool cancelled = false;
+  BmsSearchResult result;
+  assert(downloadAndExtractArchive("https://fixture.invalid/package.zip", "", std::string(64, 'a'),
+      std::filesystem::temp_directory_path() / "library", cancelled, {}, options, result, "song.zip", "source-id"));
+  assert(submitted);
+  assert(submitted->expectedHash == std::string(64, 'a'));
+  assert(submitted->skipUnarchiving);
+  assert(submitted->storagePolicy.bga == storage_management::BgaAction::Delete);
+  assert(submitted->storageIdentity == "source-id");
+  assert(observedDownloadAttempt.empty());
+  assert(result.queuedDownloadId == "durable-job");
+  assert(result.outputPath.empty());
+}
 
 struct ExtractionZipMember {
   std::string name;
@@ -310,6 +337,33 @@ void testDownloadAttemptExtractionCleanup() {
       assert(result.message.find("extract") != std::string::npos);
     }
   }
+}
+
+void testDurableDownloadImportsExistingFileWithoutTransport() {
+  using namespace asobmshow::bms_search;
+  CleanupPaths cleanup;
+  std::string error;
+  const auto fixture = createFindBmsDownloadAttempt("fixture.zip", error);
+  assert(fixture);
+  cleanup.add(fixture->root);
+  writeExtractionZip(fixture->archivePath, {{"chart.bms", "#TITLE test\n#BPM 120\n"}});
+  downloads::Job job;
+  job.id = "41b74c17434d423aa40f9399b2f0382c";
+  job.request.url = job.request.displayUrl = "https://fixture.invalid/package.zip";
+  job.request.archiveName = "song.zip";
+  job.request.libraryRoot = testDownloadRoot(*fixture).parent_path();
+  cleanup.add(job.request.libraryRoot);
+  job.request.skipUnarchiving = true;
+  std::atomic_bool cancelled = false;
+  int prepared = 0;
+  observedDownloadAttempt.clear();
+  const auto result = downloads::importArchiveJob(job, fixture->archivePath, fixture->root,
+      cancelled, {}, [&](const BmsSearchPendingArtifact &) { ++prepared; return true; });
+  assert(result.status == BmsSearchResult::Status::Downloaded);
+  assert(!result.outputPath.empty() && std::filesystem::is_regular_file(result.outputPath));
+  assert(std::filesystem::exists(fixture->archivePath)); // Retained until durable result delivery.
+  assert(observedDownloadAttempt.empty());
+  assert(prepared == 1);
 }
 
 int testVerificationAllocationGuard() {

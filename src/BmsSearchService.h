@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+namespace downloads { struct Request; }
+
 struct BmsSearchDownloadProgress {
   std::string message;
   std::uint64_t downloadedBytes = 0;
@@ -31,6 +33,9 @@ struct BmsSearchDownloadOptions {
   storage_management::StoragePolicy storagePolicy;
   // Application-owned probe; never captures a view or mutable settings.
   std::function<bool()> storagePauseRequested;
+  // Mobile admission transfers ownership after provider resolution, before any
+  // scene-owned payload work. Empty retains the synchronous desktop workflow.
+  std::function<std::string(const downloads::Request &)> enqueueDownload;
 };
 
 enum class BmsSearchPendingArtifactKind { Archive, ExtractedDirectory };
@@ -90,6 +95,7 @@ struct BmsSearchResult {
   i18n::Text presentationMessage;
   long downloadHttpStatus = 0;
   std::optional<storage_management::StorageReport> storageReport;
+  std::string queuedDownloadId;
 };
 
 class BmsSearchService {

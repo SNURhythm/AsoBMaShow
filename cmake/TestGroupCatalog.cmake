@@ -332,6 +332,8 @@ asobmashow_label_tests(area_archives
 
 asobmashow_label_tests(area_downloads
     download_jobs_tests
+    download_coordinator_tests
+    download_publication_tests
     android_metadata_post_cancellation_tests
     find_bms_archive_flow_audit
     find_bms_download_tests

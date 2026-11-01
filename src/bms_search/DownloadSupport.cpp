@@ -3,6 +3,7 @@
 #include "DownloadStorageIdentity.h"
 #include "DownloadStorageOptimization.h"
 #include "GoogleDriveDriver.h"
+#include "../downloads/DownloadJobs.h"
 
 #include "../RAII.h"
 
@@ -663,6 +664,40 @@ static bool downloadAndExtractArchiveAttempt(
                                                  : downloadUrl));
   const auto storageNames =
       findBmsStorageNames(preferredName, archiveExtension, identitySeed);
+  if (options.enqueueDownload) {
+    if (cancelled.load()) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Download cancelled.";
+      return false;
+    }
+    downloads::Request request;
+    request.url = downloadUrl;
+    request.displayUrl = result.downloadUrl;
+    request.title = preferredName;
+    request.archiveName = preferredName;
+    request.expectedHash = archiveKey;
+    request.storageIdentity = identitySeed;
+    request.libraryRoot = libraryRoot;
+    request.skipUnarchiving = options.skipUnarchivingForNonSolidArchives;
+    request.storagePolicy = options.storagePolicy;
+    try {
+      result.queuedDownloadId = options.enqueueDownload(request);
+    } catch (const std::exception &) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Could not save the download. Check available storage and retry.";
+      return false;
+    }
+    if (result.queuedDownloadId.empty()) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "The download could not be queued.";
+      return false;
+    }
+    result.status = BmsSearchResult::Status::Downloaded;
+    result.outputPath.clear();
+    result.message = "Download queued.";
+    if (downloadedArchive != nullptr) *downloadedArchive = true;
+    return true;
+  }
   const std::string &archiveName = storageNames.archiveName;
   const std::string &key = storageNames.storageKey;
   const std::filesystem::path baseDirectory = makeDownloadDirectory(libraryRoot);

@@ -29,7 +29,8 @@ std::string utf8(const std::filesystem::path &path) {
   return {bytes.begin(), bytes.end()};
 }
 std::filesystem::path pathAt(const json &value, const char *key) {
-  return std::filesystem::u8path(value.at(key).get<std::string>());
+  const auto text = value.at(key).get<std::string>();
+  return std::filesystem::path(std::u8string(text.begin(), text.end()));
 }
 json policyJson(const storage_management::StoragePolicy &p) {
   return {{"audio", p.audio}, {"bga", p.bga}, {"videoQuality", p.videoQuality},
@@ -95,7 +96,10 @@ BmsSearchResult readResult(const json &j) {
     throw std::runtime_error("Invalid saved download result.");
   j.at("message").get_to(r.message); r.outputPath = pathAt(j, "outputPath");
   j.at("httpStatus").get_to(r.downloadHttpStatus);
-  for (const auto &p : j.at("removedPaths")) r.removedPaths.push_back(std::filesystem::u8path(p.get<std::string>()));
+  for (const auto &p : j.at("removedPaths")) {
+    const auto text = p.get<std::string>();
+    r.removedPaths.emplace_back(std::u8string(text.begin(), text.end()));
+  }
   if (!j.at("artifact").is_null()) r.pendingArtifact = readArtifact(j.at("artifact"));
   return r;
 }
@@ -104,6 +108,8 @@ json jobJson(const Job &j) {
           {"attempt", j.attempt}, {"state", j.state}, {"request", requestJson(j.request)},
           {"downloadedBytes", j.downloadedBytes}, {"totalBytes", j.totalBytes},
           {"message", j.message}, {"libraryAcknowledged", j.libraryAcknowledged},
+          {"publicationPrepared", j.publicationPrepared},
+          {"decision", j.decision ? json(*j.decision) : json(nullptr)},
           {"result", j.result ? resultJson(*j.result) : json(nullptr)}};
 }
 Job readJob(const json &j) {
@@ -113,6 +119,13 @@ Job readJob(const json &j) {
   j.at("state").get_to(result.state); result.request = readRequest(j.at("request"));
   j.at("downloadedBytes").get_to(result.downloadedBytes); j.at("totalBytes").get_to(result.totalBytes);
   j.at("message").get_to(result.message); j.at("libraryAcknowledged").get_to(result.libraryAcknowledged);
+  result.publicationPrepared = j.value("publicationPrepared", false);
+  if (j.contains("decision") && !j.at("decision").is_null()) {
+    result.decision = j.at("decision").get<BmsSearchPendingArtifactDecision>();
+    if (*result.decision != BmsSearchPendingArtifactDecision::Keep &&
+        *result.decision != BmsSearchPendingArtifactDecision::Delete)
+      throw std::runtime_error("Invalid saved download decision.");
+  }
   if (!j.at("result").is_null()) result.result = readResult(j.at("result"));
   if (!validId(result.id) || result.state < State::Queued || result.state > State::Failed ||
       result.revision == std::numeric_limits<std::uint64_t>::max())
@@ -261,5 +274,7 @@ std::filesystem::path JobStore::jobPath(const std::string &id) const {
   if (!validId(id)) throw std::runtime_error("Invalid download identity.");
   return root_ / id;
 }
-std::filesystem::path JobStore::archivePath(const std::string &id) const { return jobPath(id) / "archive"; }
+std::filesystem::path JobStore::archivePath(const std::string &id, std::uint64_t attempt) const {
+  return jobPath(id) / (attempt == 0 ? "archive" : "archive." + std::to_string(attempt));
+}
 } // namespace downloads

@@ -966,6 +966,11 @@ void FindBmsModal::update() {
   if (result) {
     findBmsResult = std::move(*result);
     findBmsPendingDecision.reset();
+    if (!findBmsResult.queuedDownloadId.empty()) {
+      if (findBmsModalRoot != nullptr) findBmsModalRoot->setVisible(false);
+      if (callbacks_.downloadQueued) callbacks_.downloadQueued(findBmsResult.queuedDownloadId);
+      return;
+    }
     const bool keptMismatchedFiles =
         findBmsResult.status == BmsSearchResult::Status::HashMismatch &&
         !findBmsResult.pendingArtifact && !findBmsResult.outputPath.empty();

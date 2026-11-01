@@ -4,6 +4,7 @@
 #include "../platform/SDLMainThread.h"
 #include "../i18n/Localization.h"
 #include "MainMenuScene.h"
+#include "../downloads/DownloadService.h"
 #include "play/QuickRetrySummary.h"
 #include "../view/PlayStartButton.h"
 #include "NewcomerTutorialView.h"
@@ -7370,7 +7371,13 @@ void MainMenuScene::buildFindBmsModal() {
             .storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences),
             .storagePauseRequested = [app = &context] {
               return app->backgroundTasksPausedForForegroundScene.load() || app->appInBackground.load();
-            }};
+            }
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+            , .enqueueDownload = [](const downloads::Request &request) {
+              return downloads::service()->submit(request).id;
+            }
+#endif
+            };
       },
       .downloadStarted = [this]() {
         findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
@@ -7384,7 +7391,12 @@ void MainMenuScene::buildFindBmsModal() {
             matched ? findBmsSelectionGenerationAtDownloadStart : 0,
             result.removedPaths);
       },
-      .refreshLibrary = [this]() { startLibraryRefresh(); }});
+      .refreshLibrary = [this]() { startLibraryRefresh(); },
+      .downloadQueued = [](const std::string &id) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+        downloads::requestDownloadsPresentation(id);
+#endif
+      }});
 }
 
 void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {

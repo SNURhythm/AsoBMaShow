@@ -5,6 +5,10 @@
 #include "../Uuid.h"
 #include "../RAII.h"
 #include "../sqlite3.h"
+#include "../targets.h"
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+#include "../downloads/DownloadPlatform.h"
+#endif
 
 #include <array>
 #include <cerrno>
@@ -405,7 +409,11 @@ void removeStaleArchiveVariants(
 } // namespace
 
 std::filesystem::path findBmsStagingBasePath() {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  return downloads::platform::privateRoot() / "imports";
+#else
   return std::filesystem::temp_directory_path() / "AsoBMaShowFindBms";
+#endif
 }
 
 std::optional<FindBmsDownloadAttempt>
@@ -510,7 +518,7 @@ bool commitFindBmsPendingArtifact(
   }
   const auto transactionRoot =
       artifact.downloadRoot / kFindBmsTransactionDirectoryName;
-  const auto transactionPath = transactionRoot / uuid::generateV4();
+  const auto transactionPath = transactionRoot / artifact.stagingRoot.filename();
   const auto commitPath = transactionPath / "commit";
   const auto backupPath = transactionPath / "backup";
   removePath(transactionPath);
@@ -639,6 +647,20 @@ bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
     return false;
   }
   errorMessage.clear();
+  return true;
+}
+
+bool finishFindBmsPendingArtifactPublication(const BmsSearchPendingArtifact &artifact,
+    std::string &errorMessage, std::vector<std::filesystem::path> *removedPaths) {
+  auto recovered = artifact;
+  // The original-file index may already have been discarded after publication.
+  recovered.originalFilesIndexPath.clear();
+  if (!validatePendingArtifact(recovered, errorMessage)) return false;
+  if (!recovered.alternateDestinationPath.empty())
+    removeVariantPath(recovered.alternateDestinationPath, removedPaths);
+  removeStaleExtractedVariants(recovered, removedPaths);
+  removeStaleArchiveVariants(recovered, removedPaths);
+  removePath(recovered.stagingRoot);
   return true;
 }
 

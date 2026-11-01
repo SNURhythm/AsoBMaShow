@@ -3,6 +3,7 @@
 // Service definitions below replace network/filesystem effects with controlled
 // calls. View and indexing doubles check the application-thread handoff.
 #include "scene/FindBmsDialogPolicy.h"
+#include "targets.h"
 #include "scene/FindBmsProgressPresentation.h"
 #include <algorithm>
 
@@ -94,6 +95,7 @@ struct FindBmsModalCallbacks {
   std::function<void()> downloadStarted;
   std::function<void(const ChartMetaRecord &, const BmsSearchResult &, bool)> filesReady;
   std::function<void()> refreshLibrary;
+  std::function<void(const std::string &)> downloadQueued;
 };
 class MainMenuScene {
 public:
@@ -428,6 +430,26 @@ void testSceneCandidateAndPendingArtifactDecisions() {
   assert(scene.indexed[0].path == "kept.zip" && scene.indexed[0].identity.empty());
   assert(scene.indexed[0].generation == 0);
   assert(scene.indexed[0].removed == std::vector<std::filesystem::path>{"obsolete.bms"});
+}
+
+void testQueuedDownloadHandoffDoesNotIndexOrCancelOnSceneClose() {
+  ServiceCalls calls;
+  serviceCalls = &calls;
+  calls.result = {.status = BmsSearchResult::Status::Downloaded,
+                  .queuedDownloadId = "background-job"};
+  MainMenuScene scene;
+  int deliveries = 0;
+  scene.callbacks_.downloadQueued = [&](const std::string &id) {
+    assert(id == "background-job");
+    ++deliveries;
+  };
+  scene.showFindBmsModal({{"sha", "md5", "title", "artist"}});
+  applyUntilIdle(scene);
+  assert(deliveries == 1);
+  assert(scene.indexed.empty());
+  scene.applyFindBmsUpdates();
+  scene.cancelAndWait();
+  assert(deliveries == 1 && scene.indexed.empty());
 }
 } // namespace
 

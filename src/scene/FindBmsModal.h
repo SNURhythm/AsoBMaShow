@@ -22,6 +22,7 @@ struct FindBmsModalCallbacks {
   std::function<void(const ChartMetaRecord &, const BmsSearchResult &,
                      bool matched)> filesReady;
   std::function<void()> refreshLibrary;
+  std::function<void(const std::string &)> downloadQueued;
 };
 
 // The parent owns the views. Destroy this controller before its parent view.

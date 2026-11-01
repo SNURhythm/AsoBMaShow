@@ -32,6 +32,8 @@ struct Job {
   std::string message;
   std::optional<BmsSearchResult> result;
   bool libraryAcknowledged = false;
+  bool publicationPrepared = false;
+  std::optional<BmsSearchPendingArtifactDecision> decision;
 };
 
 bool validRequest(const Request &request);
@@ -50,7 +52,7 @@ public:
   bool update(Job job);
   bool forget(const std::string &id);
   std::filesystem::path jobPath(const std::string &id) const;
-  std::filesystem::path archivePath(const std::string &id) const;
+  std::filesystem::path archivePath(const std::string &id, std::uint64_t attempt = 0) const;
   const std::filesystem::path &root() const { return root_; }
 private:
   void save(const std::vector<Job> &jobs) const;
