@@ -2,10 +2,12 @@
 
 ## Intent and user flow
 
-Find BMS searches supported external sources, presents candidates, downloads a
-selection, validates/stages its archive, and hands the resulting content to the
-library. The flow avoids exposing partially written or unverified content as a
-chart folder.
+Find BMS searches supported external sources, downloads and validates a matching
+archive, and hands the resulting content to the library. The flow avoids exposing
+partially written or unverified content as a chart folder.
+
+Automatic lookup uses GingerRush, Konmai, Wriggle, and BMS Search. HorieYuuka
+is available through **Browse Sites** only; Find BMS does not call its API.
 
 ## Mobile browsing and downloads
 

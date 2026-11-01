@@ -10,8 +10,8 @@
 
 namespace {
 struct ServiceCalls {
-  int lookups = 0, downloads = 0, resolutions = 0;
-  std::string sha256, md5, title, artist, candidateId;
+  int lookups = 0, resolutions = 0;
+  std::string sha256, md5, title, artist;
   std::filesystem::path root;
   bool skipUnarchiving = false;
   storage_management::StoragePolicy storagePolicy;
@@ -50,18 +50,6 @@ BmsSearchResult BmsSearchService::findAndDownload(
   if (calls.gate) { calls.gate->block(); }
   calls.cancellationObserved = cancelled.load();
   return calls.result;
-}
-BmsSearchResult BmsSearchService::downloadCandidate(
-    const BmsSearchCandidate &candidate, const std::string &sha256,
-    const std::string &md5, const std::filesystem::path &root,
-    std::atomic_bool &cancelled, BmsSearchDownloadProgressCallback progress,
-    BmsSearchDownloadOptions options) const {
-  auto &calls = *serviceCalls;
-  ++calls.downloads; calls.candidateId = candidate.id;
-  // Reuse the controlled transport while recording which service entry ran.
-  auto result = findAndDownload(sha256, md5, root, cancelled, std::move(progress), {}, {}, options);
-  --calls.lookups;
-  return result;
 }
 BmsSearchResult BmsSearchService::resolvePendingArtifact(
     BmsSearchResult result, BmsSearchPendingArtifactDecision decision) const {
@@ -150,7 +138,6 @@ public:
   bool updateQueuedDownload(bool force = false);
   void startLookup();
   void cancelAndWait();
-  void startFindBmsCandidateDownload(size_t index);
   void startFindBmsPendingArtifactResolution(BmsSearchPendingArtifactDecision decision);
   void hideFindBmsModal();
   void applyFindBmsUpdates();
@@ -182,7 +169,7 @@ void testConfirmationDefersAllWorkUntilExplicitSearch() {
   scene.showFindBmsModal(record, true);
   assert(!scene.findBmsTask.running());
   assert(scene.modal.visible && scene.findBmsProgressLog.empty());
-  assert(calls.lookups == 0 && calls.downloads == 0 && calls.resolutions == 0);
+  assert(calls.lookups == 0 && calls.resolutions == 0);
   assert(roots == 0 && options == 0 && started == 0 && scene.indexed.empty());
   scene.applyFindBmsUpdates();
   assert(!scene.findBmsTask.running() && calls.lookups == 0);
@@ -392,38 +379,10 @@ void testSceneCancellationKeepsPendingArtifactVisible() {
   assert(scene.modal.visible && scene.indexed.empty());
 }
 
-std::string resolveCandidateLabel(const std::string &text) { return text; }
-std::string resolveCandidateLabel(const i18n::Text &text) { return text.resolve(); }
-
-void testCandidateDownloadLabelRetainsLanguageAndMetadata() {
-  i18n::setLanguage(i18n::Language::English);
-  BmsSearchCandidate candidate{.name = "raw.zip", .title = "{title} Settings",
-                               .artist = "Download"};
-  const auto label = findBmsCandidateLabel(candidate, 2);
-  i18n::setLanguage(i18n::Language::Korean);
-  assert(resolveCandidateLabel(label) == "3. 다운로드 [Download] {title} Settings");
-  i18n::setLanguage(i18n::Language::Japanese);
-  assert(resolveCandidateLabel(label) == "3. ダウンロード [Download] {title} Settings");
-  const auto fallback = findBmsCandidateLabel({}, 0);
-  assert(resolveCandidateLabel(fallback) == "1. ダウンロード Horie アーカイブ");
-  i18n::setLanguage(i18n::Language::English);
-}
-
-void testSceneCandidateAndPendingArtifactDecisions() {
+void testScenePendingArtifactDecisions() {
   ServiceCalls calls;
   serviceCalls = &calls;
   MainMenuScene scene;
-  scene.findBmsModalChart = {{"sha256", "md5", "Title", "Artist"}};
-  scene.findBmsResult.candidates = {{.id = "candidate-1"}};
-  scene.startFindBmsCandidateDownload(1);
-  assert(calls.downloads == 0);
-  scene.chartSelectionGeneration = 9;
-  scene.startFindBmsCandidateDownload(0);
-  assert(scene.findBmsSelectionGenerationAtDownloadStart == 9);
-  applyUntilIdle(scene);
-  assert(calls.downloads == 1 && calls.candidateId == "candidate-1");
-  assert(calls.sha256 == "sha256" && calls.md5 == "md5" && calls.skipUnarchiving);
-
   scene.startFindBmsPendingArtifactResolution(BmsSearchPendingArtifactDecision::Keep);
   assert(calls.resolutions == 0);
   for (auto decision : {BmsSearchPendingArtifactDecision::Keep, BmsSearchPendingArtifactDecision::Delete}) {
@@ -516,16 +475,13 @@ void testQueuedDownloadHandoffDoesNotIndexOrCancelOnSceneClose() {
 
 void testCapturedStoragePolicySurvivesAttemptAndRetainedCompletion() {
   using namespace storage_management;
-  for (bool candidate : {false, true}) {
+  {
     ServiceCalls calls; serviceCalls = &calls; Gate gate; calls.gate = &gate;
     calls.result = {.status = BmsSearchResult::Status::Downloaded, .outputPath = "optimized"};
     calls.result.storageReport = StorageReport{.converted = 2, .failed = 1, .reclaimedBytes = 456};
     MainMenuScene scene;
     scene.context.settings.storagePreferences = {.download = {.audio = AudioAction::LosslessFlac}, .afterDownload = true};
-    if (candidate) {
-      scene.findBmsResult.candidates = {BmsSearchCandidate{.id = "candidate"}};
-      scene.startFindBmsCandidateDownload(0);
-    } else scene.showFindBmsModal({{"sha", "md5", "title", "artist"}});
+    scene.showFindBmsModal({{"sha", "md5", "title", "artist"}});
     gate.wait();
     scene.context.settings.storagePreferences = {}; // another profile/policy
     assert(calls.storagePolicy.audio == AudioAction::LosslessFlac);

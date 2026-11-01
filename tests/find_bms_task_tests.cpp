@@ -222,7 +222,6 @@ int main() {
   testConfirmationDefersAllWorkUntilExplicitSearch();
   testDismissedConfirmationCannotStartLookup();
   testConfirmationReopenPreservesPendingArtifact();
-  testCandidateDownloadLabelRetainsLanguageAndMetadata();
   testProgressRetainsLast160EventsInOrderAndResultIsTakenOnce();
   testCancellationReturnsImmediatelyAndStillDeliversServiceResult();
   testStopJoinsArtifactResolutionAndReplacementDiscardsOldData();
@@ -235,7 +234,7 @@ int main() {
   testSceneDownloadPromptRetriesExistingWorker();
   testSceneExtractionProgressPreservesHistoryAcrossLanguages();
   testSceneCancellationKeepsPendingArtifactVisible();
-  testSceneCandidateAndPendingArtifactDecisions();
+  testScenePendingArtifactDecisions();
   testSharedDownloadStaysInFindBms();
   testQueuedDownloadHandoffDoesNotIndexOrCancelOnSceneClose();
 }

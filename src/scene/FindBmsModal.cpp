@@ -11,7 +11,6 @@
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/ModalViewHelpers.h"
-#include "../view/RecyclerView.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
 
@@ -60,77 +59,6 @@ std::string findBmsTitleSearchQuery(const ChartMetaRecord &record) {
   }
   return query;
 }
-
-i18n::Text findBmsCandidateLabel(const BmsSearchCandidate &candidate,
-                                  size_t index) {
-  i18n::Text name;
-  if (!candidate.artist.empty() || !candidate.title.empty()) {
-    std::string metadata;
-    if (!candidate.artist.empty()) {
-      metadata = "[" + candidate.artist + "] ";
-    }
-    metadata += candidate.title.empty() ? candidate.name : candidate.title;
-    name = std::move(metadata);
-  } else {
-    name = candidate.name.empty() ? i18n::message("library.find_bms.horie_archive.label")
-                                  : i18n::Text(candidate.name);
-  }
-  return i18n::message("library.find_bms.candidate.download",
-      {{"number", std::to_string(index + 1)}, {"name", name}});
-}
-
-class FindBmsCandidateItemView : public View {
-public:
-  FindBmsCandidateItemView() : View() {
-    setFlexDirection(FlexDirection::Column);
-    setJustifyContent(YGJustifyCenter);
-    setPadding(Edge::Left, 14);
-    setPadding(Edge::Right, 14);
-    setCornerRadius(app_theme::controlRadius());
-    setBorderWidth(1);
-
-    label = new TextView(app_theme::font, 16);
-    label->setWrap(true);
-    label->setOverflow(TextView::TextOverflow::Hidden);
-    label->setVAlign(TextView::MIDDLE);
-    label->setFlex(1);
-    addView(label);
-    onUnselected();
-  }
-
-  void setCandidate(const BmsSearchCandidate &candidate, size_t index,
-                    bool selected) {
-    if (label != nullptr) {
-      label->setLocalizedText(findBmsCandidateLabel(candidate, index));
-    }
-    if (selected) {
-      onSelected();
-    } else {
-      onUnselected();
-    }
-  }
-
-  void onSelected() override {
-    setThemedBackgroundColor(app_theme::infoActionHover);
-    setThemedBorderColor(
-        [] { return app_theme::withAlpha(app_theme::infoActionPressed(), 210); });
-    if (label != nullptr) {
-      label->setThemedColor(
-          [] { return app_theme::textOn(app_theme::infoActionHover()); });
-    }
-  }
-
-  void onUnselected() override {
-    setThemedBackgroundColor(app_theme::control);
-    setThemedBorderColor(app_theme::hairlineStrong);
-    if (label != nullptr) {
-      label->setThemedColor(app_theme::textPrimary);
-    }
-  }
-
-private:
-  TextView *label = nullptr;
-};
 
 bool messageStartsWith(const std::string &message, const std::string &prefix) {
   return message.rfind(prefix, 0) == 0;
@@ -184,12 +112,6 @@ double findBmsProgressFractionFor(const BmsSearchDownloadProgress &progress,
   }
   if (messageStartsWith(message, "Preparing ") &&
       message.find(" package download") != std::string::npos) {
-    return std::max(previous, 0.09);
-  }
-  if (message == "Searching Horie archive") {
-    return std::max(previous, 0.08);
-  }
-  if (message == "Preparing Horie archive download") {
     return std::max(previous, 0.09);
   }
   if (message == "Downloading archive") {
@@ -271,9 +193,6 @@ FindBmsModal::~FindBmsModal() {
                        findBmsGoogleButton, findBmsRefreshButton}) {
     if (button != nullptr) button->setOnClickListener(nullptr);
   }
-  if (findBmsCandidateRecyclerView != nullptr) {
-    findBmsCandidateRecyclerView->onSelected = nullptr;
-  }
 }
 
 bool FindBmsModal::inProgress() const { return findBmsTask.running() || queuedDownloadRunning_; }
@@ -295,7 +214,6 @@ void FindBmsModal::resize(int width, int height) {
   const float panelHeight = std::max(0.0f, std::min(560.0f, float(height - safe.top - safe.bottom - 24)));
   const float contentWidth = std::max(0.0f, panelWidth - 46);
   findBmsModalRoot->findViewByName("findBmsPanel")->setWidth(panelWidth)->setHeight(panelHeight);
-  findBmsCandidateRecyclerView->setWidth(contentWidth)->setMinHeight(0);
   findBmsDetailText->setMinHeight(0);
   findBmsProgressTrack->setWidth(contentWidth);
   auto *footer = findBmsModalRoot->findViewByName("findBmsFooter");
@@ -404,37 +322,6 @@ void FindBmsModal::build(View *parent) {
   findBmsDetailText->setFlex(1);
   panel->addView(findBmsDetailText);
 
-  findBmsCandidateRecyclerView = new RecyclerView<BmsSearchCandidate>(
-      [](const BmsSearchCandidate &a, const BmsSearchCandidate &b) {
-        return a.source == b.source && a.id == b.id && a.name == b.name;
-      });
-  findBmsCandidateRecyclerView->itemHeight = 52;
-  findBmsCandidateRecyclerView->reserveScrollbarGutter = true;
-  findBmsCandidateRecyclerView->setWidth(kModalContentWidth);
-  findBmsCandidateRecyclerView->setHeight(0);
-  findBmsCandidateRecyclerView->setThemedBackgroundColor(
-      app_theme::insetSurface);
-  findBmsCandidateRecyclerView->setCornerRadius(app_theme::controlRadius());
-  findBmsCandidateRecyclerView->setThemedBorderColor(app_theme::hairline);
-  findBmsCandidateRecyclerView->setBorderWidth(1);
-  findBmsCandidateRecyclerView->setVisible(false);
-  findBmsCandidateRecyclerView->onCreateView = [](const BmsSearchCandidate &) {
-    return new FindBmsCandidateItemView();
-  };
-  findBmsCandidateRecyclerView->onBind = [](View *view,
-                                            const BmsSearchCandidate &candidate,
-                                            int idx, bool isSelected) {
-    auto *itemView = dynamic_cast<FindBmsCandidateItemView *>(view);
-    if (itemView != nullptr) {
-      itemView->setCandidate(candidate, static_cast<size_t>(idx), isSelected);
-    }
-  };
-  findBmsCandidateRecyclerView->onSelected = [this](const BmsSearchCandidate &,
-                                                    int idx) {
-    startCandidateDownload(static_cast<size_t>(idx));
-  };
-  panel->addView(findBmsCandidateRecyclerView);
-
   findBmsProgressTrack = new View();
   findBmsProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
@@ -489,7 +376,7 @@ void FindBmsModal::build(View *parent) {
       try { callbacks_.retryDownload(findBmsResult.queuedDownloadId); } catch (...) {}
       updateQueuedDownload(true);
     } else findBmsTask.retryDownload();
-    refresh(false);
+    refresh();
   });
   findBmsKeepFilesButton->setOnClickListener([this]() {
     startPendingArtifactResolution(
@@ -611,43 +498,6 @@ void FindBmsModal::startLookup() {
   refresh();
 }
 
-void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
-  if (callbacks_.admit && !callbacks_.admit()) return;
-  if (inProgress() ||
-      candidateIndex >= findBmsResult.candidates.size()) {
-    return;
-  }
-  const BmsSearchCandidate candidate = findBmsResult.candidates[candidateIndex];
-  const ChartMetaRecord record = findBmsModalChart;
-  const std::filesystem::path downloadRoot =
-      callbacks_.downloadRoot ? callbacks_.downloadRoot() : std::filesystem::path{};
-  BmsSearchDownloadOptions downloadOptions =
-      callbacks_.downloadOptions ? callbacks_.downloadOptions()
-                                 : BmsSearchDownloadOptions{};
-  findBmsCapturedOptions = downloadOptions;
-  findBmsStorageProgress.reset();
-  downloadOptions.requestRetry = findBmsTask.retryCallback();
-  findBmsResult = {};
-  findBmsResult.candidates = {candidate};
-  findBmsPendingDecision.reset();
-  findBmsProgressMessage = "Preparing Horie archive download";
-  findBmsProgressCurrent = 0;
-  findBmsProgressTotal = 0;
-  findBmsProgressFraction = 0.09;
-  findBmsProgressLog.clear();
-  findBmsProgressLog.push_back(i18n::tr("library.find_bms.preparing_horie_archive_download.label"));
-  if (callbacks_.downloadStarted) callbacks_.downloadStarted();
-  findBmsTask.start([candidate, record, downloadRoot, downloadOptions](
-                        std::atomic_bool &cancelled,
-                        BmsSearchDownloadProgressCallback progress) {
-    BmsSearchService service;
-    return service.downloadCandidate(
-        candidate, record.meta.SHA256, record.meta.MD5, downloadRoot,
-        cancelled, std::move(progress), downloadOptions);
-  });
-  refresh();
-}
-
 void FindBmsModal::startPendingArtifactResolution(
     BmsSearchPendingArtifactDecision decision) {
   if (callbacks_.admit && !callbacks_.admit()) return;
@@ -693,7 +543,7 @@ void FindBmsModal::hide() {
   findBmsModalRoot->setVisible(false);
 }
 
-void FindBmsModal::refresh(bool refreshCandidates) {
+void FindBmsModal::refresh() {
   if (findBmsModalRoot == nullptr) {
     return;
   }
@@ -736,9 +586,6 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     case BmsSearchResult::Status::NotFound:
       statusText = i18n::message("library.find_bms.not_found.label");
       break;
-    case BmsSearchResult::Status::AmbiguousCandidates:
-      statusText = i18n::message("library.find_bms.choose_match.label");
-      break;
     case BmsSearchResult::Status::HashMismatch:
       statusText = findBmsResult.pendingArtifact ? i18n::message("library.find_bms.chart_mismatch.label")
                                                  : i18n::message("library.find_bms.decision_complete.label");
@@ -759,12 +606,6 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     findBmsStatusText->setColor(
         app_theme::sdl(failed ? app_theme::coral() : app_theme::textPrimary()));
   }
-
-  const bool showCandidateList =
-      !findBmsAwaitingConfirmation && !running &&
-      policy.showNormalResultActions &&
-      findBmsResult.status == BmsSearchResult::Status::AmbiguousCandidates &&
-      !findBmsResult.candidates.empty();
 
   i18n::Text detail;
   if (findBmsAwaitingConfirmation) {
@@ -792,9 +633,6 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NotFound) {
     detail = i18n::message("library.find_bms.try_searching_by_title.message");
-  } else if (!running && findBmsResult.status ==
-                             BmsSearchResult::Status::AmbiguousCandidates) {
-    detail = i18n::message("library.find_bms.choose_archive_below.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::HashMismatch) {
     detail = findBmsResult.message.empty()
@@ -824,7 +662,7 @@ void FindBmsModal::refresh(bool refreshCandidates) {
         {{"title", findBmsModalChart.meta.Title}, {"detail", detail}});
   }
 #if TARGET_OS_IPHONE
-  if (findBmsAwaitingConfirmation || showCandidateList)
+  if (findBmsAwaitingConfirmation)
     detail = i18n::message("library.find_bms.storage.detail", {{"detail", detail},
         {"storage", i18n::message("downloads.ui.ios_notice")}});
 #endif
@@ -833,22 +671,6 @@ void FindBmsModal::refresh(bool refreshCandidates) {
         {"storage", i18n::message("library.find_bms.background.message")}});
   if (findBmsDetailText != nullptr) {
     findBmsDetailText->setLocalizedText(detail);
-  }
-
-  if (refreshCandidates && findBmsCandidateRecyclerView != nullptr) {
-    findBmsCandidateRecyclerView->setVisible(showCandidateList);
-    const int visibleRows =
-        showCandidateList
-            ? std::min<int>(static_cast<int>(findBmsResult.candidates.size()),
-                            3)
-            : 0;
-    findBmsCandidateRecyclerView->setHeight(static_cast<float>(
-        visibleRows * findBmsCandidateRecyclerView->itemHeight));
-    if (showCandidateList) {
-      findBmsCandidateRecyclerView->setItems(findBmsResult.candidates);
-    } else {
-      findBmsCandidateRecyclerView->clear();
-    }
   }
 
   if (findBmsProgressTrack != nullptr) {

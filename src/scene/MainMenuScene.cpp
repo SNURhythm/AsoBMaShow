@@ -1215,7 +1215,7 @@ void MainMenuScene::onLanguageChanged() {
   refreshTasksButton();
   refreshTasksModal(true);
   refreshMusicModal();
-  refreshFindBmsModal(false);
+  refreshFindBmsModal();
   if (rootLayout != nullptr) rootLayout->applyYogaLayout();
 }
 
@@ -7372,8 +7372,8 @@ void MainMenuScene::hideFindBmsModal() {
   if (findBmsModal_ != nullptr) findBmsModal_->hide();
 }
 
-void MainMenuScene::refreshFindBmsModal(bool refreshCandidates) {
-  if (findBmsModal_ != nullptr) findBmsModal_->refresh(refreshCandidates);
+void MainMenuScene::refreshFindBmsModal() {
+  if (findBmsModal_ != nullptr) findBmsModal_->refresh();
 }
 
 void MainMenuScene::applyFindBmsUpdates() {

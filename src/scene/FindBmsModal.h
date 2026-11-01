@@ -12,7 +12,6 @@
 class Button;
 class TextView;
 class View;
-template <typename T> class RecyclerView;
 
 std::filesystem::path findBmsDownloadRoot(ChartRepository::Session *session);
 
@@ -42,7 +41,7 @@ public:
   void show(const ChartMetaRecord &record, bool requireConfirmation = false);
   void update();
   void resize(int width, int height);
-  void refresh(bool refreshCandidates = true);
+  void refresh();
   void cancelAndWait();
   bool inProgress() const;
   bool isVisible() const;
@@ -55,7 +54,6 @@ private:
   void build(View *parent);
   bool updateQueuedDownload(bool force = false);
   void startLookup();
-  void startCandidateDownload(size_t candidateIndex);
   void startPendingArtifactResolution(BmsSearchPendingArtifactDecision decision);
   void cancelOrClose();
   void openResultUrl(const std::string &url);
@@ -77,7 +75,6 @@ private:
   Button *findBmsOpenButton = nullptr;
   Button *findBmsGoogleButton = nullptr;
   Button *findBmsRefreshButton = nullptr;
-  RecyclerView<BmsSearchCandidate> *findBmsCandidateRecyclerView = nullptr;
   TextView *findBmsCloseButtonText = nullptr;
   TextView *findBmsBackgroundButtonText = nullptr;
   TextView *findBmsConfirmButtonText = nullptr;

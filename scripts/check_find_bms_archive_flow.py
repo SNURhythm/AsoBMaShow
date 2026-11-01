@@ -16,7 +16,6 @@ main_menu_path = root / "src/scene/MainMenuScene.cpp"
 modal_path = root / "src/scene/FindBmsModal.cpp"
 music_select_path = root / "src/scene/MusicSelectScene.cpp"
 download_support_path = root / "src/bms_search/DownloadSupport.cpp"
-horie_path = root / "src/bms_search/HorieYuukaDriver.cpp"
 package_sources_path = root / "src/bms_search/PackageSourceDrivers.cpp"
 library_operations_path = root / "src/library/ChartLibraryOperations.cpp"
 library_task_types_path = root / "src/library/ChartLibraryTaskTypes.h"
@@ -28,7 +27,6 @@ for path in (
     modal_path,
     music_select_path,
     download_support_path,
-    horie_path,
     package_sources_path,
     library_operations_path,
     library_task_types_path,
@@ -43,7 +41,6 @@ main_menu_source = main_menu_path.read_text(encoding="utf-8")
 modal_source = modal_path.read_text(encoding="utf-8")
 music_select_source = music_select_path.read_text(encoding="utf-8")
 download_support_source = download_support_path.read_text(encoding="utf-8")
-horie_source = horie_path.read_text(encoding="utf-8")
 package_sources_source = package_sources_path.read_text(encoding="utf-8")
 library_operations_source = library_operations_path.read_text(encoding="utf-8")
 library_task_types_source = library_task_types_path.read_text(encoding="utf-8")
@@ -64,11 +61,10 @@ require(
     "Settings must toggle the persisted Find BMS option",
 )
 require(
-    all("callbacks_.downloadOptions()" in modal_source.split(signature, 1)[1].split("\nvoid FindBmsModal::", 1)[0]
-        for signature in ("void FindBmsModal::startLookup()", "void FindBmsModal::startCandidateDownload("))
+    "callbacks_.downloadOptions()" in modal_source.split("void FindBmsModal::startLookup()", 1)[1].split("\nvoid FindBmsModal::", 1)[0]
     and "findBmsSkipUnarchivingForNonSolidArchives" in main_menu_source
     and "findBmsSkipUnarchivingForNonSolidArchives" in music_select_source,
-    "automatic and candidate downloads must capture the option",
+    "automatic downloads must capture the option",
 )
 require(
     "startPendingArtifactResolution(" in modal_source
@@ -126,10 +122,10 @@ require(
     "Find BMS must resolve the repository-selected download folder",
 )
 require(
-    modal_source.count("callbacks_.downloadRoot()") == 2
+    modal_source.count("callbacks_.downloadRoot()") == 1
     and "return findBmsDownloadRoot(" in main_menu_source
     and "return findBmsDownloadRoot(" in music_select_source,
-    "automatic and candidate downloads must share destination resolution",
+    "automatic downloads must share destination resolution",
 )
 require(
     "IndexDownloadedPath" in main_menu_source
@@ -200,8 +196,8 @@ require(
     main_menu_source.count(
         "findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration"
     ) == 1
-    and modal_source.count("callbacks_.downloadStarted();") == 2,
-    "automatic and candidate downloads must capture chart selection generation",
+    and modal_source.count("callbacks_.downloadStarted();") == 1,
+    "automatic downloads must capture chart selection generation",
 )
 require(
     "request.downloadedTargetIdentity" in library_operations_source
@@ -270,10 +266,6 @@ require(
     "startLibraryRefresh(findBmsDownloadRoot)" not in main_menu_source
     and "additionalFolderToScan" not in main_menu_source,
     "Find BMS indexing must not route through a full-library refresh",
-)
-require(
-    "candidate.name, candidate.id" in horie_source,
-    "Horie downloads must use the stable provider file ID for storage",
 )
 require(
     "const std::string &storageIdentity" in download_support_source

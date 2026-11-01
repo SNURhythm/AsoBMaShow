@@ -639,7 +639,7 @@ private:
   void buildFindBmsModal();
   void showFindBmsModal(const ChartMetaRecord &record);
   void hideFindBmsModal();
-  void refreshFindBmsModal(bool refreshCandidates = true);
+  void refreshFindBmsModal();
   void applyFindBmsUpdates();
   std::filesystem::path preferredBmsDownloadRoot();
   void reselectCurrentChart();

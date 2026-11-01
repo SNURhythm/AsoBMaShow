@@ -65,8 +65,6 @@ i18n::Text findBmsProgressDisplayMessage(const std::string &message,
     return i18n::message("library.find_bms.progress.download_complete_percentage",
                         {{"progress", progressPercentText(ratio)}});
   }
-  if (message == "Searching Horie archive") return i18n::message("library.find_bms.progress.searching_horie");
-  if (message == "Preparing Horie archive download") return i18n::message("library.find_bms.progress.preparing_horie");
   if (message == "Confirming Google Drive download") return i18n::message("library.find_bms.progress.confirming_drive");
   if (message == "Inspecting downloaded archive") return i18n::message("library.find_bms.progress.inspecting_archive");
   if (message == "Validating archive contents") return i18n::message("library.find_bms.progress.validating_archive");

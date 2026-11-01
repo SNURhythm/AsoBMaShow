@@ -12,7 +12,6 @@ def main():
     args = parser.parse_args()
     source = (args.root / "src/scene/FindBmsModal.cpp").read_text()
     signatures = [
-        "i18n::Text findBmsCandidateLabel(",
         "std::string findBmsTitleSearchQuery(",
         "bool messageStartsWith(",
         "double progressRatio(",
@@ -24,7 +23,6 @@ def main():
         "void FindBmsModal::show(",
         "void FindBmsModal::startLookup()",
         "void FindBmsModal::cancelAndWait()",
-        "void FindBmsModal::startCandidateDownload(",
         "void FindBmsModal::startPendingArtifactResolution(",
         "void FindBmsModal::hide()",
         "void FindBmsModal::update()",
@@ -36,7 +34,6 @@ def main():
     names = {
         "FindBmsModal::": "MainMenuScene::",
         "show(": "showFindBmsModal(",
-        "startCandidateDownload(": "startFindBmsCandidateDownload(",
         "startPendingArtifactResolution(": "startFindBmsPendingArtifactResolution(",
         "hide()": "hideFindBmsModal()",
         "update()": "applyFindBmsUpdates()",

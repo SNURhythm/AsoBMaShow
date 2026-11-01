@@ -11,7 +11,6 @@ target_sources(main PRIVATE
     DownloadSupport.cpp
     DropboxDriver.cpp
     GoogleDriveDriver.cpp
-    HorieYuukaDriver.cpp
     IpfsDriver.cpp
     PackageDownloadCandidate.cpp
     PackageSourceDrivers.cpp

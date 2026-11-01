@@ -56,20 +56,6 @@ struct BmsSearchPendingArtifact {
 
 enum class BmsSearchPendingArtifactDecision { Keep, Delete };
 
-struct BmsSearchCandidate {
-  enum class Source {
-    Horie,
-  };
-
-  Source source = Source::Horie;
-  std::string id;
-  std::string name;
-  std::string title;
-  std::string artist;
-  std::string query;
-  std::string sourceUrl;
-};
-
 struct BmsSearchResult {
   enum class Status {
     NotFound,
@@ -77,7 +63,6 @@ struct BmsSearchResult {
     UnsupportedLink,
     Downloaded,
     HashMismatch,
-    AmbiguousCandidates,
     DownloadFailed,
   };
 
@@ -90,7 +75,6 @@ struct BmsSearchResult {
   std::filesystem::path outputPath;
   std::filesystem::path debugPath;
   std::vector<std::filesystem::path> removedPaths;
-  std::vector<BmsSearchCandidate> candidates;
   std::optional<BmsSearchPendingArtifact> pendingArtifact;
   // App-owned presentation retains its identity; transport diagnostics stay raw.
   i18n::Text presentationMessage;
@@ -110,13 +94,6 @@ public:
       const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
       BmsSearchDownloadProgressCallback progressCallback = nullptr,
       const std::string &title = "", const std::string &artist = "",
-      BmsSearchDownloadOptions options = {}) const;
-
-  BmsSearchResult downloadCandidate(
-      const BmsSearchCandidate &candidate, const std::string &sha256,
-      const std::string &md5, const std::filesystem::path &libraryRoot,
-      std::atomic_bool &cancelled,
-      BmsSearchDownloadProgressCallback progressCallback = nullptr,
       BmsSearchDownloadOptions options = {}) const;
 
   BmsSearchResult resolvePendingArtifact(
