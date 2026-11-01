@@ -22,6 +22,8 @@ public final class BmsBrowserActivity extends Activity {
     private EditText address;
     private Button importTable;
     private File lastPage;
+    private String tableUrl = "", tablePageUrl;
+    private long tableProbe;
 
     private static boolean http(String url) {
         if (url == null || url.length() > 16384) return false;
@@ -83,10 +85,12 @@ public final class BmsBrowserActivity extends Activity {
     private void attach(WebView web) {
         if (page() != null) { layout.removeView(page()); page().onPause(); }
         pages.add(web);
+        clearTable();
         layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
     }
     private void load(String url) {
         if (!http(url)) { Toast.makeText(this, "Use an HTTP or HTTPS page.", Toast.LENGTH_SHORT).show(); return; }
+        clearTable();
         page().loadUrl(url);
     }
     private WebView newPage() {
@@ -99,6 +103,7 @@ public final class BmsBrowserActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
         // Record the method from WebView's actual request, not from its filename.
         final BmsBrowserRequestPolicy requests = new BmsBrowserRequestPolicy();
+        final boolean[] loading = {false};
         web.setWebViewClient(new WebViewClient() {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 if (request.isForMainFrame()) requests.started(request.getMethod());
@@ -109,12 +114,21 @@ public final class BmsBrowserActivity extends Activity {
                 if (request.isForMainFrame()) unsupported(view.getUrl());
                 return true;
             }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                loading[0] = true;
+                if (view == page()) clearTable();
+            }
             @Override public void doUpdateVisitedHistory(WebView view, String url, boolean reload) {
-                onPageFinished(view, url);
+                updatePage(view, url, !loading[0]);
             }
             @Override public void onPageFinished(WebView view, String url) {
-                if (view != page()) return;
-                address.setText(url); importTable.setEnabled(nativeCanImportTable(url));
+                if (!Objects.equals(url, view.getUrl())) return;
+                loading[0] = false;
+                updatePage(view, url, true);
+            }
+            private void updatePage(WebView view, String url, boolean inspectDocument) {
+                if (view != page() || !Objects.equals(url, view.getUrl())) return;
+                address.setText(url); refreshTable(view, inspectDocument);
                 if (http(url)) {
                     try {
                         android.util.AtomicFile file = new android.util.AtomicFile(lastPage);
@@ -159,11 +173,33 @@ public final class BmsBrowserActivity extends Activity {
         try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
         catch (ActivityNotFoundException error) { Toast.makeText(this, "No browser is available.", Toast.LENGTH_LONG).show(); }
     }
+    private void clearTable() {
+        ++tableProbe; tableUrl = ""; tablePageUrl = null; importTable.setEnabled(false);
+    }
+    private void refreshTable(WebView web, boolean inspectDocument) {
+        clearTable();
+        String url = web.getUrl();
+        if (!http(url)) return;
+        tablePageUrl = url;
+        tableUrl = nativeTableUrl(url, "");
+        importTable.setEnabled(!tableUrl.isEmpty());
+        if (!inspectDocument) return;
+        long probe = tableProbe;
+        web.evaluateJavascript(nativeTableDetectionScript(), result -> {
+            if (probe != tableProbe || web != page() || !Objects.equals(url, web.getUrl())) return;
+            try {
+                JSONObject detected = new JSONObject(result);
+                if (!url.equals(detected.optString("pageUrl"))) return;
+                tableUrl = nativeTableUrl(url, detected.optString("tableUrl", ""));
+                importTable.setEnabled(!tableUrl.isEmpty());
+            } catch (JSONException ignored) {}
+        });
+    }
     private void importCurrentTable() {
-        String url = page().getUrl();
-        if (!nativeCanImportTable(url)) return;
+        String url = tableUrl;
+        if (url.isEmpty() || !Objects.equals(tablePageUrl, page().getUrl())) return;
         new AlertDialog.Builder(this).setTitle("Import this table?")
-                .setMessage("Adds or updates the selected GingerRush difficulty table. Its charts will not be downloaded.")
+                .setMessage("Adds or updates the selected difficulty table. Its charts will not be downloaded.")
                 .setNegativeButton("Cancel", null).setPositiveButton("Import table", (dialog, which) -> {
                     if (nativeImportTable(url)) finish();
                 }).show();
@@ -172,7 +208,7 @@ public final class BmsBrowserActivity extends Activity {
         if (pages.size() < 2) return false;
         WebView child = pages.removeLast(); layout.removeView(child); child.destroy();
         layout.addView(page(), new LinearLayout.LayoutParams(-1, 0, 1)); page().onResume();
-        address.setText(page().getUrl()); importTable.setEnabled(nativeCanImportTable(page().getUrl()));
+        address.setText(page().getUrl()); refreshTable(page(), page().getProgress() == 100);
         return true;
     }
     private void back() { if (page().canGoBack()) page().goBack(); else if (!closePopup()) finish(); }
@@ -184,10 +220,12 @@ public final class BmsBrowserActivity extends Activity {
         nativeForeground(false); if (page() != null) page().onPause(); super.onPause();
     }
     @Override protected void onDestroy() {
+        clearTable();
         for (WebView web : pages) { layout.removeView(web); web.destroy(); }
         pages.clear(); super.onDestroy();
     }
-    private static native boolean nativeCanImportTable(String url);
+    private static native String nativeTableUrl(String url, String detected);
+    private static native String nativeTableDetectionScript();
     private static native boolean nativeImportTable(String url);
     private static native String nativeDownload(String url, String filename, String agent, String cookie, String referrer);
     private static native void nativeForeground(boolean foreground);

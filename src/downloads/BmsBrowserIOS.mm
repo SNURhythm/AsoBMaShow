@@ -35,6 +35,9 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
 @property(nonatomic, strong) WKWebView *web;
 @property(nonatomic, strong) UITextField *address;
 @property(nonatomic, strong) UIBarButtonItem *importItem;
+@property(nonatomic, copy) NSString *tableUrl;
+@property(nonatomic, copy) NSString *tablePageUrl;
+@property(nonatomic) NSUInteger tableProbe;
 @property(nonatomic, copy) NSString *method;
 @property(nonatomic, copy) NSString *referrer;
 - (void)load:(NSString *)url;
@@ -97,7 +100,7 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   if (object != self.web || ![keyPath isEqualToString:@"URL"]) { [super observeValueForKeyPath:keyPath ofObject:object change:change context:context]; return; }
   NSURL *url = self.web.URL;
   self.address.text = url.absoluteString;
-  self.importItem.enabled = url && downloads::gingerTableUrl(url.absoluteString.UTF8String).has_value();
+  [self refreshTable:!self.web.loading];
   if (http(url)) {
     try {
       const std::string value = url.absoluteString.UTF8String;
@@ -107,9 +110,37 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
     } catch (...) {}
   }
 }
+- (void)clearTable {
+  ++self.tableProbe;
+  self.tableUrl = nil; self.tablePageUrl = nil; self.importItem.enabled = NO;
+}
+- (void)refreshTable:(BOOL)inspectDocument {
+  [self clearTable];
+  NSString *pageUrl = self.web.URL.absoluteString;
+  if (!http(self.web.URL)) return;
+  self.tablePageUrl = pageUrl;
+  if (const auto known = downloads::browserTableUrl(pageUrl.UTF8String)) {
+    self.tableUrl = text(*known); self.importItem.enabled = YES;
+  }
+  if (!inspectDocument) return;
+  const NSUInteger probe = self.tableProbe;
+  __weak AsoBmsBrowser *weakSelf = self;
+  [self.web evaluateJavaScript:text(downloads::browserTableDetectionScript()) completionHandler:^(id result, NSError *error) {
+    AsoBmsBrowser *browser = weakSelf;
+    if (!browser || error || probe != browser.tableProbe ||
+        ![pageUrl isEqualToString:browser.web.URL.absoluteString] || ![result isKindOfClass:NSDictionary.class]) return;
+    if (![result[@"pageUrl"] isKindOfClass:NSString.class] || ![result[@"pageUrl"] isEqualToString:pageUrl] ||
+        ![result[@"tableUrl"] isKindOfClass:NSString.class]) return;
+    const auto table = downloads::browserTableUrl(pageUrl.UTF8String, [result[@"tableUrl"] UTF8String]);
+    browser.tableUrl = table ? text(*table) : nil;
+    browser.importItem.enabled = table.has_value();
+  }];
+}
+- (void)webView:(WKWebView *)web didStartProvisionalNavigation:(WKNavigation *)navigation { [self clearTable]; }
+- (void)webView:(WKWebView *)web didFinishNavigation:(WKNavigation *)navigation { [self refreshTable:YES]; }
 - (void)load:(NSString *)value {
   NSURL *url = [NSURL URLWithString:value];
-  if (http(url)) [self.web loadRequest:[NSURLRequest requestWithURL:url]];
+  if (http(url)) { [self clearTable]; [self.web loadRequest:[NSURLRequest requestWithURL:url]]; }
 }
 - (BOOL)textFieldShouldReturn:(UITextField *)field {
   NSString *value = field.text;
@@ -134,10 +165,10 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   [self presentViewController:menu animated:YES completion:nil];
 }
 - (void)importTable {
-  NSString *url = self.web.URL.absoluteString;
-  if (!url || !downloads::gingerTableUrl(url.UTF8String)) return;
+  NSString *url = self.tableUrl;
+  if (!url || ![self.tablePageUrl isEqualToString:self.web.URL.absoluteString]) return;
   UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Import this table?"
-      message:@"Adds or updates the selected GingerRush table. Its charts will not be downloaded." preferredStyle:UIAlertControllerStyleAlert];
+      message:@"Adds or updates the selected difficulty table. Its charts will not be downloaded." preferredStyle:UIAlertControllerStyleAlert];
   [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
   [alert addAction:[UIAlertAction actionWithTitle:@"Import table" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) {
     if (downloads::requestBrowserTableImport(url.UTF8String)) [self close];

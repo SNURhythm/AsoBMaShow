@@ -32,9 +32,14 @@ void openBrowser() {
   env->DeleteLocalRef(cls); env->DeleteLocalRef(activity);
 }
 }
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_snurhythm_asobmashow_BmsBrowserActivity_nativeCanImportTable(JNIEnv *env, jclass, jstring url) {
-  return downloads::gingerTableUrl(utf8(env, url)).has_value();
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_snurhythm_asobmashow_BmsBrowserActivity_nativeTableUrl(JNIEnv *env, jclass, jstring url, jstring detected) {
+  const auto table = downloads::browserTableUrl(utf8(env, url), utf8(env, detected));
+  return env->NewStringUTF(table ? table->c_str() : "");
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_snurhythm_asobmashow_BmsBrowserActivity_nativeTableDetectionScript(JNIEnv *env, jclass) {
+  return env->NewStringUTF(downloads::browserTableDetectionScript());
 }
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_snurhythm_asobmashow_BmsBrowserActivity_nativeImportTable(JNIEnv *env, jclass, jstring url) {

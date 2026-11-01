@@ -32,3 +32,9 @@ add_executable(download_publication_tests
 target_include_directories(download_publication_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(download_publication_tests PRIVATE cxx_std_23)
 asobmashow_register_test(download_publication_tests)
+
+find_program(ASOBMASHOW_NODE_EXECUTABLE NAMES node nodejs)
+if(ASOBMASHOW_NODE_EXECUTABLE)
+    add_test(NAME browser_table_detection_tests
+        COMMAND ${ASOBMASHOW_NODE_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/browser_table_detection_tests.js)
+endif()

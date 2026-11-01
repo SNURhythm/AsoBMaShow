@@ -13,6 +13,7 @@ std::optional<Request> makeBrowserRequest(const Request &defaults, const std::st
 std::string acceptBrowserDownload(const std::string &method, const std::string &url,
     const std::string &filename, const std::string &userAgent, const std::string &cookie,
     const std::string &referrer);
+// Accepts a detected HTTP(S) table URL; the importer validates its contents.
 bool requestBrowserTableImport(const std::string &pageUrl);
 std::optional<std::string> takeBrowserTableImport();
 } // namespace downloads

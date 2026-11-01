@@ -12,7 +12,10 @@ chart folder.
 On iOS and Android, **Browse BMS** opens an embedded browser with GingerRush and
 Manbow bookmarks, navigation, an address field, and an external-browser action.
 The standard selector has sidebar entries; the skin selector exposes them in its
-More menu. A recognized GingerRush table page offers **Import table**, using the
+More menu. **Import table** is enabled for the active page when it declares a
+`bmstable` header link or displays difficulty-table header JSON (`name`, `symbol`,
+and `data_url`). GingerRush table URLs also retain their direct recognition.
+Navigation and popup changes clear the previous page's detection. Import uses the
 existing table importer and duplicate handling. Importing a table does not fetch
 its chart packages. Event tables may have an empty symbol.
 

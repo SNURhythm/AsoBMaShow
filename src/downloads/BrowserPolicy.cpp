@@ -86,6 +86,41 @@ std::optional<std::string> gingerTableUrl(std::string_view pageUrl) {
       std::any_of(id.begin(), id.end(), [](char c) { return c < '0' || c > '9'; })) return {};
   return "https://gingerrush.com/api/v1/table/meta/header/" + std::string(id) + ".json";
 }
+std::optional<std::string> browserTableUrl(std::string_view pageUrl, std::string_view detectedUrl) {
+  if (!httpOrigin(pageUrl)) return {};
+  if (auto ginger = gingerTableUrl(pageUrl)) return ginger;
+  if (!httpOrigin(detectedUrl)) return {};
+  return std::string(detectedUrl);
+}
+const char *browserTableDetectionScript() {
+  // Read only the top-level document; no fetches, page callbacks or native bridge.
+  return R"bmstable((function() {
+    const result = {pageUrl: location.href, tableUrl: ''};
+    function httpUrl(value) {
+      if (typeof value !== 'string' || !value.trim()) return '';
+      try {
+        const url = new URL(value.trim(), document.baseURI);
+        return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password
+          ? url.href : '';
+      } catch (_) { return ''; }
+    }
+    for (const meta of document.querySelectorAll('meta[name][content]')) {
+      if ((meta.getAttribute('name') || '').trim().toLowerCase() !== 'bmstable') continue;
+      result.tableUrl = httpUrl(meta.getAttribute('content'));
+      if (result.tableUrl) return result;
+    }
+    const body = document.body ? document.body.textContent : '';
+    if (body && body.length <= 8 * 1024 * 1024) {
+      try {
+        const header = JSON.parse(body);
+        if (header && !Array.isArray(header) && typeof header.name === 'string' &&
+            typeof header.symbol === 'string' && httpUrl(header.data_url))
+          result.tableUrl = httpUrl(location.href);
+      } catch (_) {}
+    }
+    return result;
+  })())bmstable";
+}
 std::string safeArchiveName(std::string_view suggested) {
   const auto slash = suggested.find_last_of("/\\");
   if (slash != suggested.npos) suggested.remove_prefix(slash + 1);

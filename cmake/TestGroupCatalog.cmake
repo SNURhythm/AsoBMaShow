@@ -332,6 +332,7 @@ asobmashow_label_tests(area_archives
 
 asobmashow_label_tests(area_downloads
     download_jobs_tests
+    browser_table_detection_tests
     download_coordinator_tests
     download_publication_tests
     android_background_download_tests

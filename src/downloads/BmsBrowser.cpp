@@ -32,7 +32,7 @@ std::string acceptBrowserDownload(const std::string &method, const std::string &
   } catch (...) { return "Could not save this download. Check free storage and try again."; }
 }
 bool requestBrowserTableImport(const std::string &pageUrl) {
-  const auto url = gingerTableUrl(pageUrl);
+  const auto url = browserTableUrl(pageUrl, pageUrl);
   if (!url) return false;
   std::lock_guard lock(browserMutex);
   if (tables.size() >= 32) return false;

@@ -133,6 +133,17 @@ int main() {
            "https://gingerrush.com/api/v1/table/meta/header/42.json");
     assert(!gingerTableUrl("https://gingerrush.com.evil/api/v1/table/meta/header/123.json"));
     assert(!gingerTableUrl("https://manbow.nothing.sh/event/event.cgi?event=123"));
+    assert(browserTableUrl("https://tables.example/insane/", "https://tables.example/insane/header.json") ==
+           "https://tables.example/insane/header.json");
+    assert(browserTableUrl("http://tables.example/header.json", "http://tables.example/header.json") ==
+           "http://tables.example/header.json");
+    assert(browserTableUrl("https://gingerrush.com/#/download/table/42") ==
+           "https://gingerrush.com/api/v1/table/meta/header/42.json");
+    assert(!browserTableUrl("https://tables.example/ordinary-page"));
+    assert(!browserTableUrl("https://tables.example/header.json")); // Filename alone is not evidence.
+    assert(!browserTableUrl("https://tables.example/", "javascript:alert(1)"));
+    assert(!browserTableUrl("https://tables.example/", "https://user:secret@tables.example/header.json"));
+    assert(!browserTableUrl("file:///tmp/table.html", "https://tables.example/header.json"));
   }
   {
     std::ofstream(root / "jobs.json", std::ios::trunc) << "{broken";
