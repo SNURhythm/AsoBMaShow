@@ -890,8 +890,9 @@ int main() {
 #include <cstdint>
 #include <functional>
 #include <vector>
-constexpr int SDL_EVENT_MOUSE_MOTION=1, SDL_EVENT_FINGER_MOTION=2, SDL_EVENT_WINDOW_FIRST=4, SDL_EVENT_WINDOW_LAST=5,
-              SDL_EVENT_WINDOW_RESIZED=4, SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED=5, SDL_EVENT_KEY_DOWN=6;
+constexpr int SDL_EVENT_MOUSE_MOTION=1, SDL_EVENT_FINGER_MOTION=2, SDL_EVENT_WINDOW_FIRST=4, SDL_EVENT_WINDOW_LAST=6,
+              SDL_EVENT_WINDOW_RESIZED=4, SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED=5,
+              SDL_EVENT_WINDOW_METAL_VIEW_RESIZED=6, SDL_EVENT_KEY_DOWN=7;
 struct SDL_Event {
   int type=0;
   struct { int data1=0, data2=0; } window;
@@ -904,6 +905,8 @@ struct Registry {
 struct Context { Registry inputDeviceRegistry; };
 int main() {
   using namespace player_settings;
+  for (const int resizeType : {SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED,
+                               SDL_EVENT_WINDOW_METAL_VIEW_RESIZED}) {
   PresentationOrientationState orientation;
   orientation.updateViewport(1920,1080);
   PresentationOrientation locked = PresentationOrientation::Landscape;
@@ -915,7 +918,7 @@ int main() {
   }}};
   std::vector<SDL_Event> events{
       {.type=SDL_EVENT_WINDOW_RESIZED,.window={1920,1080}},
-      {.type=SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED,.window={1080,1920}},
+      {.type=resizeType,.window={1080,1920}},
       {.type=SDL_EVENT_KEY_DOWN}};
   std::size_t eventIndex=0;
   auto pollApplicationEvent=[&](SDL_Event *event) {
@@ -934,6 +937,7 @@ LOOP
   if(hasPendingResize)processEvent(pendingResizeEvent);
   assert(locked==PresentationOrientation::Portrait);
   assert(orientation.orientation()==PresentationOrientation::Portrait);
+  }
 }
 '''.replace("FLUSH", flush).replace("LOOP", loop)
         with tempfile.TemporaryDirectory(prefix="asobmashow-rotation-start-") as temp:

@@ -57,11 +57,13 @@ struct Context {
   Display *displaySettingsManager = nullptr;
   std::atomic_bool appInBackground{false};
   unsigned storageCancelRequests = 0;
-  struct Jukebox {
-    bool suspended = false, visualsSuspended = false;
-    long long time = 0, visualTime = -1;
-    Jukebox &audioRuntime() { return *this; }
+  struct ApplicationAudio {
+    bool suspended = false;
     void setApplicationSuspended(bool value) { suspended = value; }
+  } applicationAudio;
+  struct Jukebox {
+    bool visualsSuspended = false;
+    long long time = 0, visualTime = -1;
     void setVisualsSuspended(bool value) { visualsSuspended = value; }
     long long getTimeMicros() const { return time; }
     void seekVisualsToSongTime(long long value) { visualTime = value; }
@@ -122,7 +124,7 @@ int main() {
   struct { void update(Context &, bool) {} } reminderCoordinator;
   PRODUCTION_LIFECYCLE;
   setAppBackground(true);
-  assert(context.jukebox.suspended && context.jukebox.visualsSuspended);
+  assert(context.applicationAudio.suspended && context.jukebox.visualsSuspended);
   assert(s_fullscreenBgaCache.invalidations == 1);
   assert(context.storageCancelRequests == 1 && "backgrounding cancels active storage conversion");
   setAppBackground(false);
@@ -130,17 +132,17 @@ int main() {
   assert(context.storageCancelRequests == 1 && "foregrounding does not cancel storage conversion");
   scene.playing = true;
   setAppBackground(true);
-  assert(!context.jukebox.suspended && context.jukebox.visualsSuspended);
+  assert(!context.applicationAudio.suspended && context.jukebox.visualsSuspended);
   assert(context.storageCancelRequests == 2 && "background gameplay does not keep storage conversion running");
   context.jukebox.time = 42'000'000;
   setAppBackground(false);
-  assert(!context.jukebox.suspended && !context.jukebox.visualsSuspended &&
+  assert(!context.applicationAudio.suspended && !context.jukebox.visualsSuspended &&
          context.jukebox.visualTime == 42'000'000);
   scene.paused = true;
   setAppBackground(true);
-  assert(context.jukebox.suspended && scene.paused);
+  assert(context.applicationAudio.suspended && scene.paused);
   setAppBackground(false);
-  assert(!context.jukebox.suspended && scene.paused);
+  assert(!context.applicationAudio.suspended && scene.paused);
 
 
   assert(applyAndroidRenderSuspend(true));

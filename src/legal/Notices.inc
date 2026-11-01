@@ -9,6 +9,7 @@
 {"c-ares.txt", "c-ares"},
 {"curl.txt", "curl"},
 {"dav1d.txt", "dav1d"},
+{"earshot.txt", "Earshot"},
 {"ffmpeg.txt", "ffmpeg"},
 {"fontawesome-free.txt", "Font Awesome Free"},
 {"freetype.txt", "FreeType"},

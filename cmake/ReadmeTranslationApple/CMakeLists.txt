@@ -10,4 +10,7 @@ if(ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${PROJECT_SOURCE_DIR}/tests/readme_translation_apple_tests.swift
         ${PROJECT_SOURCE_DIR}/src/platform/ReadmeTranslationOutput.swift)
     set_target_properties(readme_translation_apple_tests PROPERTIES Swift_LANGUAGE_VERSION 5)
+    # Keep the debug module available when Swift skips unchanged sources during relinking.
+    target_compile_options(readme_translation_apple_tests PRIVATE
+        -emit-module-path "${CMAKE_CURRENT_BINARY_DIR}/readme_translation_apple_tests-$<CONFIG>.swiftmodule")
 endif()
