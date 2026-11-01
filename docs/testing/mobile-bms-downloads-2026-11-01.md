@@ -114,3 +114,22 @@ performed. Physical iOS retesting of the reported crash, Drive navigation, and
 modal wrapping remains pending; unsigned iOS compilation and the ownership
 regression pass. Android 14+ UIDT, locked-device scheduling, and physical process
 recovery were not exercised in this device session.
+
+## Locate and non-cancelling dismissal
+
+Completed, indexed jobs now expose Locate using their persisted import destination.
+The connected Android check opened the synthetic package's folder from both Play
+and Course; the latter waited for the Play transition. Removing the fixture's
+files then pressing Locate kept Downloads open with the missing-file message.
+
+Find BMS offers Hide (keep running) separately from Cancel while its worker runs.
+Behavioral regressions verify hidden completion/index delivery, retry ownership,
+no cancellation on hide, and suppression of the automatic Downloads popup when a
+hidden lookup queues its transfer. The new hide assertion failed before the
+policy change. Persisted Locate eligibility tests cover pre-index, completed,
+packed, cancelled, attention, and missing-result states.
+
+After both additions, desktop main, unsigned iOS, and Android release builds pass;
+all 13 download tests and the localization catalog check pass. The Android APK
+was installed with the existing version code and the implementation pushed before
+device testing. Physical iOS interaction testing remains separate.
