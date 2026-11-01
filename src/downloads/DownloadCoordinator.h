@@ -38,6 +38,11 @@ public:
   std::filesystem::path jobPath(const std::string &id) const;
   void setForeground(bool foreground);
   void enableImports(bool enabled);
+  // Nonblocking admission: an active or unfinished publication must settle first.
+  // A successful reservation excludes imports until release, even if the app
+  // loop calls enableImports(true). Transfers into private storage may continue.
+  bool tryReserveMaintenance();
+  void releaseMaintenance();
   void setContinuedProcessing(const std::string &id, bool permitted);
   bool cancel(const std::string &id);
   void interrupt(const std::string &id, const std::string &message);
@@ -55,6 +60,7 @@ public:
   bool acknowledgeLibrary(const std::string &id);
   bool setLibraryError(const std::string &id, const std::string &message);
 private:
+  void applyTransientStateLocked(Job &job) const;
   void pumpTransfers();
   void importLoop();
   std::optional<Job> importableLocked() const;
@@ -65,6 +71,7 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable changed_;
   bool foreground_ = false, importsEnabled_ = false, stopping_ = false;
+  bool maintenanceReserved_ = false;
   std::set<std::string> continued_, explicitlyInterrupted_, failedHandoffs_;
   std::string activeImport_;
   std::map<std::string, BmsSearchDownloadProgress> importProgress_;

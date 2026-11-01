@@ -462,6 +462,13 @@ void testSharedDownloadStaysInFindBms() {
   assert(scene.inProgress() && scene.modal.visible && scene.findBmsProgressCurrent == 50);
   scene.cancelFindBms();
   assert(cancellations == 1 && !scene.inProgress() && scene.modal.visible);
+  job.state = downloads::State::Importing;
+  job.persistenceBlocked = true;
+  job.publicationPrepared = true;
+  job.message = "Could not save import completion.";
+  scene.updateQueuedDownload(true);
+  assert(!scene.inProgress() && scene.queuedDownloadRetry_ && !scene.findBmsResult.pendingArtifact);
+  job.persistenceBlocked = job.publicationPrepared = false;
   job.state = downloads::State::Failed;
   scene.updateQueuedDownload(true);
   assert(scene.queuedDownloadRetry_);

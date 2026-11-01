@@ -50,10 +50,7 @@ std::vector<Job> DownloadCoordinator::jobs() const {
   std::lock_guard lock(mutex_);
   auto jobs = store_.jobs();
   for (auto &job : jobs) {
-    if (failedHandoffs_.contains(job.id)) {
-      job.state = State::Failed;
-      job.message = persistenceError_;
-    }
+    applyTransientStateLocked(job);
     if (job.state != State::Importing) continue;
     if (const auto progress = importProgress_.find(job.id); progress != importProgress_.end()) {
       job.message = progress->second.message;
@@ -66,8 +63,14 @@ std::vector<Job> DownloadCoordinator::jobs() const {
 std::optional<Job> DownloadCoordinator::get(const std::string &id) const {
   std::lock_guard lock(mutex_);
   auto job = store_.get(id);
-  if (job && failedHandoffs_.contains(id)) { job->state = State::Failed; job->message = persistenceError_; }
+  if (job) applyTransientStateLocked(*job);
   return job;
+}
+void DownloadCoordinator::applyTransientStateLocked(Job &job) const {
+  if (failedHandoffs_.contains(job.id)) { job.state = State::Failed; job.message = persistenceError_; }
+  job.persistenceBlocked = !persistenceError_.empty() && activeImport_ != job.id &&
+      (job.state == State::Downloaded || job.state == State::Importing);
+  if (job.persistenceBlocked) job.message = persistenceError_;
 }
 std::string DownloadCoordinator::error() const { std::lock_guard lock(mutex_); return persistenceError_; }
 std::filesystem::path DownloadCoordinator::archivePath(const std::string &id) const {
@@ -92,6 +95,21 @@ void DownloadCoordinator::enableImports(bool enabled) {
     if (importsEnabled_ == enabled) return;
     importsEnabled_ = enabled;
     if (!enabled) interrupted_ = true;
+  }
+  changed_.notify_all();
+}
+bool DownloadCoordinator::tryReserveMaintenance() {
+  std::lock_guard lock(mutex_);
+  if (stopping_ || maintenanceReserved_ || !activeImport_.empty()) return false;
+  const auto jobs = store_.jobs();
+  if (std::any_of(jobs.begin(), jobs.end(), [](const auto &job) { return job.publicationPrepared; })) return false;
+  maintenanceReserved_ = true;
+  return true;
+}
+void DownloadCoordinator::releaseMaintenance() {
+  {
+    std::lock_guard lock(mutex_);
+    maintenanceReserved_ = false;
   }
   changed_.notify_all();
 }
@@ -346,7 +364,7 @@ void DownloadCoordinator::pumpTransfers() {
   }
 }
 std::optional<Job> DownloadCoordinator::importableLocked() const {
-  if (!importsEnabled_ || !hooks_.importArchive || stopping_ || !persistenceError_.empty()) return {};
+  if (!importsEnabled_ || maintenanceReserved_ || !hooks_.importArchive || stopping_ || !persistenceError_.empty()) return {};
   for (const auto &job : store_.jobs()) {
     if (job.state == State::Downloaded && (foreground_ || continued_.contains(job.id))) return job;
   }

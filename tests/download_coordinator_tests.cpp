@@ -218,5 +218,58 @@ int main() {
     assert(service.forget(job.id) && cleaned);
     assert(!service.get(job.id));
   }
+  {
+    std::promise<void> entered, release;
+    auto released = release.get_future();
+    std::atomic<int> imports = 0;
+    std::promise<void> nextImport;
+    CoordinatorHooks maintenance;
+    maintenance.startTransfer = [](const Job &, const auto &) { return std::string{}; };
+    maintenance.importArchive = [&](const Job &, const auto &, auto &, auto, auto prepare) {
+      if (++imports == 1) {
+        assert(prepare(BmsSearchPendingArtifact{}));
+        entered.set_value();
+        released.wait();
+        return BmsSearchResult{.status = BmsSearchResult::Status::DownloadFailed};
+      }
+      nextImport.set_value();
+      return BmsSearchResult{.status = BmsSearchResult::Status::Downloaded, .outputPath = root / "installed"};
+    };
+    maintenance.resolveArtifact = [&](const auto &, auto, auto &, auto) {
+      return BmsSearchResult{.status = BmsSearchResult::Status::Downloaded, .outputPath = root / "installed"};
+    };
+    DownloadCoordinator service(root / "maintenance", maintenance);
+    service.setForeground(true);
+    service.enableImports(true);
+    const auto start = [&] {
+      const auto job = service.submit(request(root));
+      const auto file = root / "maintenance-completed";
+      std::ofstream(file) << "archive";
+      assert(service.acceptFile(job.id, job.attempt, file));
+      return job;
+    };
+    const auto first = start();
+    assert(entered.get_future().wait_for(5s) == std::future_status::ready);
+    assert(!service.tryReserveMaintenance() && "active publication must finish before maintenance can own library paths");
+    release.set_value();
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (service.get(first.id)->state == State::Importing && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    assert(service.get(first.id)->publicationPrepared);
+    assert(!service.tryReserveMaintenance() && "an unfinished publication must be recovered before maintenance");
+    while (!service.retry(first.id) && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    while (service.get(first.id)->state != State::Complete && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    assert(service.get(first.id)->state == State::Complete);
+    assert(service.tryReserveMaintenance());
+    assert(!service.tryReserveMaintenance());
+    const auto second = start();
+    service.enableImports(true); // The main loop cannot undo the reservation.
+    auto next = nextImport.get_future();
+    assert(next.wait_for(20ms) == std::future_status::timeout);
+    assert(service.get(second.id)->state == State::Downloaded && imports == 1);
+    service.releaseMaintenance();
+    assert(next.wait_for(5s) == std::future_status::ready);
+  }
   std::filesystem::remove_all(root);
 }

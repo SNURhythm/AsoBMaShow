@@ -11,6 +11,7 @@
 #endif
 
 #include <array>
+#include <algorithm>
 #include <cerrno>
 #include <filesystem>
 #include <optional>
@@ -333,14 +334,14 @@ void removePath(const std::filesystem::path &path) {
   std::filesystem::remove_all(path, ignored);
 }
 
-void removeVariantPath(
+bool removeVariantPath(
     const std::filesystem::path &path,
-    std::vector<std::filesystem::path> *removedPaths) {
+    std::vector<std::filesystem::path> *removedPaths, std::string &message) {
   std::error_code error;
-  const std::uintmax_t removed = std::filesystem::remove_all(path, error);
-  if (!error && removed > 0 && removedPaths != nullptr) {
-    removedPaths->push_back(path.lexically_normal());
-  }
+  std::filesystem::remove_all(path, error);
+  if (error) { message = "Could not remove an older downloaded variant: " + error.message(); return false; }
+  if (removedPaths) removedPaths->push_back(path.lexically_normal());
+  return true;
 }
 
 std::optional<std::string_view> storageIdFromKey(std::string_view storageKey) {
@@ -375,7 +376,7 @@ bool storageKeysShareIdentity(std::string_view candidateKey,
   return candidateId && *candidateId == *storageId;
 }
 
-void removeStaleExtractedVariants(
+void collectStaleExtractedVariants(
     const BmsSearchPendingArtifact &artifact,
     std::vector<std::filesystem::path> *removedPaths) {
   std::error_code error;
@@ -395,12 +396,12 @@ void removeStaleExtractedVariants(
     }
     if (storageKeysShareIdentity(fspath_to_utf8(path.filename()),
                                  artifact.storageKey)) {
-      removeVariantPath(path, removedPaths);
+      removedPaths->push_back(path.lexically_normal());
     }
   }
 }
 
-void removeStaleArchiveVariants(
+void collectStaleArchiveVariants(
     const BmsSearchPendingArtifact &artifact,
     std::vector<std::filesystem::path> *removedPaths) {
   if (artifact.storageKey.empty()) {
@@ -425,7 +426,7 @@ void removeStaleArchiveVariants(
     archiveKey.resize(archiveKey.size() - extension.size());
     if (storageKeysShareIdentity(archiveKey, artifact.storageKey) &&
         path.lexically_normal() != artifact.destinationPath.lexically_normal()) {
-      removeVariantPath(path, removedPaths);
+      removedPaths->push_back(path.lexically_normal());
     }
   }
 }
@@ -486,7 +487,8 @@ createFindBmsDownloadAttempt(const std::string &archiveName,
 bool commitFindBmsPendingArtifact(
     const BmsSearchPendingArtifact &artifact, std::string &errorMessage,
     FindBmsRenameOperation renameOperation,
-    std::vector<std::filesystem::path> *removedPaths) {
+    std::vector<std::filesystem::path> *removedPaths,
+    FindBmsPrepareVariantRemoval prepareRemoval) {
   if (removedPaths != nullptr) {
     removedPaths->clear();
   }
@@ -641,14 +643,7 @@ bool commitFindBmsPendingArtifact(
     removePath(backupPath);
   }
   cleanupTransaction();
-  if (!artifact.alternateDestinationPath.empty()) {
-    removeVariantPath(artifact.alternateDestinationPath, removedPaths);
-  }
-  removeStaleExtractedVariants(artifact, removedPaths);
-  removeStaleArchiveVariants(artifact, removedPaths);
-  removePath(artifact.stagingRoot);
-  errorMessage.clear();
-  return true;
+  return finishFindBmsPendingArtifactPublication(artifact, errorMessage, removedPaths, std::move(prepareRemoval));
 }
 
 bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
@@ -675,16 +670,25 @@ bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
 }
 
 bool finishFindBmsPendingArtifactPublication(const BmsSearchPendingArtifact &artifact,
-    std::string &errorMessage, std::vector<std::filesystem::path> *removedPaths) {
+    std::string &errorMessage, std::vector<std::filesystem::path> *removedPaths,
+    FindBmsPrepareVariantRemoval prepareRemoval) {
   auto recovered = artifact;
   // The original-file index may already have been discarded after publication.
   recovered.originalFilesIndexPath.clear();
   if (!validatePendingArtifact(recovered, errorMessage)) return false;
-  if (!recovered.alternateDestinationPath.empty())
-    removeVariantPath(recovered.alternateDestinationPath, removedPaths);
-  removeStaleExtractedVariants(recovered, removedPaths);
-  removeStaleArchiveVariants(recovered, removedPaths);
+  std::vector<std::filesystem::path> variants;
+  if (!recovered.alternateDestinationPath.empty() && std::filesystem::exists(recovered.alternateDestinationPath))
+    variants.push_back(recovered.alternateDestinationPath.lexically_normal());
+  collectStaleExtractedVariants(recovered, &variants);
+  collectStaleArchiveVariants(recovered, &variants);
+  std::sort(variants.begin(), variants.end());
+  variants.erase(std::unique(variants.begin(), variants.end()), variants.end());
+  // Persist the entire metadata-only removal set before deleting the first path.
+  if (prepareRemoval && !prepareRemoval(variants, errorMessage)) return false;
+  for (const auto &path : variants)
+    if (!removeVariantPath(path, removedPaths, errorMessage) && prepareRemoval) return false;
   removePath(recovered.stagingRoot);
+  errorMessage.clear();
   return true;
 }
 

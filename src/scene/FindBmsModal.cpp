@@ -1089,13 +1089,14 @@ bool FindBmsModal::updateQueuedDownload(bool force) {
     if (!force && snapshot == queuedDownloadSnapshot_) return false;
     queuedDownloadSnapshot_ = snapshot;
     using downloads::State;
-    queuedDownloadRunning_ = job->state == State::Queued || job->state == State::Transferring ||
-        job->state == State::Downloaded || job->state == State::Importing;
-    queuedDownloadRetry_ = job->state == State::Failed || !job->libraryError.empty() ||
-        (job->state == State::NeedsAttention && (!job->result || !job->result->pendingArtifact));
+    queuedDownloadRunning_ = !job->persistenceBlocked && (job->state == State::Queued || job->state == State::Transferring ||
+        job->state == State::Downloaded || job->state == State::Importing);
+    queuedDownloadRetry_ = job->persistenceBlocked || job->state == State::Failed || !job->libraryError.empty() ||
+        (job->state == State::NeedsAttention && (job->publicationPrepared || !job->result || !job->result->pendingArtifact));
     findBmsPendingDecision.reset();
     if (job->result) findBmsResult = *job->result;
     else findBmsResult = {};
+    if (job->publicationPrepared) findBmsResult.pendingArtifact.reset();
     findBmsResult.queuedDownloadId = id;
     findBmsResult.downloadUrl = job->request.displayUrl.empty() ? job->request.url : job->request.displayUrl;
     findBmsProgressCurrent = job->downloadedBytes; findBmsProgressTotal = job->totalBytes;
@@ -1109,7 +1110,7 @@ bool FindBmsModal::updateQueuedDownload(bool force) {
     else if (job->state == State::Queued) findBmsProgressFraction = 0.0;
     else if (queuedDownloadRunning_) findBmsProgressFraction = 0.9;
     else if (job->state == State::Complete) findBmsProgressFraction = 1.0;
-    if (job->state == State::Failed || job->state == State::Cancelled || !job->libraryError.empty() ||
+    if (job->persistenceBlocked || job->state == State::Failed || job->state == State::Cancelled || !job->libraryError.empty() ||
         (job->state == State::NeedsAttention && !findBmsResult.pendingArtifact)) {
       findBmsResult.status = BmsSearchResult::Status::DownloadFailed;
       findBmsResult.presentationMessage = {};

@@ -23,10 +23,14 @@ using FindBmsRenameOperation = std::function<void(
     const std::filesystem::path &, const std::filesystem::path &,
     std::error_code &)>;
 
+using FindBmsPrepareVariantRemoval = std::function<bool(
+    const std::vector<std::filesystem::path> &, std::string &)>;
+
 bool commitFindBmsPendingArtifact(
     const BmsSearchPendingArtifact &artifact, std::string &errorMessage,
     FindBmsRenameOperation renameOperation = {},
-    std::vector<std::filesystem::path> *removedPaths = nullptr);
+    std::vector<std::filesystem::path> *removedPaths = nullptr,
+    FindBmsPrepareVariantRemoval prepareRemoval = {});
 
 bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
                                   std::string &errorMessage);
@@ -34,6 +38,7 @@ bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
 // Idempotent cleanup after a journal has verified that the destination was
 // installed. Does not read or copy published payloads.
 bool finishFindBmsPendingArtifactPublication(const BmsSearchPendingArtifact &artifact,
-    std::string &errorMessage, std::vector<std::filesystem::path> *removedPaths);
+    std::string &errorMessage, std::vector<std::filesystem::path> *removedPaths,
+    FindBmsPrepareVariantRemoval prepareRemoval = {});
 
 } // namespace asobmshow::bms_search

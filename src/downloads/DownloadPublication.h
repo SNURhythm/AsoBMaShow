@@ -1,6 +1,8 @@
 #pragma once
 #include <filesystem>
 #include <system_error>
+#include <string>
+#include <vector>
 
 namespace downloads {
 enum class PublicationRecovery { Retry, Installed, Conflict };
@@ -14,6 +16,8 @@ public:
   void rename(const std::filesystem::path &from, const std::filesystem::path &to,
               std::error_code &error);
   PublicationRecovery recover();
+  bool recordRemovals(const std::vector<std::filesystem::path> &paths, std::string &error);
+  std::vector<std::filesystem::path> removedPaths() const;
 private:
   std::filesystem::path journal_, destination_;
 };

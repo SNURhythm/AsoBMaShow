@@ -139,3 +139,17 @@ Native builds and physical-device checks remain necessary for OS scheduling beha
 
 - [Library and chart scanning](library-and-chart-scanning.md)
 - [Mobile and platform integration](mobile-and-platform-integration.md)
+
+Publication recovery records obsolete variant paths before deletion, so a restart
+can remove their old library entries even when the files are already gone.
+Copied directory contents and directory entries are flushed before the install
+journal is recorded. This flush walks metadata and does not reread payloads.
+Completed archives remain available through mismatch and failed Keep Files paths;
+attachments without a recognized archive suffix use extraction even when Skip
+Unarchiving is enabled. Persistence-blocked imports expose Retry in both Tasks
+and Find BMS after storage is freed.
+
+Storage maintenance requires download publication to finish or recover first.
+Admission refuses an active importer or unfinished publication; once admitted,
+it holds a separate reservation against imports until maintenance releases its
+guard. Network transfers can continue into private download storage.

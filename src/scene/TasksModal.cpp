@@ -64,7 +64,7 @@ TasksModal::TasksModal(View *parent, std::function<void()> refreshLibrary,
     button->setWidth(0)->setFlex(1)->setMinWidth(0)->setHeight(48);
     button->setStyledBorderWidth(1)->setCornerRadius(app_theme::controlRadius());
     auto *content = new View();
-    content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setPadding(Edge::Right, 30);
+    content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setPadding(Edge::Left, 30)->setPadding(Edge::Right, 30);
     *text = new TextView(app_theme::font, 18);
     (*text)->setLocalizedText(i18n::message(key));
     (*text)->setAlign(TextView::CENTER); (*text)->setVAlign(TextView::MIDDLE);
@@ -202,6 +202,7 @@ void TasksModal::refresh() {
     row->setThemedBackgroundColor(app_theme::insetSurface)->setCornerRadius(app_theme::controlRadius());
     label(row, job.request.title.empty() ? job.request.archiveName : job.request.title, 20);
     auto state = stateLabel(job.state).resolve();
+    if (job.persistenceBlocked) state = i18n::tr("downloads.ui.attention");
     if (job.state == downloads::State::Complete && !job.libraryAcknowledged)
       state = i18n::tr(job.libraryError.empty() ? "downloads.ui.indexing" : "downloads.ui.attention");
     if (job.state == downloads::State::Transferring && job.totalBytes)
@@ -212,7 +213,7 @@ void TasksModal::refresh() {
     auto *buttons = new View(); buttons->setFlexDirection(FlexDirection::Row)->setFlexWrap(YGWrapWrap)->setGap(8);
     const auto id = job.id;
     const auto invoke = [this](auto operation) { try { operation(); snapshot_.clear(); } catch (...) { error_->setLocalizedText(i18n::message("downloads.ui.storage_error")); } };
-    if (job.state == downloads::State::Failed || job.state == downloads::State::NeedsAttention || !job.libraryError.empty()) {
+    if (job.persistenceBlocked || job.state == downloads::State::Failed || job.state == downloads::State::NeedsAttention || !job.libraryError.empty()) {
       action(buttons, i18n::message("library.find_bms.retry.label"), [this, id, invoke] { invoke([&] { owner_->retry(id); }); });
     }
     if (job.state == downloads::State::NeedsAttention && job.result && job.result->pendingArtifact && !job.publicationPrepared) {

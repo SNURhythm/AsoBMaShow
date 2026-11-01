@@ -23,6 +23,11 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
              const BeforePublication &prepare, std::string &error,
              std::vector<std::filesystem::path> &removed) {
   PublicationJournal journal(privateRoot / "publication.json", artifact.destinationPath);
+  const auto rememberRemovals = [&](const auto &paths, auto &message) { return journal.recordRemovals(paths, message); };
+  const auto finish = [&](bool success) {
+    if (success) removed = journal.removedPaths();
+    return success;
+  };
   const auto recovery = journal.recover();
   if (recovery == PublicationRecovery::Conflict) {
     error = "Downloaded files changed during recovery. Existing files were left untouched.";
@@ -30,12 +35,12 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
   }
   if (recovery == PublicationRecovery::Installed) {
     if (!prepare || !prepare(artifact)) { error = "Import paused during recovery."; return false; }
-    return finishFindBmsPendingArtifactPublication(artifact, error, &removed);
+    return finish(finishFindBmsPendingArtifactPublication(artifact, error, &removed, rememberRemovals));
   }
   const auto transaction = artifact.downloadRoot / kFindBmsTransactionDirectoryName / artifact.stagingRoot.filename();
   if (!journal.beginCopy(transaction)) { error = "Could not save the import recovery journal."; return false; }
   bool swapping = false;
-  return commitFindBmsPendingArtifact(artifact, error,
+  return finish(commitFindBmsPendingArtifact(artifact, error,
       [&](const auto &from, const auto &to, auto &failure) {
         if (!swapping && (!prepare || !prepare(artifact))) {
           failure = std::make_error_code(std::errc::operation_canceled);
@@ -43,7 +48,7 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
         }
         swapping = true;
         journal.rename(from, to, failure);
-      }, &removed);
+      }, &removed, rememberRemovals));
 }
 }
 void cleanupArchiveJob(const Job &job) {
@@ -75,7 +80,10 @@ BmsSearchResult importArchiveJob(const Job &job, const std::filesystem::path &ar
   // copying here would duplicate potentially hundreds of gigabytes before import.
   std::filesystem::create_directory(attempt.extractedPath);
   BmsSearchDownloadOptions options;
-  options.skipUnarchivingForNonSolidArchives = job.request.skipUnarchiving;
+  // Virtual archive members require a recognized suffix. Unknown attachment
+  // names still work through content-detected extraction without renaming data.
+  options.skipUnarchivingForNonSolidArchives = job.request.skipUnarchiving &&
+      !archive_file::archiveExtensionFromPath(archive).empty();
   options.storagePolicy = job.request.storagePolicy;
   options.storagePauseRequested = [&cancelled] { return cancelled.load(); };
   const auto reader = defaultArchiveReaderDependencies();
@@ -93,7 +101,7 @@ BmsSearchResult importArchiveJob(const Job &job, const std::filesystem::path &ar
       }};
   BmsSearchResult result;
   const DownloadedArchiveWorkflowRequest request{attempt, makeDownloadDirectory(job.request.libraryRoot),
-      names.archiveName, names.storageKey, job.request.expectedHash, options};
+      names.archiveName, names.storageKey, job.request.expectedHash, options, true};
   processDownloadedArchive(request, cancelled, std::move(progress), result, dependencies);
   // The attempt stays until publication/decision. It is private durable storage
   // on mobile, so pending mismatch artifacts survive process termination.

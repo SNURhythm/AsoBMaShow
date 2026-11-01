@@ -38,6 +38,7 @@ struct Job {
   bool libraryAcknowledged = false;
   std::string libraryError;
   bool publicationPrepared = false;
+  bool persistenceBlocked = false; // Transient UI state; never part of the durable manifest.
   std::optional<BmsSearchPendingArtifactDecision> decision;
 };
 

@@ -5,6 +5,9 @@
 #include "../src/scene/TasksModal.cpp"
 #include <cassert>
 #include <random>
+#include <fstream>
+#include <chrono>
+#include <thread>
 
 namespace {
 std::shared_ptr<downloads::DownloadCoordinator> testDownloads;
@@ -79,6 +82,11 @@ void testTasksModalTabs() {
       assert(downloadsTab->getX() >= libraryTab->getX() + libraryTab->getWidth());
       assert(downloadsTab->getX() + downloadsTab->getWidth() <= width);
       assert(downloads->getHeight() > 0);
+      for (auto *tab : {libraryTab, downloadsTab}) {
+        const auto *label = tab->getContentView()->getChildren().front();
+        assert(std::abs(label->getX() + label->getWidth() / 2 -
+                        (tab->getX() + tab->getWidth() / 2)) < 1.0f);
+      }
     }
     click(modal, libraryTab);
     click(modal, findAction(modal.root(), i18n::tr("menu.refresh_list.label")));
@@ -89,5 +97,59 @@ void testTasksModalTabs() {
     assert(modal.handleEvents(escape));
   }
   testDownloads.reset();
+  std::filesystem::remove_all(path);
+
+  // Both failed transition writes and failed prepared-completion writes must
+  // expose a usable Retry action without another network transfer.
+  for (const bool prepared : {false, true}) {
+    int transfers = 0;
+    const auto directory = path / (prepared ? "completion" : "transition");
+    const auto manifest = directory / "jobs.json", saved = directory / "saved.json";
+    const auto blockWrites = [&] {
+      std::filesystem::rename(manifest, saved);
+      std::filesystem::create_directory(manifest);
+    };
+    downloads::CoordinatorHooks hooks;
+    hooks.startTransfer = [&](const auto &, const auto &) { ++transfers; return std::string{}; };
+    hooks.importArchive = [&](const auto &, const auto &, auto &, auto, auto prepare) {
+      if (prepared) {
+        assert(prepare(BmsSearchPendingArtifact{}));
+        blockWrites();
+      }
+      return BmsSearchResult{.status = BmsSearchResult::Status::Downloaded, .outputPath = directory / "installed"};
+    };
+    hooks.resolveArtifact = [&](const auto &, auto, auto &, auto) {
+      return BmsSearchResult{.status = BmsSearchResult::Status::Downloaded, .outputPath = directory / "installed"};
+    };
+    testDownloads = std::make_shared<downloads::DownloadCoordinator>(directory, hooks);
+    testDownloads->setForeground(true);
+    const auto job = testDownloads->submit(request);
+    const auto file = directory / "completed";
+    std::ofstream(file) << "archive";
+    assert(testDownloads->acceptFile(job.id, job.attempt, file));
+    if (!prepared) blockWrites();
+    testDownloads->enableImports(true);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (testDownloads->error().empty() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    assert(!testDownloads->error().empty());
+    assert(testDownloads->get(job.id)->state == (prepared ? downloads::State::Importing : downloads::State::Downloaded));
+    {
+      View parent;
+      TasksModal modal(&parent, {}, {});
+      modal.show(TasksModal::Tab::Downloads);
+      auto *retry = findAction(modal.root(), i18n::tr("library.find_bms.retry.label"));
+      assert(retry && "persistently blocked imports need Retry even before restart");
+      std::filesystem::remove(manifest);
+      std::filesystem::rename(saved, manifest);
+      click(modal, retry);
+      deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (testDownloads->get(job.id)->state != downloads::State::Complete && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+      assert(testDownloads->get(job.id)->state == downloads::State::Complete);
+      assert(testDownloads->error().empty() && transfers == 1);
+    }
+    testDownloads.reset();
+  }
   std::filesystem::remove_all(path);
 }

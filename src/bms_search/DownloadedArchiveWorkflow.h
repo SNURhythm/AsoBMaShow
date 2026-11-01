@@ -32,6 +32,7 @@ struct DownloadedArchiveWorkflowRequest {
   std::string storageKey;
   std::string archiveKey;
   BmsSearchDownloadOptions options;
+  bool retainArchive = false; // Durable jobs own the completed file outside this attempt.
 };
 
 struct DownloadedArchiveWorkflowDependencies {

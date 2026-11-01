@@ -2,6 +2,7 @@
 #include "../AtomicFile.h"
 #include "../../yoga/lib/nlohmann/json.hpp"
 #include <array>
+#include <algorithm>
 #include <fstream>
 #include <optional>
 #ifdef _WIN32
@@ -54,6 +55,7 @@ bool safeTransaction(const std::filesystem::path &transaction, const std::filesy
 }
 bool save(const std::filesystem::path &path, const json &record) {
   const auto text = record.dump();
+  if (text.size() > 16384) return false;
   const auto operations = atomic_file::privateFileOperations();
   std::string error;
   return atomic_file::writeWithoutBackup(path, std::as_bytes(std::span(text.data(), text.size())), error, &operations);
@@ -63,6 +65,32 @@ json load(const std::filesystem::path &path) {
     throw std::runtime_error("Invalid publication journal.");
   std::ifstream input(path, std::ios::binary);
   return json::parse(input);
+}
+// Flush copied payloads and directory entries without reading file contents.
+// Do not follow preserved symlinks into unrelated library data.
+bool syncTree(const std::filesystem::path &path, std::string &error) {
+  const auto status = std::filesystem::symlink_status(path);
+  if (std::filesystem::is_regular_file(status)) return atomic_file::syncFile(path, error);
+  if (std::filesystem::is_symlink(status)) return true;
+  if (!std::filesystem::is_directory(status)) { error = "Unsupported publication entry."; return false; }
+  for (const auto &entry : std::filesystem::directory_iterator(path))
+    if (!syncTree(entry.path(), error)) return false;
+  return atomic_file::syncDirectory(path, error);
+}
+std::vector<std::filesystem::path> readRemovals(const json &record, const std::filesystem::path &destination) {
+  std::vector<std::filesystem::path> result;
+  auto root = destination.parent_path();
+  if (root.filename() == "_archives") root = root.parent_path();
+  if (record.contains("removedPaths")) for (const auto &item : record.at("removedPaths")) {
+    const auto value = item.get<std::string>();
+    const auto path = std::filesystem::path(std::u8string(value.begin(), value.end()));
+    if (path != path.lexically_normal() || path == destination ||
+        path.filename() == ".asobmashow-transactions" || path.filename() == "_archives" ||
+        (path.parent_path() != root && path.parent_path() != root / "_archives"))
+      throw std::runtime_error("Invalid removed variant path.");
+    result.push_back(path);
+  }
+  return result;
 }
 bool renameSync(const std::filesystem::path &from, const std::filesystem::path &to) {
   std::string error;
@@ -102,8 +130,12 @@ void PublicationJournal::rename(const std::filesystem::path &from, const std::fi
       if (readPath(previous, "destination") != destination_ || readPath(previous, "transaction") != transaction)
         throw std::runtime_error("Publication identity changed.");
       record["oldIdentity"] = previous.at("oldIdentity");
+      if (previous.contains("removedPaths")) record["removedPaths"] = previous.at("removedPaths");
     }
-    if (std::filesystem::is_regular_file(from)) {
+    if (install) {
+      std::string message;
+      if (!syncTree(from, message)) throw std::runtime_error("Could not sync publication: " + message);
+    } else if (std::filesystem::is_regular_file(from)) {
       std::string message;
       if (!atomic_file::syncFile(from, message)) throw std::runtime_error("Could not sync publication.");
     }
@@ -112,6 +144,29 @@ void PublicationJournal::rename(const std::filesystem::path &from, const std::fi
     if (!save(journal_, record) || (!renameSync(from, to) && identity(to) != sourceIdentity))
       error = std::make_error_code(std::errc::io_error);
   } catch (...) { error = std::make_error_code(std::errc::io_error); }
+}
+bool PublicationJournal::recordRemovals(const std::vector<std::filesystem::path> &paths, std::string &error) {
+  try {
+    auto record = load(journal_);
+    if (readPath(record, "destination") != destination_ || record.at("phase") != "install" ||
+        identity(destination_) != record.at("identity").get<Identity>())
+      throw std::runtime_error("Publication identity changed.");
+    auto removed = readRemovals(record, destination_);
+    removed.insert(removed.end(), paths.begin(), paths.end());
+    std::sort(removed.begin(), removed.end());
+    removed.erase(std::unique(removed.begin(), removed.end()), removed.end());
+    record["removedPaths"] = json::array();
+    for (const auto &path : removed) record["removedPaths"].push_back(utf8(path));
+    (void)readRemovals(record, destination_);
+    if (save(journal_, record)) return true;
+  } catch (...) {}
+  error = "Could not save older download paths before removing them.";
+  return false;
+}
+std::vector<std::filesystem::path> PublicationJournal::removedPaths() const {
+  const auto record = load(journal_);
+  if (readPath(record, "destination") != destination_) throw std::runtime_error("Publication identity changed.");
+  return readRemovals(record, destination_);
 }
 PublicationRecovery PublicationJournal::recover() {
   try {

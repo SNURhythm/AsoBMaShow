@@ -163,3 +163,22 @@ The selector error/lifecycle, export/action, and built-in tab suites pass, as do
 the desktop application build. iOS compile checks cover the browser lifecycle,
 shared focus state, and both selectors. Android compile checks cover the shared
 focus state and both selectors. Physical-device input retesting remains pending.
+
+## PR review recovery and admission fixes
+
+All six review findings were checked against the current implementation. Added
+regressions reproduced loss of deleted-variant paths during completion recovery,
+installation of an extracted tree whose nested payload could not be synced,
+retained-archive deletion on extracted mismatch, unknown-extension direct-import
+failure, and missing Retry after failed transition/completion manifest writes.
+The maintenance test holds a publication in progress, checks that admission is
+refused until it settles and recovery completes, then verifies that application
+import toggles cannot override a held maintenance reservation.
+
+The 15-test download group passes, including real-view Retry recovery without a
+second transfer and centered tab text in compact portrait/landscape layouts.
+Storage task and settings event/lifetime checks also pass. Desktop main builds;
+iOS and Android compile checks cover publication, staging, workflow, coordinator,
+import, both affected modals, and storage integration. Failure injection and
+process-boundary reconstruction exercise recovery; physical power-loss and device
+UI retests were not performed for this follow-up.

@@ -359,39 +359,87 @@ void testDownloadAttemptExtractionCleanup() {
 
 void testDurableDownloadImportsExistingFileWithoutTransport() {
   using namespace asobmshow::bms_search;
-  CleanupPaths cleanup;
-  std::string error;
-  const auto fixture = createFindBmsDownloadAttempt("fixture.zip", error);
-  assert(fixture);
-  cleanup.add(fixture->root);
-  writeExtractionZip(fixture->archivePath, {{"chart.bms", "#TITLE test\n#BPM 120\n"}});
-  downloads::Job job;
-  job.id = "41b74c17434d423aa40f9399b2f0382c";
-  job.request.url = job.request.displayUrl = "https://fixture.invalid/package.zip";
-  job.request.archiveName = "song.zip";
-  job.request.libraryRoot = testDownloadRoot(*fixture).parent_path();
-  cleanup.add(job.request.libraryRoot);
-  job.request.skipUnarchiving = true;
-  const auto privateJobRoot = findBmsStagingBasePath().parent_path() / job.id;
-  std::filesystem::create_directories(privateJobRoot);
-  cleanup.add(privateJobRoot);
-  const auto retained = privateJobRoot / "archive.1.zip";
-  std::filesystem::rename(fixture->archivePath, retained);
-  std::atomic_bool cancelled = false;
-  int prepared = 0;
-  observedDownloadAttempt.clear();
-  const auto result = downloads::importArchiveJob(job, retained, privateJobRoot,
-      cancelled, {}, [&](const BmsSearchPendingArtifact &) {
-        assert(std::filesystem::hard_link_count(retained) == 1);
-        ++prepared; return true;
-      });
-  if (result.status != BmsSearchResult::Status::Downloaded) std::cerr << result.message << '\n';
-  assert(result.status == BmsSearchResult::Status::Downloaded);
-  assert(!result.outputPath.empty() && std::filesystem::is_regular_file(result.outputPath));
-  assert(std::filesystem::exists(retained)); // Retained until durable result delivery.
-  assert(std::filesystem::hard_link_count(retained) == 1);
-  assert(observedDownloadAttempt.empty());
-  assert(prepared == 1);
+  for (const auto &name : {"song.zip", "download", "download.bin", "download.archive", "mismatch.zip"}) {
+    CleanupPaths cleanup;
+    std::string error;
+    const auto fixture = createFindBmsDownloadAttempt("fixture.zip", error);
+    assert(fixture);
+    cleanup.add(fixture->root);
+    writeExtractionZip(fixture->archivePath, {{"chart.bms", "#TITLE test\n#BPM 120\n"}});
+    downloads::Job job;
+    auto stagingId = fixture->root.filename().string();
+    stagingId[19] = '8';
+    cleanup.add(findBmsStagingBasePath() / stagingId);
+    job.id = stagingId;
+    std::erase(job.id, '-');
+    job.request.url = job.request.displayUrl = "https://fixture.invalid/package.zip";
+    job.request.archiveName = name;
+    const bool mismatch = job.request.archiveName == "mismatch.zip";
+    if (mismatch) job.request.expectedHash = std::string(64, 'a');
+    job.request.libraryRoot = testDownloadRoot(*fixture).parent_path();
+    cleanup.add(job.request.libraryRoot);
+    job.request.skipUnarchiving = !mismatch;
+    const auto privateJobRoot = findBmsStagingBasePath().parent_path() / job.id;
+    std::filesystem::create_directories(privateJobRoot);
+    cleanup.add(privateJobRoot);
+    const auto retained = privateJobRoot / ("archive.1" + archive_file::archiveExtensionFromName(name));
+    std::filesystem::rename(fixture->archivePath, retained);
+    std::atomic_bool cancelled = false;
+    int prepared = 0;
+    std::optional<BmsSearchPendingArtifact> preparedArtifact;
+    std::vector<std::filesystem::path> variants;
+    if (job.request.archiveName == "song.zip") {
+      const auto names = findBmsStorageNames("song.zip", ".zip", job.request.url);
+      const auto previous = findBmsStorageNames("old.7z", ".7z", job.request.url);
+      variants = {makeDownloadDirectory(job.request.libraryRoot) / names.storageKey,
+                  makeDownloadDirectory(job.request.libraryRoot) / "_archives" / previous.archiveName};
+      writeText(variants[0] / "old.bms", "old chart");
+      writeText(variants[1], "old archive");
+    }
+    observedDownloadAttempt.clear();
+    const auto result = downloads::importArchiveJob(job, retained, privateJobRoot,
+        cancelled, {}, [&](const BmsSearchPendingArtifact &artifact) {
+          preparedArtifact = artifact;
+          assert(std::filesystem::hard_link_count(retained) == 1);
+          ++prepared; return true;
+        });
+    if (mismatch) {
+      assert(result.status == BmsSearchResult::Status::HashMismatch && result.pendingArtifact);
+      assert(std::filesystem::exists(retained) && "extracted mismatch must retain the completed archive");
+      job.result = result;
+      const auto rejected = downloads::resolveArchiveJob(job, privateJobRoot,
+          BmsSearchPendingArtifactDecision::Keep, cancelled, [](const auto &) { return false; });
+      assert(rejected.status == BmsSearchResult::Status::DownloadFailed && rejected.pendingArtifact);
+      assert(std::filesystem::exists(retained));
+      const auto retried = downloads::importArchiveJob(job, retained, privateJobRoot, cancelled, {}, {});
+      assert(retried.status == BmsSearchResult::Status::HashMismatch && retried.pendingArtifact);
+      assert(observedDownloadAttempt.empty());
+      downloads::cleanupArchiveJob(job);
+      continue;
+    }
+    if (result.status != BmsSearchResult::Status::Downloaded) std::cerr << result.message << '\n';
+    assert(result.status == BmsSearchResult::Status::Downloaded);
+    assert(!result.outputPath.empty());
+    if (archive_file::archiveExtensionFromName(name).empty()) {
+      assert(std::filesystem::is_directory(result.outputPath));
+      assert(readText(result.outputPath / "chart.bms") == "#TITLE test\n#BPM 120\n");
+    } else assert(std::filesystem::is_regular_file(result.outputPath));
+    assert(std::filesystem::exists(retained)); // Retained until durable result delivery.
+    assert(std::filesystem::hard_link_count(retained) == 1);
+    assert(observedDownloadAttempt.empty());
+    assert(prepared == 1);
+    if (!variants.empty()) {
+      for (const auto &path : variants) assert(!std::filesystem::exists(path));
+      // Simulate death after deletion but before the coordinator saves completion.
+      job.publicationPrepared = true;
+      job.result = BmsSearchResult{.pendingArtifact = preparedArtifact};
+      const auto recovered = downloads::resolveArchiveJob(job, privateJobRoot,
+          BmsSearchPendingArtifactDecision::Keep, cancelled, [](const auto &) { return true; });
+      assert(recovered.status == BmsSearchResult::Status::Downloaded);
+      for (const auto &path : variants)
+        assert(std::find(recovered.removedPaths.begin(), recovered.removedPaths.end(), path) != recovered.removedPaths.end());
+    }
+  }
 }
 
 int testVerificationAllocationGuard() {
