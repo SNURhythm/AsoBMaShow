@@ -201,8 +201,10 @@ void testChunkedDecodeMatchesOneShot() {
       const bool decoded = fromMemory
           ? decodeAudioBytesToPCM(fspath_to_path_t(truncated), bytes, pcm, info, cancelled)
           : decodeAudioToPCM(fspath_to_path_t(truncated), pcm, info, cancelled);
-      expect(!decoded && pcm.empty(),
-             "truncated audio is rejected without publishing a fabricated silent tail");
+      expect(decoded && info.frames == reference.framesRead &&
+                 pcm.size() == static_cast<std::size_t>(reference.framesRead * info.channels) &&
+                 std::equal(pcm.begin(), pcm.end(), reference.samples.begin()),
+             "truncated audio plays the decoded prefix with its actual duration and no silent tail");
     }
   }
 }
@@ -211,6 +213,7 @@ void testForgedFrameCountDoesNotAllocateDeclaredPcm() {
   SoundSandbox sandbox;
   const auto path = sandbox.root() / "forged.flac";
   if (!writeAudioFixture(path, SF_FORMAT_FLAC | SF_FORMAT_PCM_16, 1, 32)) return;
+  const auto reference = readOneShotPcm(path);
   std::ifstream input(path, std::ios::binary);
   const std::string original((std::istreambuf_iterator<char>(input)), {});
   input.close();
@@ -256,8 +259,20 @@ void testForgedFrameCountDoesNotAllocateDeclaredPcm() {
     }
     expect(!threw && largest <= 1024 * 1024,
            "file, memory and preview decoding allocate from produced audio, not forged frame count");
-    expect(!decoded && pcm.empty(), "forged FLAC is rejected without partial PCM or silent tail");
+    expect(decoded && info.frames == 32 && pcm == reference.samples,
+           "forged duration plays only the actual decoded samples");
   }
+  for (const std::size_t limit : {31, 32, 64}) {
+    std::vector<short> pcm;
+    SF_INFO info{};
+    std::atomic<bool> cancelled{false};
+    const bool decoded = decodeAudioBytesToPCMBounded(
+        displayPath, bytes, pcm, info, cancelled, limit);
+    expect(limit >= 32 ? decoded && info.frames == 32 && pcm == reference.samples
+                       : !decoded && pcm.empty(),
+           "bounded decode limits actual samples, not a truncated file's claimed duration");
+  }
+
 }
 
 // A direct PCM16 read must still reproduce the historical normalized-double

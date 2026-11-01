@@ -30,9 +30,9 @@ bool decodeAudioBytesToPCM(const path_t &displayPath,
                            const std::vector<unsigned char> &bytes,
                            std::vector<short> &buffer, SF_INFO &fileInfo,
                            std::atomic<bool> &isCancelled);
-// Like decodeAudioBytesToPCM but pre-checks the header's PCM frame count
-// against maximumPcmSamples before allocating the output buffer (the same
-// guard decodeAudioToPCMBounded applies to files and archives).
+// Like decodeAudioBytesToPCM but limits actual decoded samples to
+// maximumPcmSamples. Short files return their decoded prefix and actual frame
+// count; an overstated header does not allocate or synthesize a silent tail.
 bool decodeAudioBytesToPCMBounded(const path_t &displayPath,
                                   const std::vector<unsigned char> &bytes,
                                   std::vector<short> &buffer,
