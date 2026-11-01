@@ -9,9 +9,13 @@ parser.add_argument("--root", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
 args = parser.parse_args()
 packages = (args.root / "src/bms_search/PackageSourceDrivers.cpp").read_text()
+links = (args.root / "src/bms_search/BmsSearchDriver.cpp").read_text()
 service = (args.root / "src/BmsSearchService.cpp").read_text()
 args.output.write_text(
     "namespace asobmshow::bms_search {\n" +
+    extract(links, "void appendExtractedLink(") + "\n" +
+    extract(links, "std::vector<ExtractedLink> extractLinkRefs(") + "\n" +
+    extract(links, "std::vector<std::string> extractLinks(") + "\n" +
     extract(packages, "PackageSourceLookupResult WriggleDriver::lookupByMd5(") + "\n" +
     extract(packages, "bool EndlessDreamSourcesDriver::tryDownloadByMd5(") +
     "\n}\nusing namespace asobmshow::bms_search;\n" +

@@ -4,6 +4,8 @@
 namespace downloads::platform {
 std::filesystem::path privateRoot();
 void initialize();
+// iOS entry-point setup, before UIApplicationMain.
+void prepareApplicationLaunch();
 std::string startTransfer(const Job &job, const std::filesystem::path &destination);
 void cancelTransfer(const Job &job);
 void finishActivity(const Job &job, bool success);

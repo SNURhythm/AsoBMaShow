@@ -8,6 +8,9 @@ class GoogleDriveDriver {
 public:
   static bool isHost(const ParsedUrl &url);
   static std::optional<DownloadCandidate> classify(const std::string &url);
+  static std::optional<std::string> warningContinuation(
+      const std::string &downloadUrl, const std::string &displayUrl,
+      const std::filesystem::path &archivePath);
   static bool resolveWarningDownload(
       const std::string &downloadUrl, const std::string &displayUrl,
       const std::filesystem::path &archivePath, std::atomic_bool &cancelled,

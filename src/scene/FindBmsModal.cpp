@@ -504,6 +504,9 @@ void FindBmsModal::build(View *parent) {
 }
 
 void FindBmsModal::show(const ChartMetaRecord &record, bool requireConfirmation) {
+#if TARGET_OS_IPHONE
+  requireConfirmation = true;
+#endif
   if (findBmsModalRoot == nullptr) return;
   if (findBmsTask.running() || findBmsResult.pendingArtifact) {
     // A retained scene may hide the dialog while a keep/delete decision is
@@ -776,6 +779,11 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     detail = i18n::message("library.find_bms.chart_detail",
         {{"title", findBmsModalChart.meta.Title}, {"detail", detail}});
   }
+#if TARGET_OS_IPHONE
+  if (findBmsAwaitingConfirmation || showCandidateList)
+    detail = i18n::message("library.find_bms.storage.detail", {{"detail", detail},
+        {"storage", i18n::message("downloads.ui.ios_notice")}});
+#endif
   if (findBmsDetailText != nullptr) {
     findBmsDetailText->setLocalizedText(detail);
   }

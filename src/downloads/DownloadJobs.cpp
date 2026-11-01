@@ -49,7 +49,7 @@ json requestJson(const Request &r) {
   return {{"url", r.url}, {"displayUrl", r.displayUrl}, {"title", r.title},
           {"archiveName", r.archiveName}, {"expectedHash", r.expectedHash},
           {"storageIdentity", r.storageIdentity}, {"libraryRoot", utf8(r.libraryRoot)},
-          {"headers", r.headers}, {"skipUnarchiving", r.skipUnarchiving},
+          {"fallbackUrls", r.fallbackUrls}, {"headers", r.headers}, {"skipUnarchiving", r.skipUnarchiving},
           {"storagePolicy", policyJson(r.storagePolicy)}};
 }
 Request readRequest(const json &j) {
@@ -59,6 +59,7 @@ Request readRequest(const json &j) {
   j.at("expectedHash").get_to(r.expectedHash); j.at("storageIdentity").get_to(r.storageIdentity);
   r.libraryRoot = pathAt(j, "libraryRoot");
   j.at("headers").get_to(r.headers); j.at("skipUnarchiving").get_to(r.skipUnarchiving);
+  if (j.contains("fallbackUrls")) j.at("fallbackUrls").get_to(r.fallbackUrls);
   r.storagePolicy = readPolicy(j.at("storagePolicy"));
   if (!validRequest(r)) throw std::runtime_error("Invalid saved download request.");
   return r;
@@ -107,7 +108,7 @@ json jobJson(const Job &j) {
   return {{"id", j.id}, {"revision", j.revision}, {"order", j.order},
           {"attempt", j.attempt}, {"state", j.state}, {"request", requestJson(j.request)},
           {"downloadedBytes", j.downloadedBytes}, {"totalBytes", j.totalBytes},
-          {"message", j.message}, {"libraryAcknowledged", j.libraryAcknowledged},
+          {"message", j.message}, {"transferUrl", j.transferUrl}, {"fallbackIndex", j.fallbackIndex}, {"confirmationUsed", j.confirmationUsed}, {"libraryAcknowledged", j.libraryAcknowledged}, {"libraryError", j.libraryError},
           {"publicationPrepared", j.publicationPrepared},
           {"decision", j.decision ? json(*j.decision) : json(nullptr)},
           {"result", j.result ? resultJson(*j.result) : json(nullptr)}};
@@ -119,6 +120,13 @@ Job readJob(const json &j) {
   j.at("state").get_to(result.state); result.request = readRequest(j.at("request"));
   j.at("downloadedBytes").get_to(result.downloadedBytes); j.at("totalBytes").get_to(result.totalBytes);
   j.at("message").get_to(result.message); j.at("libraryAcknowledged").get_to(result.libraryAcknowledged);
+  result.fallbackIndex = j.value("fallbackIndex", 0u);
+  result.confirmationUsed = j.value("confirmationUsed", false);
+  if (result.fallbackIndex > result.request.fallbackUrls.size()) throw std::runtime_error("Invalid fallback index.");
+  result.transferUrl = j.value("transferUrl", "");
+  if (!result.transferUrl.empty() && !allowedRedirect(result.request.url, result.transferUrl))
+    throw std::runtime_error("Invalid saved download continuation.");
+  result.libraryError = j.value("libraryError", "");
   result.publicationPrepared = j.value("publicationPrepared", false);
   if (j.contains("decision") && !j.at("decision").is_null()) {
     result.decision = j.at("decision").get<BmsSearchPendingArtifactDecision>();
@@ -135,15 +143,23 @@ Job readJob(const json &j) {
 bool transition(const Job &old, const Job &next) {
   if (old.request.url != next.request.url || requestJson(old.request) != requestJson(next.request) ||
       old.order != next.order || next.attempt < old.attempt) return false;
+  if (old.transferUrl != next.transferUrl &&
+      !(((old.state == State::Importing && !old.confirmationUsed && next.confirmationUsed &&
+           next.fallbackIndex == old.fallbackIndex) ||
+          (old.state == State::Transferring && next.fallbackIndex == old.fallbackIndex + 1 &&
+           next.fallbackIndex <= old.request.fallbackUrls.size() &&
+           next.transferUrl == old.request.fallbackUrls[next.fallbackIndex - 1])) &&
+        next.state == State::Queued && next.attempt == old.attempt + 1 &&
+        allowedRedirect(transferRequest(old).url, next.transferUrl))) return false;
   if (old.state == State::Cancelled) return next.state == State::Cancelled;
   if (old.state == State::Complete) return next.state == State::Complete;
   if (next.state == State::Cancelled) return true;
   if (next.state == old.state) return next.attempt == old.attempt;
   switch (old.state) {
   case State::Queued: return next.state == State::Transferring || next.state == State::Failed || next.state == State::NeedsAttention;
-  case State::Transferring: return next.state == State::Downloaded || next.state == State::Failed || next.state == State::NeedsAttention;
+  case State::Transferring: return (next.state == State::Queued && next.attempt == old.attempt + 1) || next.state == State::Downloaded || next.state == State::Failed || next.state == State::NeedsAttention;
   case State::Downloaded: return next.state == State::Importing || next.state == State::Failed || next.state == State::NeedsAttention;
-  case State::Importing: return next.state == State::Complete || next.state == State::NeedsAttention || next.state == State::Failed || next.state == State::Downloaded;
+  case State::Importing: return (next.state == State::Queued && next.attempt == old.attempt + 1) || next.state == State::Complete || next.state == State::NeedsAttention || next.state == State::Failed || next.state == State::Downloaded;
   case State::NeedsAttention: case State::Failed:
     return (next.state == State::Queued && next.attempt == old.attempt + 1) ||
            next.state == State::Importing || next.state == State::Downloaded || next.state == State::Complete;
@@ -152,6 +168,15 @@ bool transition(const Job &old, const Job &next) {
 }
 }
 
+Request transferRequest(const Job &job) {
+  auto request = job.request;
+  if (!job.transferUrl.empty()) {
+    request.url = job.transferUrl;
+    if (httpOrigin(request.url) != httpOrigin(job.request.url))
+      std::erase_if(request.headers, [](const auto &header) { return header.first != "User-Agent"; });
+  }
+  return request;
+}
 bool validRequest(const Request &r) {
   if (!httpOrigin(r.url) || (!r.displayUrl.empty() && !httpOrigin(r.displayUrl)) ||
       r.title.size() > 1024 || r.storageIdentity.size() > 16384 ||
@@ -161,6 +186,8 @@ bool validRequest(const Request &r) {
   if (!r.expectedHash.empty() &&
       ((r.expectedHash.size() != 32 && r.expectedHash.size() != 64) ||
        !std::all_of(r.expectedHash.begin(), r.expectedHash.end(), [](unsigned char c) { return std::isxdigit(c); }))) return false;
+  if (r.fallbackUrls.size() > 2 || (!r.headers.empty() && !r.fallbackUrls.empty())) return false;
+  for (const auto &url : r.fallbackUrls) if (!allowedRedirect(r.url, url)) return false;
   std::vector<std::string> seen;
   for (const auto &[name, value] : r.headers) {
     if ((name != "Cookie" && name != "Referer" && name != "User-Agent") || value.size() > 32768 ||

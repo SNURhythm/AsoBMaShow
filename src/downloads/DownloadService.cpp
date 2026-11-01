@@ -1,6 +1,7 @@
 #include "DownloadService.h"
 #include "DownloadPlatform.h"
 #include "DownloadImport.h"
+#include "../bms_search/GoogleDriveDriver.h"
 #include <exception>
 
 namespace downloads {
@@ -17,6 +18,14 @@ std::shared_ptr<DownloadCoordinator> service() {
       hooks.cancelTransfer = platform::cancelTransfer;
       hooks.finishActivity = platform::finishActivity;
       hooks.reportProgress = platform::reportProgress;
+      hooks.cleanup = cleanupArchiveJob;
+      hooks.useFallback = [](const Job &job, long status) {
+        return asobmshow::bms_search::isPixelDrainApiError(transferRequest(job).url, status);
+      };
+      hooks.continueTransfer = [](const Job &job, const auto &file) {
+        return asobmshow::bms_search::GoogleDriveDriver::warningContinuation(
+            transferRequest(job).url, transferRequest(job).url, file).value_or("");
+      };
       hooks.importArchive = [root](const auto &job, const auto &archive, auto &cancelled, auto progress, auto prepare) {
         return importArchiveJob(job, archive, root / job.id, cancelled, std::move(progress), std::move(prepare));
       };
@@ -30,8 +39,20 @@ std::shared_ptr<DownloadCoordinator> service() {
   return owner;
 }
 namespace {
+std::mutex foregroundMutex;
+bool gameForeground = false, browserForeground = false;
 std::mutex presentationMutex;
 std::optional<std::string> requestedPresentation;
+}
+void setGameForeground(bool foreground) {
+  std::lock_guard lock(foregroundMutex);
+  gameForeground = foreground;
+  service()->setForeground(gameForeground || browserForeground);
+}
+void setBrowserForeground(bool foreground) {
+  std::lock_guard lock(foregroundMutex);
+  browserForeground = foreground;
+  service()->setForeground(gameForeground || browserForeground);
 }
 void requestDownloadsPresentation(const std::string &id) {
   std::lock_guard lock(presentationMutex);

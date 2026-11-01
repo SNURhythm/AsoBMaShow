@@ -50,6 +50,7 @@
 #include "RecordFileActions.h"
 #include "ReplayRecordTask.h"
 #include "FindBmsModal.h"
+#include "DownloadsModal.h"
 #include "ChartReadmeModal.h"
 #include "ArchiveUnzipModal.h"
 #include <array>
@@ -369,6 +370,7 @@ private:
   Button *tasksCloseButton = nullptr;
   TextView *tasksCloseButtonText = nullptr;
   std::unique_ptr<FindBmsModal> findBmsModal_;
+  std::unique_ptr<DownloadsModal> downloadsModal_;
   std::unique_ptr<ChartReadmeModal> readmeModal_;
   TextView *readyGaugeText = nullptr;
   TextView *readySpeedText = nullptr;

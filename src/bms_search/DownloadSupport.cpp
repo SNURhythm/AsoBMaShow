@@ -672,6 +672,7 @@ static bool downloadAndExtractArchiveAttempt(
     }
     downloads::Request request;
     request.url = downloadUrl;
+    request.fallbackUrls = options.fallbackDownloadUrls;
     request.displayUrl = result.downloadUrl;
     request.title = preferredName;
     request.archiveName = preferredName;

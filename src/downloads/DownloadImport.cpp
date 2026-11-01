@@ -46,6 +46,11 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
       }, &removed);
 }
 }
+void cleanupArchiveJob(const Job &job) {
+  // Derive the owned directory from the job ID, never from a persisted path.
+  if (job.publicationPrepared) throw std::runtime_error("Recover the pending installation before removing it.");
+  std::filesystem::remove_all(importRoot(job));
+}
 BmsSearchResult importArchiveJob(const Job &job, const std::filesystem::path &archive,
     const std::filesystem::path &privateJobRoot, std::atomic_bool &cancelled,
     BmsSearchDownloadProgressCallback progress, BeforePublication beforePublication) {

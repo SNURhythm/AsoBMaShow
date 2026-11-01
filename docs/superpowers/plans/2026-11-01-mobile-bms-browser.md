@@ -100,3 +100,15 @@
 - [ ] Exercise available devices for background/lock, connectivity interruption, cancellation, process recovery, browser handoff and archive import. Record unavailable hardware coverage honestly; no deployment.
 - [ ] Obtain one fresh whole-branch code review against the approved spec, resolve material findings, and run appropriate regressions.
 - [ ] Commit and push verified task changes to the existing branch; update/link PR #174 with the final scope and evidence.
+
+## Execution record
+
+- Tasks 1 and 2 implemented and committed as `3fba811e` and `fa52b380`.
+- Tasks 3–5 implemented; Android native compilation and desktop integration pass.
+  Final mobile packaging/runtime checks are still in progress.
+- Task 6 fresh whole-branch review completed. Its four Important findings have
+  regression tests and fixes; no Critical or Minor findings remain from that review.
+- The user requested a push immediately after Android installation and before
+  device testing, so iOS testing can proceed in parallel. This intermediate push
+  does not claim completed physical-device verification.
+- Evidence and remaining platform coverage: [verification record](../../testing/mobile-bms-downloads-2026-11-01.md).

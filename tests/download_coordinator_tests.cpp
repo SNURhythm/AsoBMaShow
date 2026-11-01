@@ -1,4 +1,5 @@
 #include "downloads/DownloadCoordinator.h"
+#include "downloads/DownloadLibraryDelivery.h"
 #include <cassert>
 #include <condition_variable>
 #include <fstream>
@@ -66,9 +67,156 @@ int main() {
     assert(service.jobs()[1].state == State::Complete);
     assert(service.readyForLibrary().size() == 1);
     const auto id = service.readyForLibrary()[0].id;
-    assert(service.acknowledgeLibrary(id));
+    int enqueued = 0;
+    LibraryDeliveryState status = LibraryDeliveryState::Pending;
+    DownloadLibraryDelivery delivery([&](const Job &) { return ++enqueued; },
+        [&](std::uint64_t) { return status; });
+    delivery.poll(service); delivery.poll(service);
+    assert(enqueued == 1 && service.readyForLibrary().size() == 1);
+    status = LibraryDeliveryState::Failed;
+    delivery.poll(service); delivery.poll(service);
+    assert(enqueued == 1 && !service.get(id)->libraryError.empty());
+    assert(service.retry(id));
+    status = LibraryDeliveryState::Pending;
+    delivery.poll(service);
+    assert(enqueued == 2);
+    status = LibraryDeliveryState::Complete;
+    delivery.poll(service);
     assert(service.readyForLibrary().empty());
     assert(!service.cancel(id));
+  }
+  {
+    DownloadCoordinator service(root, hooks);
+    service.setForeground(true);
+    const auto job = service.submit(request(root));
+    service.interrupt(job.id, "Runtime expired");
+    assert(service.get(job.id)->state == State::Failed);
+    assert(!service.isCurrentTransfer(job.id, job.attempt));
+    assert(service.retry(job.id));
+    assert(service.get(job.id)->attempt == job.attempt + 1);
+    service.cancel(job.id);
+  }
+  {
+    std::promise<void> entered, released;
+    auto wait = released.get_future();
+    hooks.importArchive = [&](const Job &, const auto &, std::atomic_bool &cancelled, auto, auto) {
+      entered.set_value();
+      wait.wait();
+      assert(cancelled);
+      return BmsSearchResult{.status = BmsSearchResult::Status::DownloadFailed};
+    };
+    DownloadCoordinator service(root, hooks);
+    service.setForeground(true);
+    const auto job = service.submit(request(root));
+    const auto file = root / "system-completed";
+    std::ofstream(file) << "archive";
+    service.acceptFile(job.id, job.attempt, file);
+    service.enableImports(true);
+    assert(entered.get_future().wait_for(5s) == std::future_status::ready);
+    service.interrupt(job.id, "Runtime expired");
+    released.set_value();
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (service.get(job.id)->state == State::Importing && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    assert(service.get(job.id)->state == State::NeedsAttention);
+    assert(std::filesystem::is_regular_file(service.archivePath(job.id)));
+  }
+  {
+    CoordinatorHooks follow;
+    follow.startTransfer = [](const Job &, const auto &) { return std::string{}; };
+    follow.continueTransfer = [](const Job &, const auto &) { return std::string("https://files.example/confirmed.zip"); };
+    follow.importArchive = [](const Job &, const auto &, auto &, auto, auto) {
+      assert(false && "confirmation response must not enter the archive importer");
+      return BmsSearchResult{};
+    };
+    DownloadCoordinator service(root / "continuation", follow);
+    service.setForeground(true);
+    auto input = request(root);
+    input.headers = {{"Cookie", "session=private"}};
+    const auto job = service.submit(input);
+    const auto file = root / "confirmation";
+    std::ofstream(file) << "confirmation page";
+    assert(service.acceptFile(job.id, 0, file));
+    service.enableImports(true);
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (service.get(job.id)->attempt == 0 && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    const auto continued = service.get(job.id);
+    assert(continued->attempt == 1);
+    assert(continued->transferUrl == "https://files.example/confirmed.zip");
+    assert(transferRequest(*continued).headers.empty());
+    assert(continued->request.url == input.url);
+    assert(!service.acceptFile(job.id, 0, file));
+    service.cancel(job.id);
+  }
+  {
+    CoordinatorHooks fallback;
+    fallback.useFallback = [](const Job &job, long status) {
+      return transferRequest(job).url.starts_with("https://pixeldra.in/api/") && status >= 400 && status < 600;
+    };
+    fallback.startTransfer = [](const Job &, const auto &) { return std::string{}; };
+    DownloadCoordinator service(root / "fallback", fallback);
+    service.setForeground(true);
+    auto input = request(root);
+    input.url = "https://pixeldra.in/api/file/abcd1234?download";
+    input.fallbackUrls = {"https://files.example/song.zip"};
+    const auto job = service.submit(input);
+    service.setForeground(false);
+    service.transferFailed(job.id, 0, "HTTP rejected", 403);
+    assert(service.get(job.id)->state == State::Queued);
+    assert(service.get(job.id)->attempt == 1);
+    assert(transferRequest(*service.get(job.id)).url == input.fallbackUrls[0]);
+    service.setForeground(true);
+    assert(service.get(job.id)->state == State::Transferring);
+    service.transferFailed(job.id, 0, "stale", 403);
+    assert(service.get(job.id)->state == State::Transferring);
+    service.transferFailed(job.id, 1, "unrelated HTTP error", 403);
+    assert(service.get(job.id)->state == State::Failed);
+  }
+  {
+    CoordinatorHooks handoff;
+    int starts = 0;
+    handoff.startTransfer = [&](const Job &, const auto &) { ++starts; return std::string{}; };
+    auto directory = root / "handoff-failure";
+    DownloadCoordinator service(directory, handoff);
+    service.setForeground(true);
+    const auto job = service.submit(request(root));
+    auto manifest = directory / "jobs.json";
+    std::filesystem::rename(manifest, directory / "saved.json");
+    std::filesystem::create_directory(manifest); // force atomic manifest replacement to fail
+    auto file = root / "handoff-complete";
+    std::ofstream(file) << "archive";
+    try { service.acceptFile(job.id, 0, file); } catch (const std::exception &) {}
+    assert(service.get(job.id)->state == State::Failed);
+    assert(!service.isCurrentTransfer(job.id, 0));
+    assert(std::filesystem::exists(service.archivePath(job.id)));
+    std::filesystem::remove(manifest);
+    std::filesystem::rename(directory / "saved.json", manifest);
+    assert(service.retry(job.id));
+    assert(service.get(job.id)->state == State::Downloaded);
+    assert(starts == 1 && service.error().empty());
+  }
+  {
+    CoordinatorHooks mismatch;
+    bool cleaned = false;
+    mismatch.startTransfer = [](const Job &, const auto &) { return std::string{}; };
+    mismatch.cleanup = [&](const Job &) { cleaned = true; };
+    mismatch.importArchive = [](const Job &, const auto &, auto &, auto, auto) {
+      return BmsSearchResult{.status = BmsSearchResult::Status::HashMismatch,
+          .pendingArtifact = BmsSearchPendingArtifact{}};
+    };
+    DownloadCoordinator service(root / "cancel-artifact", mismatch);
+    service.setForeground(true);
+    const auto job = service.submit(request(root));
+    auto file = root / "mismatch-file"; std::ofstream(file) << "archive";
+    service.acceptFile(job.id, 0, file); service.enableImports(true);
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (service.get(job.id)->state != State::NeedsAttention && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    assert(service.get(job.id)->state == State::NeedsAttention);
+    assert(service.cancel(job.id));
+    assert(service.forget(job.id) && cleaned);
+    assert(!service.get(job.id));
   }
   std::filesystem::remove_all(root);
 }

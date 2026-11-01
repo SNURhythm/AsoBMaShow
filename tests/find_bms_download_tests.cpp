@@ -1596,6 +1596,7 @@ int main(int argc, char **argv) {
   testRunningDetailFollowsProgress();
   testProviderSelectionStopsAfterAFileIsFound();
   testChosenProviderRetriesOnlyOnUserDecision();
+  testQueuedPixelDrainRetainsAlternativeSource();
   testPixelDrainApiErrorDownloadsFromNextProvider();
   testPixelDrainApiErrorsContinueThroughRemainingSources();
   testApiWaterfallDoesNotOverrideCancellationOrOtherFailures();
@@ -1604,6 +1605,7 @@ int main(int argc, char **argv) {
   testUnknownSizeStreamIsBounded();
 #endif
   testDownloadAttemptExtractionCleanup();
+  testGoogleDriveContinuationStaysOnSelectedFile();
   testResolvedDownloadHandoffDoesNotStartSceneOwnedTransfer();
   testDurableDownloadImportsExistingFileWithoutTransport();
   testStorageNamesDistinguishSameNamedPackages();

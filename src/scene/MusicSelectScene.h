@@ -10,6 +10,7 @@
 #include "RecordFileActions.h"
 #include "ArchiveUnzipModal.h"
 #include "FindBmsModal.h"
+#include "DownloadsModal.h"
 #include "ChartReadmeModal.h"
 #include "../ReplayVideoExportTypes.h"
 #include "../replay/ReplayExportJob.h"
@@ -369,6 +370,7 @@ private:
 
   std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
   std::unique_ptr<FindBmsModal> findBmsModal_;
+  std::unique_ptr<DownloadsModal> downloadsModal_;
   std::unique_ptr<ChartReadmeModal> readmeModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;

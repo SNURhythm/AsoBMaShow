@@ -1,4 +1,5 @@
 #include "downloads/DownloadJobs.h"
+#include "downloads/BmsBrowser.h"
 #include "downloads/BrowserPolicy.h"
 #include <cassert>
 #include <fstream>
@@ -22,6 +23,21 @@ static Request request() {
 }
 
 int main() {
+  {
+    Request defaults;
+    defaults.libraryRoot = "/private/library";
+    defaults.skipUnarchiving = true;
+    auto request = makeBrowserRequest(defaults, "GET", "https://files.example/song.zip", "../song.zip", "Browser", "session=value", "https://site.example/private?q=secret");
+    assert(request && request->archiveName == "song.zip" && request->skipUnarchiving);
+    assert(request->libraryRoot == defaults.libraryRoot && request->expectedHash.empty());
+    assert(request->headers.back() == std::make_pair(std::string("Referer"), std::string("https://site.example/")));
+    auto sameSite = makeBrowserRequest(defaults, "GET", "https://site.example/song.zip", "song.zip", "", "", "https://site.example/page?q=allowed#private-fragment");
+    assert(sameSite && sameSite->headers.back().second == "https://site.example/page?q=allowed");
+    assert(!makeBrowserRequest(defaults, "POST", "https://files.example/song.zip", "song.zip", "", "", ""));
+    assert(!makeBrowserRequest(defaults, "GET", "blob:https://files.example/id", "song.zip", "", "", ""));
+    assert(!makeBrowserRequest(defaults, "GET", "https://files.example/song.zip", "song.zip", "", "bad\r\nHeader: injection", ""));
+  }
+
   const auto root = std::filesystem::temp_directory_path() /
       ("asobms-download-jobs-" + std::to_string(std::random_device{}()));
   {

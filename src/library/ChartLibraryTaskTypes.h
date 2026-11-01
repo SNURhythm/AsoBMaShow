@@ -23,6 +23,7 @@ enum class TaskKind {
   RefreshLibrary,
   RefreshPath,
   UpdateDifficultyTable,
+  ImportDifficultyTable,
   IndexDownloadedPath,
   AndroidImport
 };
@@ -43,6 +44,7 @@ struct TaskRequest {
   std::string iosBookmark;
   std::filesystem::path refreshPath;
   int tableId = 0;
+  std::string tableUrl;
   std::filesystem::path downloadedPath;
   std::vector<std::filesystem::path> downloadedRemovedPaths;
   main_menu_library::FindBmsChartIdentity downloadedTargetIdentity;

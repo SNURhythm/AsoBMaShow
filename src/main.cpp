@@ -9,6 +9,8 @@
 #include "ApplicationResultRecovery.h"
 #include "ApplicationStartup.h"
 #include "downloads/DownloadService.h"
+#include "downloads/DownloadLibraryDelivery.h"
+#include "downloads/BmsBrowser.h"
 #include "downloads/DownloadPlatform.h"
 #include "DifficultyTableImporter.h"
 #include "input/InputLifecycle.h"
@@ -795,11 +797,31 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   try {
     downloadService = downloads::service();
     downloads::platform::initialize();
-    downloadService->setForeground(!context.appInBackground.load());
+    downloads::setGameForeground(!context.appInBackground.load());
     downloadService->enableImports(true);
   } catch (const std::exception &) {
     SDL_Log("Saved downloads are unavailable; preserving their state for recovery.");
   }
+  downloads::DownloadLibraryDelivery downloadDelivery(
+      [&](const downloads::Job &job) -> std::uint64_t {
+        if (!context.chartLibraryTasks || !job.result) return 0;
+        return context.chartLibraryTasks->enqueue({
+            .kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
+            .title = i18n::message("menu.index_downloaded_bms.label"),
+            .downloadedPath = job.result->outputPath,
+            .downloadedRemovedPaths = job.result->removedPaths});
+      },
+      [&](std::uint64_t id) {
+        if (context.chartLibraryTasks) {
+          for (const auto &task : context.chartLibraryTasks->snapshot().tasks) {
+            if (task.id != id) continue;
+            if (task.status == chart_library_tasks::TaskStatus::Complete) return downloads::LibraryDeliveryState::Complete;
+            if (task.status == chart_library_tasks::TaskStatus::Failed) return downloads::LibraryDeliveryState::Failed;
+            return downloads::LibraryDeliveryState::Pending;
+          }
+        }
+        return downloads::LibraryDeliveryState::Missing;
+      });
   auto detachDownloads = makeScopeExit([&] {
     if (downloadService) downloadService->enableImports(false);
   });
@@ -1057,7 +1079,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const bool previous =
         context.appInBackground.exchange(background, std::memory_order_acq_rel);
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-    if (downloadService) downloadService->setForeground(!background);
+    if (downloadService) downloads::setGameForeground(!background);
 #endif
 #if TARGET_OS_IPHONE
     if (background) {
@@ -1095,11 +1117,22 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool &androidRenderSuspended = s_androidRenderSuspended;
   bool androidResumeResizePending = false;
 #endif
+  std::uint64_t nextDownloadDelivery = 0;
   while (!context.quitFlag) {
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-    if (downloadService) downloadService->enableImports(
-        !context.storageMaintenanceActive.load() &&
-        !context.backgroundTasksPausedForForegroundScene.load());
+    if (downloadService) {
+      downloadService->enableImports(!context.storageMaintenanceActive.load() &&
+          !context.backgroundTasksPausedForForegroundScene.load());
+      if (!context.storageMaintenanceActive.load() && SDL_GetTicks() >= nextDownloadDelivery) {
+        nextDownloadDelivery = SDL_GetTicks() + 250;
+        try { downloadDelivery.poll(*downloadService); } catch (...) {}
+        if (context.chartLibraryTasks) {
+          if (const auto table = downloads::takeBrowserTableImport())
+            context.chartLibraryTasks->enqueue({.kind = chart_library_tasks::TaskKind::ImportDifficultyTable,
+                .title = i18n::message("library.tasks.importing_tables"), .tableUrl = *table});
+        }
+      }
+    }
 #endif
     if (!context.appInBackground.load(std::memory_order_acquire))
       reminderCoordinator.update(context);

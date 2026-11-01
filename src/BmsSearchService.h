@@ -36,6 +36,7 @@ struct BmsSearchDownloadOptions {
   // Mobile admission transfers ownership after provider resolution, before any
   // scene-owned payload work. Empty retains the synchronous desktop workflow.
   std::function<std::string(const downloads::Request &)> enqueueDownload;
+  std::vector<std::string> fallbackDownloadUrls;
 };
 
 enum class BmsSearchPendingArtifactKind { Archive, ExtractedDirectory };

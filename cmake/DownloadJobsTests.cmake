@@ -2,6 +2,7 @@ add_executable(download_jobs_tests
     tests/download_jobs_tests.cpp
     src/downloads/DownloadJobs.cpp
     src/downloads/BrowserPolicy.cpp
+    src/downloads/BrowserRequest.cpp
     src/AtomicFile.cpp
     src/storage/StoragePolicy.cpp
 )

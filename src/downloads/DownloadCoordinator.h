@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <functional>
 #include <set>
+#include <map>
 #include <thread>
 
 namespace downloads {
@@ -14,6 +15,9 @@ struct CoordinatorHooks {
   std::function<void(const Job &)> cancelTransfer;
   std::function<void(const Job &, bool)> finishActivity;
   std::function<void(const Job &)> reportProgress;
+  std::function<std::string(const Job &, const std::filesystem::path &)> continueTransfer;
+  std::function<void(const Job &)> cleanup;
+  std::function<bool(const Job &, long)> useFallback;
   std::function<BmsSearchResult(const Job &, const std::filesystem::path &,
       std::atomic_bool &, BmsSearchDownloadProgressCallback, BeforePublication)> importArchive;
   std::function<BmsSearchResult(const Job &, BmsSearchPendingArtifactDecision,
@@ -36,6 +40,7 @@ public:
   void enableImports(bool enabled);
   void setContinuedProcessing(const std::string &id, bool permitted);
   bool cancel(const std::string &id);
+  void interrupt(const std::string &id, const std::string &message);
   bool retry(const std::string &id);
   bool decide(const std::string &id, BmsSearchPendingArtifactDecision decision);
   bool forget(const std::string &id);
@@ -45,9 +50,10 @@ public:
   bool acceptFile(const std::string &id, std::uint64_t attempt,
                   const std::filesystem::path &completedFile);
   void transferFailed(const std::string &id, std::uint64_t attempt,
-                      const std::string &message);
+                      const std::string &message, long httpStatus = 0);
   std::vector<Job> readyForLibrary() const;
   bool acknowledgeLibrary(const std::string &id);
+  bool setLibraryError(const std::string &id, const std::string &message);
 private:
   void pumpTransfers();
   void importLoop();
@@ -59,8 +65,9 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable changed_;
   bool foreground_ = false, importsEnabled_ = false, stopping_ = false;
-  std::set<std::string> continued_;
+  std::set<std::string> continued_, explicitlyInterrupted_, failedHandoffs_;
   std::string activeImport_;
+  std::map<std::string, BmsSearchDownloadProgress> importProgress_;
   std::string persistenceError_;
   std::atomic_bool interrupted_{false};
   std::jthread worker_;

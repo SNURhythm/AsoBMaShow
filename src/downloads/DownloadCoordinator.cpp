@@ -1,4 +1,5 @@
 #include "DownloadCoordinator.h"
+#include "BrowserPolicy.h"
 #include "../AtomicFile.h"
 #include <algorithm>
 #include <fstream>
@@ -45,8 +46,29 @@ Job DownloadCoordinator::submit(Request request) {
   pumpTransfers();
   return job;
 }
-std::vector<Job> DownloadCoordinator::jobs() const { return store_.jobs(); }
-std::optional<Job> DownloadCoordinator::get(const std::string &id) const { return store_.get(id); }
+std::vector<Job> DownloadCoordinator::jobs() const {
+  std::lock_guard lock(mutex_);
+  auto jobs = store_.jobs();
+  for (auto &job : jobs) {
+    if (failedHandoffs_.contains(job.id)) {
+      job.state = State::Failed;
+      job.message = persistenceError_;
+    }
+    if (job.state != State::Importing) continue;
+    if (const auto progress = importProgress_.find(job.id); progress != importProgress_.end()) {
+      job.message = progress->second.message;
+      job.downloadedBytes = progress->second.downloadedBytes;
+      job.totalBytes = progress->second.totalBytes;
+    }
+  }
+  return jobs;
+}
+std::optional<Job> DownloadCoordinator::get(const std::string &id) const {
+  std::lock_guard lock(mutex_);
+  auto job = store_.get(id);
+  if (job && failedHandoffs_.contains(id)) { job->state = State::Failed; job->message = persistenceError_; }
+  return job;
+}
 std::string DownloadCoordinator::error() const { std::lock_guard lock(mutex_); return persistenceError_; }
 std::filesystem::path DownloadCoordinator::archivePath(const std::string &id) const {
   const auto job = store_.get(id);
@@ -91,8 +113,11 @@ bool DownloadCoordinator::cancel(const std::string &id) {
     auto job = store_.get(id);
     if (!job || job->state == State::Cancelled || job->state == State::Complete || job->publicationPrepared) return false;
     job->state = State::Cancelled;
+    job->result.reset();
+    job->decision.reset();
     job->message = "Download cancelled.";
     if (!store_.update(*job)) return false;
+    failedHandoffs_.erase(id);
     cancelled = *job;
     if (activeImport_ == id) interrupted_ = true;
     continued_.erase(id);
@@ -103,12 +128,35 @@ bool DownloadCoordinator::cancel(const std::string &id) {
   pumpTransfers();
   return true;
 }
+void DownloadCoordinator::interrupt(const std::string &id, const std::string &message) {
+  std::optional<Job> interrupted;
+  {
+    std::lock_guard lock(mutex_);
+    auto job = store_.get(id);
+    if (!job || terminal(job->state)) return;
+    continued_.erase(id);
+    explicitlyInterrupted_.insert(id);
+    if (activeImport_ == id) interrupted_ = true;
+    else job->state = job->state == State::Transferring ? State::Failed : State::NeedsAttention;
+    job->message = message;
+    if (store_.update(*job)) interrupted = *job;
+  }
+  if (interrupted) {
+    if (hooks_.cancelTransfer) hooks_.cancelTransfer(*interrupted);
+    finishActivity(*interrupted, false);
+  }
+  changed_.notify_all();
+}
 bool DownloadCoordinator::retry(const std::string &id) {
   {
     std::lock_guard lock(mutex_);
     auto job = store_.get(id);
+    if (foreground_ && job && job->state == State::Complete && !job->libraryAcknowledged && !job->libraryError.empty()) {
+      job->libraryError.clear();
+      return store_.update(*job);
+    }
     if (!foreground_ || !job || activeImport_ == id ||
-        (job->state != State::Failed && job->state != State::NeedsAttention &&
+        (!failedHandoffs_.contains(id) && job->state != State::Failed && job->state != State::NeedsAttention &&
          !(!persistenceError_.empty() && (job->state == State::Downloaded || job->state == State::Importing)))) return false;
     if (job->publicationPrepared && job->result && job->result->pendingArtifact) {
       job->decision = BmsSearchPendingArtifactDecision::Keep;
@@ -124,7 +172,9 @@ bool DownloadCoordinator::retry(const std::string &id) {
     }
     job->message.clear();
     if (!store_.update(*job)) return false;
+    failedHandoffs_.erase(id);
     persistenceError_.clear();
+    explicitlyInterrupted_.erase(id);
   }
   changed_.notify_all();
   pumpTransfers();
@@ -146,9 +196,22 @@ bool DownloadCoordinator::decide(const std::string &id, BmsSearchPendingArtifact
 bool DownloadCoordinator::forget(const std::string &id) {
   std::lock_guard lock(mutex_);
   if (activeImport_ == id) return false;
+  auto job = store_.get(id);
+  if (job && failedHandoffs_.contains(id)) {
+    job->state = State::Cancelled;
+    job->result.reset();
+    if (!store_.update(*job)) return false;
+    failedHandoffs_.erase(id);
+    if (failedHandoffs_.empty()) persistenceError_.clear();
+  }
+  if (!job || !terminal(job->state) || job->publicationPrepared ||
+      (job->state == State::Complete && !job->libraryAcknowledged)) return false;
+  if (hooks_.cleanup) hooks_.cleanup(*job);
   return store_.forget(id);
 }
 bool DownloadCoordinator::isCurrentTransfer(const std::string &id, std::uint64_t attempt) const {
+  std::lock_guard lock(mutex_);
+  if (failedHandoffs_.contains(id)) return false;
   const auto job = store_.get(id);
   return job && job->state == State::Transferring && job->attempt == attempt;
 }
@@ -170,7 +233,7 @@ void DownloadCoordinator::transferProgress(const std::string &id, std::uint64_t 
 }
 bool DownloadCoordinator::acceptFile(const std::string &id, std::uint64_t attempt,
                                      const std::filesystem::path &completedFile) {
-  {
+  try {
     std::lock_guard lock(mutex_);
     auto job = store_.get(id);
     if (!job || job->state != State::Transferring || job->attempt != attempt || !completeFile(completedFile)) return false;
@@ -188,19 +251,47 @@ bool DownloadCoordinator::acceptFile(const std::string &id, std::uint64_t attemp
     job->message = "Download complete. Ready to import.";
     if (!store_.update(*job)) return false;
   }
+  catch (...) {
+    std::optional<Job> failed;
+    {
+      std::lock_guard lock(mutex_);
+      const auto job = store_.get(id);
+      if (job && job->attempt == attempt && job->state == State::Transferring) {
+        failedHandoffs_.insert(id);
+        persistenceError_ = "Could not retain download state. Free storage and retry; completed files will be recovered.";
+        failed = job;
+      }
+    }
+    if (failed) finishActivity(*failed, false);
+    throw;
+  }
   changed_.notify_all();
   return true;
 }
 void DownloadCoordinator::transferFailed(const std::string &id, std::uint64_t attempt,
-                                         const std::string &message) {
+                                         const std::string &message, long httpStatus) {
   std::optional<Job> failed;
   {
     std::lock_guard lock(mutex_);
     auto job = store_.get(id);
     if (!job || job->state != State::Transferring || job->attempt != attempt) return;
-    job->state = State::Failed;
+    const auto failedAttempt = *job;
+    if (hooks_.useFallback && hooks_.useFallback(*job, httpStatus) &&
+        job->fallbackIndex < job->request.fallbackUrls.size()) {
+      job->transferUrl = job->request.fallbackUrls[job->fallbackIndex++];
+      ++job->attempt;
+      job->state = State::Queued;
+      job->confirmationUsed = false;
+      job->downloadedBytes = job->totalBytes = 0;
+    } else job->state = State::Failed;
     job->message = message.substr(0, 8192);
-    if (store_.update(*job)) failed = job;
+    try {
+      if (store_.update(*job)) failed = failedAttempt;
+    } catch (...) {
+      failedHandoffs_.insert(id);
+      persistenceError_ = "Could not retain download state. Free storage and retry; completed files will be recovered.";
+      failed = failedAttempt;
+    }
   }
   if (failed) finishActivity(*failed, false);
   pumpTransfers();
@@ -217,6 +308,13 @@ bool DownloadCoordinator::acknowledgeLibrary(const std::string &id) {
   auto job = store_.get(id);
   if (!job || job->state != State::Complete) return false;
   job->libraryAcknowledged = true;
+  return store_.update(*job);
+}
+bool DownloadCoordinator::setLibraryError(const std::string &id, const std::string &message) {
+  std::lock_guard lock(mutex_);
+  auto job = store_.get(id);
+  if (!job || job->state != State::Complete || job->libraryAcknowledged) return false;
+  job->libraryError = message.substr(0, 8192);
   return store_.update(*job);
 }
 void DownloadCoordinator::pumpTransfers() {
@@ -284,18 +382,30 @@ void DownloadCoordinator::importLoop() {
       interrupted_ = false;
     }
     BmsSearchResult result;
+    std::string continuation;
     try {
       const BeforePublication prepare = [this, id = job.id](const auto &artifact) { return preparePublication(id, artifact); };
       const auto progress = [this, id = job.id](const BmsSearchDownloadProgress &event) {
         auto current = store_.get(id);
         if (!current) return;
+        {
+          std::lock_guard lock(mutex_);
+          importProgress_[id] = event;
+        }
         current->message = event.message;
         current->downloadedBytes = event.downloadedBytes;
         current->totalBytes = event.totalBytes;
         // Import progress is transient; do not fsync once per archive member.
         if (hooks_.reportProgress) hooks_.reportProgress(*current);
       };
-      if (job.decision && job.result && job.result->pendingArtifact && hooks_.resolveArtifact)
+      if (!job.confirmationUsed && !job.decision && hooks_.continueTransfer)
+        continuation = hooks_.continueTransfer(job, store_.archivePath(job.id, job.attempt));
+      if (!continuation.empty() && !allowedRedirect(transferRequest(job).url, continuation))
+        throw std::runtime_error("Unsafe download continuation.");
+      if (!continuation.empty()) {
+        // The coordinator persists a new attempt before asking the OS to fetch
+        // it. No importer-owned network work or replay of the original request.
+      } else if (job.decision && job.result && job.result->pendingArtifact && hooks_.resolveArtifact)
         result = hooks_.resolveArtifact(job, *job.decision, interrupted_, prepare);
       else result = hooks_.importArchive(job, store_.archivePath(job.id, job.attempt), interrupted_, progress, prepare);
     } catch (const std::exception &) {
@@ -310,7 +420,14 @@ void DownloadCoordinator::importLoop() {
         success = !result.outputPath.empty() ||
             (job.decision == BmsSearchPendingArtifactDecision::Delete && !result.pendingArtifact &&
              result.status != BmsSearchResult::Status::DownloadFailed);
-        if (success) {
+        if (!continuation.empty() && !interrupted_) {
+          current->transferUrl = continuation;
+          current->confirmationUsed = true;
+          ++current->attempt;
+          current->state = State::Queued;
+          current->downloadedBytes = current->totalBytes = 0;
+          current->result.reset();
+        } else if (success) {
           current->state = State::Complete;
           current->publicationPrepared = false;
           current->result = result;
@@ -322,7 +439,7 @@ void DownloadCoordinator::importLoop() {
           current->state = State::NeedsAttention;
           current->result = result;
         } else {
-          current->state = interrupted_ ? State::Downloaded : State::NeedsAttention;
+          current->state = interrupted_ && !explicitlyInterrupted_.contains(job.id) ? State::Downloaded : State::NeedsAttention;
           current->result.reset();
         }
         current->message = interrupted_ && !success ? "Import paused. Retry when ready." : result.message;
@@ -334,6 +451,7 @@ void DownloadCoordinator::importLoop() {
           persistenceError_ = "Could not save import completion. Free storage and retry to recover.";
         }
       }
+      importProgress_.erase(job.id);
       activeImport_.clear();
       continued_.erase(job.id);
     }

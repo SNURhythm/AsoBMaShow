@@ -7,6 +7,8 @@
 #include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
+#include "../downloads/DownloadService.h"
+#include "../downloads/BmsBrowser.h"
 #include "KomboScene.h"
 #include "ChartGoalsScene.h"
 #include "FolderGoalsScene.h"
@@ -552,6 +554,9 @@ void MusicSelectScene::init() {
         preloadedPreviewCache_ = std::move(previewCache);
         preloadedChart_ = std::move(chart);
       });
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  downloadsModal_ = std::make_unique<DownloadsModal>(modalLayer_);
+#endif
   addView(modalLayer_);
   startInputListening();
 }
@@ -1437,6 +1442,7 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
   refreshToolbarAvailability();
+  if (downloadsModal_ && !downloadsModal_->handleEvents(event)) return {};
   if (readmeModal_ && !readmeModal_->handleEvents(event)) return {};
   if (selectorInputBlocked()) resetLogicalInput();
   if (rankingsModal_ && rankingsModal_->isOpen()) {
@@ -2968,6 +2974,7 @@ bool MusicSelectScene::selectorInputBlocked() const {
   return launching_ || (revealContextMenu_ && revealContextMenu_->isOpen()) ||
          (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
          (findBmsModal_ && findBmsModal_->isVisible()) ||
+         (downloadsModal_ && downloadsModal_->isVisible()) ||
          (readmeModal_ && readmeModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
          (rankingsModal_ && rankingsModal_->isOpen()) ||
@@ -3386,6 +3393,13 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  if (downloadsModal_) {
+    if (downloads::takeDownloadsPresentation()) downloadsModal_->show();
+    downloadsModal_->resize(rendering::window_width, rendering::window_height);
+    downloadsModal_->update();
+  }
+#endif
   context.refreshAudioTimingProfile();
   if (!context.pendingKomboNotificationProfile.empty() &&
       toolbarControlAvailable(MusicSelectToolbarControl::Kombo)) {
@@ -3870,6 +3884,16 @@ void MusicSelectScene::ensureToolbarContextMenu() {
               if (toolbarControlAvailable(Control::Tasks)) openTasks();
             } else if (actionId == "ir-uploads") {
               if (toolbarControlAvailable(Control::IrUploads)) openIrUploads();
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+            } else if (actionId == "downloads") {
+              if (downloadsModal_) downloadsModal_->show();
+            } else if (actionId == "browse-bms") {
+              downloads::Request defaults;
+              defaults.libraryRoot = findBmsDownloadRoot(chartSession_ ? &*chartSession_ : nullptr);
+              defaults.skipUnarchiving = context.settings.findBmsSkipUnarchivingForNonSolidArchives;
+              defaults.storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences);
+              downloads::configureBrowser(std::move(defaults)); downloads::openBrowser();
+#endif
             } else if (actionId == "settings") {
               if (toolbarControlAvailable(Control::Settings)) openSettings();
             }
@@ -3912,6 +3936,10 @@ void MusicSelectScene::openToolbarMenu(MusicSelectToolbarControl control) {
          .enabled = toolbarControlAvailable(Control::Tasks)},
         {.id = "ir-uploads", .label = i18n::message("menu.ir_uploads.label"),
          .enabled = toolbarControlAvailable(Control::IrUploads)},
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+        {.id = "browse-bms", .label = i18n::message("downloads.ui.browse"), .enabled = !context.storageMaintenanceActive.load()},
+        {.id = "downloads", .label = i18n::message("downloads.ui.title"), .enabled = true},
+#endif
         {.id = "settings", .label = i18n::message("menu.settings.label"),
          .enabled = toolbarControlAvailable(Control::Settings)},
     };
@@ -4188,7 +4216,13 @@ void MusicSelectScene::openDownload() {
             .storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences),
             .storagePauseRequested = [app = &context] {
               return app->backgroundTasksPausedForForegroundScene.load() || app->appInBackground.load();
-            }};
+            }
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+            , .enqueueDownload = [](const downloads::Request &request) {
+              return downloads::service()->submit(request).id;
+            }
+#endif
+          };
         },
         .filesReady = [this](const ChartMetaRecord &record, const BmsSearchResult &result,
                              bool matched) {
@@ -4210,6 +4244,11 @@ void MusicSelectScene::openDownload() {
                 .title = i18n::message("menu.refresh_list.label"),
             });
           }
+        },
+        .downloadQueued = [](const std::string &id) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+          downloads::requestDownloadsPresentation(id);
+#endif
         },
     });
   }

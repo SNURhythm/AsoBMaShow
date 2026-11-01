@@ -29,18 +29,36 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   return true;
 }
 
-bool GoogleDriveDriver::resolveWarningDownload(
-    const std::string &, const std::string &, const std::filesystem::path &,
-    std::atomic_bool &, std::string &, BmsSearchDownloadProgressCallback,
-    BmsSearchDownloadRetryCallback) {
-  return true;
-}
-
 #include "find_bms_download_attempt_methods.inc"
 
 }
 
 namespace {
+
+void testGoogleDriveContinuationStaysOnSelectedFile() {
+  using namespace asobmshow::bms_search;
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = createFindBmsDownloadAttempt("confirmation.html", error);
+  assert(attempt); cleanup.add(attempt->root);
+  const std::string original = "https://drive.google.com/uc?id=fixture-id&export=download";
+  const auto write = [&](const std::string &host, const std::string &id) {
+    std::ofstream(attempt->archivePath) << "<html><form action=\"https://" << host
+        << "/download\"><input name=\"id\" value=\"" << id
+        << "\"><input name=\"confirm\" value=\"yes\"></form></html>";
+  };
+  write("drive.usercontent.google.com", "fixture-id");
+  const auto next = GoogleDriveDriver::warningContinuation(original, original, attempt->archivePath);
+  assert(next && next->starts_with("https://drive.usercontent.google.com/download?") && next->find("id=fixture-id") != next->npos);
+  write("untrusted.invalid", "fixture-id");
+  assert(!GoogleDriveDriver::warningContinuation(original, original, attempt->archivePath));
+  write("drive.usercontent.google.com", "another-file");
+  assert(!GoogleDriveDriver::warningContinuation(original, original, attempt->archivePath));
+  write("drive.usercontent.google.com", "fixture-id");
+  assert(!GoogleDriveDriver::warningContinuation("https://untrusted.invalid/file", original, attempt->archivePath));
+  std::filesystem::resize_file(attempt->archivePath, 64ull * 1024 * 1024 * 1024);
+  assert(!GoogleDriveDriver::warningContinuation(original, original, attempt->archivePath));
+}
 
 void testResolvedDownloadHandoffDoesNotStartSceneOwnedTransfer() {
   using namespace asobmshow::bms_search;

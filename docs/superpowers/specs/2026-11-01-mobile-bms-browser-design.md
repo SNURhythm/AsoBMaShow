@@ -1,6 +1,6 @@
 # Mobile BMS browser and shared background downloads
 
-Status: proposed design, awaiting approval before implementation.
+Status: approved 2026-11-01; iOS redirect/runtime policy amended by the user during implementation.
 
 ## Intent and agreed scope
 
@@ -89,6 +89,17 @@ after callbacks are redelivered or a scene is recreated. Library refresh occurs
 on the application owner thread, independently of the original scene.
 
 ## iOS execution
+
+**Approved policy amendment:** Preserve legacy HTTP support and strict redirect
+checks. Apple's background URLSession always follows redirects, so HTTPS and
+session-bound transfers use a foreground session with continued processing on
+iOS 26+ when granted. They pause recoverably when runtime is withdrawn and need
+foreground continuation on older releases. The UI must disclose this before
+admission. Anonymous HTTP transfers can use background URLSession under the
+existing initial-URL security policy. Do not remove the app's legacy HTTP allowance
+or claim that strict HTTPS transfers run persistently after suspension.
+
+The implementation details below apply subject to that amendment.
 
 Use a stable background NSURLSession and delegate-based download tasks for
 replayable package transfers, including Find BMS. Reconnect persisted jobs to

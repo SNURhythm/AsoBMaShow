@@ -6402,6 +6402,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 $<TARGET_FILE:find_bms_metadata_transport_tests>)
     set_tests_properties(find_bms_metadata_loopback_transport_tests PROPERTIES
         TIMEOUT 55)
+    add_test(NAME android_background_download_tests
+        COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_background_download_tests.py)
+    set_tests_properties(android_background_download_tests PROPERTIES TIMEOUT 30)
     add_test(NAME android_metadata_post_cancellation_tests
         COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_metadata_post_cancellation_tests.py)
     set_tests_properties(android_metadata_post_cancellation_tests PROPERTIES TIMEOUT 60)
@@ -6462,7 +6465,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 --root ${CMAKE_SOURCE_DIR}
                 --output ${CMAKE_CURRENT_BINARY_DIR}/find_bms_provider_methods.inc
         DEPENDS tests/find_bms_provider_extract.py tests/gameplay_terminal_scene_extract.py
-                src/bms_search/PackageSourceDrivers.cpp src/BmsSearchService.cpp
+                src/bms_search/PackageSourceDrivers.cpp src/BmsSearchService.cpp src/bms_search/BmsSearchDriver.cpp
         VERBATIM
     )
     add_executable(find_bms_download_tests
@@ -6470,6 +6473,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
         tests/find_bms_download_tests.cpp
         src/bms_search/ArchiveSupport.cpp
+        src/bms_search/GoogleDriveDriver.cpp
         src/bms_search/Common.cpp
         src/bms_search/ArchiveDecision.cpp
         src/bms_search/DownloadedArchiveWorkflow.cpp

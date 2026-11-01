@@ -275,3 +275,19 @@ void testApiWaterfallDoesNotOverrideCancellationOrOtherFailures() {
   downloadFixtureHttpStatus = 0;
   downloadFixtureFailure = {};
 }
+
+void testQueuedPixelDrainRetainsAlternativeSource() {
+  using namespace asobmshow::bms_search;
+  providerLookups.clear(); providerDownloads.clear();
+  availableProvider = "Konmai";
+  providerUrlOverrides = {{"Ginger", "https://pixeldra.in/api/file/abcd1234?download"}};
+  std::optional<downloads::Request> queued;
+  BmsSearchDownloadOptions options;
+  options.enqueueDownload = [&](const downloads::Request &request) { queued = request; return "queued"; };
+  std::atomic_bool cancelled{false};
+  const auto result = BmsSearchService().findAndDownload("", std::string(32, 'a'), {}, cancelled, {}, {}, {}, options);
+  assert(result.queuedDownloadId == "queued" && queued);
+  assert(queued->fallbackUrls == std::vector<std::string>{"https://fixture.invalid/Konmai.zip"});
+  assert(providerDownloads.empty());
+  providerUrlOverrides.clear(); availableProvider.clear();
+}

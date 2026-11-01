@@ -4,6 +4,7 @@
 #include "../platform/SDLMainThread.h"
 #include "../i18n/Localization.h"
 #include "MainMenuScene.h"
+#include "../downloads/BmsBrowser.h"
 #include "../downloads/DownloadService.h"
 #include "play/QuickRetrySummary.h"
 #include "../view/PlayStartButton.h"
@@ -716,6 +717,7 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
       !archiveUnzipModal_->handleEvents(event)) {
     return {};
   }
+  if (downloadsModal_ && !downloadsModal_->handleEvents(event)) return {};
   if (readmeModal_ && !readmeModal_->handleEvents(event)) return {};
   if (findBmsModal_ != nullptr && !findBmsModal_->handleEvents(event)) {
     return {};
@@ -1333,6 +1335,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsAvailableWithoutTutorial_ = false;
   archiveUnzipModal_.reset();
   readmeModal_.reset();
+  downloadsModal_.reset();
   findBmsModal_.reset();
   // Initialize the view
   revealContextMenu.reset();
@@ -2108,6 +2111,29 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   });
   libraryActions->addView(addFolderButton);
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  TextView *browseText = nullptr;
+  auto *browseButton = makeSelectorButton(i18n::message("downloads.ui.browse"), 18, &browseText, ui_icons::kGlobe);
+  styleMenuButton(browseButton, browseText);
+  browseButton->setName("mainMenuBrowseBms");
+  browseButton->setOnClickListener([this] {
+    if (this->context.storageMaintenanceActive.load()) return;
+    downloads::Request defaults;
+    defaults.libraryRoot = preferredBmsDownloadRoot();
+    defaults.skipUnarchiving = this->context.settings.findBmsSkipUnarchivingForNonSolidArchives;
+    defaults.storagePolicy = storage_management::EffectiveDownloadPolicy(this->context.settings.storagePreferences);
+    downloads::configureBrowser(std::move(defaults));
+    downloads::openBrowser();
+  });
+  libraryActions->addView(browseButton);
+  TextView *downloadsText = nullptr;
+  auto *downloadsButton = makeSelectorButton(i18n::message("downloads.ui.title"), 18, &downloadsText, ui_icons::kDownload);
+  styleMenuButton(downloadsButton, downloadsText);
+  downloadsButton->setName("mainMenuDownloads");
+  downloadsButton->setOnClickListener([this] { if (downloadsModal_) downloadsModal_->show(); });
+  libraryActions->addView(downloadsButton);
+#endif
+
   TextView *folderGoalText=nullptr;
   auto *folderGoalButton=makeSelectorButton(i18n::message("folder_goals.ui.title"),18,&folderGoalText,0xf024);
   styleMenuButton(folderGoalButton,folderGoalText);
@@ -2616,6 +2642,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   buildFileActionsModal();
 #endif
   buildFindBmsModal();
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  downloadsModal_ = std::make_unique<DownloadsModal>(rootLayout);
+#endif
   buildUnzipProgressModal();
   rootLayout->addView(new SelectedGoalOverlay<ChartListItemView>([this]() -> ChartListItemView * {
     return activeTab_ == Tab::Play && !pendingTab_ && recyclerView && recyclerView->getVisible()
@@ -8897,6 +8926,12 @@ bool MainMenuScene::needsContinuousPresentation() const {
 }
 
 void MainMenuScene::update(float dt) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  if (downloadsModal_) {
+    if (downloads::takeDownloadsPresentation()) downloadsModal_->show();
+    downloadsModal_->update();
+  }
+#endif
   context.refreshAudioTimingProfile();
   if (!applyPendingTabSwitch()) return;
   if (!context.pendingKomboNotificationProfile.empty()) {
@@ -9061,6 +9096,7 @@ void MainMenuScene::renderScene() {
     resizeTasksModal();
     resizeParseLogModal();
   }
+  if (downloadsModal_ && layoutChanged) downloadsModal_->resize(rendering::window_width, rendering::window_height);
   if (findBmsModal_ != nullptr && (layoutChanged || findBmsModal_->isVisible())) {
     findBmsModal_->resize(rendering::window_width, rendering::window_height);
   }
@@ -9119,6 +9155,7 @@ void MainMenuScene::cleanupScene() {
     replayExportJob_.cancelAndWait();
   }
   readmeModal_.reset();
+  downloadsModal_.reset();
   findBmsModal_.reset();
   archiveUnzipModal_.reset();
   stopAndClearSelectedChart();

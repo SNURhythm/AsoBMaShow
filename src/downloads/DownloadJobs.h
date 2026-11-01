@@ -19,6 +19,7 @@ struct Request {
   std::string url, displayUrl, title, archiveName, expectedHash, storageIdentity;
   std::filesystem::path libraryRoot;
   std::vector<std::pair<std::string, std::string>> headers;
+  std::vector<std::string> fallbackUrls;
   bool skipUnarchiving = false;
   storage_management::StoragePolicy storagePolicy;
 };
@@ -30,12 +31,17 @@ struct Job {
   Request request;
   std::uint64_t downloadedBytes = 0, totalBytes = 0;
   std::string message;
+  std::uint32_t fallbackIndex = 0;
+  bool confirmationUsed = false;
+  std::string transferUrl; // Validated provider continuation; original selection remains immutable.
   std::optional<BmsSearchResult> result;
   bool libraryAcknowledged = false;
+  std::string libraryError;
   bool publicationPrepared = false;
   std::optional<BmsSearchPendingArtifactDecision> decision;
 };
 
+Request transferRequest(const Job &job);
 bool validRequest(const Request &request);
 bool terminal(State state);
 const char *stateName(State state);

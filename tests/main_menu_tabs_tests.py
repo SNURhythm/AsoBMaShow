@@ -237,7 +237,7 @@ struct MainMenuScene : Scene {
   void requestLibraryReload(bool includeFolders);
   View root;
   TextInputBox search;
-  View *rootLayout=&root, *searchBox=&search, *revealContextMenu=nullptr, *readmeModal_=nullptr;
+  View *rootLayout=&root, *searchBox=&search, *revealContextMenu=nullptr, *readmeModal_=nullptr, *downloadsModal_=nullptr;
   std::vector<View*> views;
   Preview *previewWorker_=nullptr;
   Recycler<ChartMetaRecord> songs;
@@ -864,7 +864,7 @@ constexpr int kRootPadding=8;
 struct MainMenuScene {
   View root, records, finder, archive, utility;
   View *rootLayout=&root, *recordsModal_=&records,
-       *findBmsModal_=&finder, *archiveUnzipModal_=&archive;
+       *findBmsModal_=&finder, *archiveUnzipModal_=&archive, *downloadsModal_=nullptr;
   View *tabLoadingOverlay_=nullptr, *playOptionsModal=nullptr,
        *overlayPortal=nullptr, *decideOverlay_=nullptr,
        *revealContextMenu=nullptr, *parseLogModalRoot=nullptr,

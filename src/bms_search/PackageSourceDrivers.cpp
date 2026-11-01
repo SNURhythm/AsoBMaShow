@@ -188,9 +188,21 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     }
     const std::string effectiveArchiveKey =
         archiveKey.empty() ? md5Hash : archiveKey;
+    auto downloadOptions = options;
+    // Only PixelDrain API rejection changes providers. Resolve a bounded set
+    // of alternatives during this foreground lookup, before durable admission.
+    if (options.enqueueDownload && isPixelDrainApiError(lookup.candidate->downloadUrl, 403)) {
+      for (auto next = &source + 1; next != sources.data() + sources.size(); ++next) {
+        const auto alternative = next->lookupByMd5(md5Hash, cancelled);
+        if (cancelled.load()) break;
+        if (!alternative.candidate || !alternative.candidate->supported) continue;
+        downloadOptions.fallbackDownloadUrls.push_back(alternative.candidate->downloadUrl);
+        if (!isPixelDrainApiError(alternative.candidate->downloadUrl, 403)) break;
+      }
+    }
     downloadAndExtractArchive(
         lookup.candidate->downloadUrl, lookup.candidate->originalUrl,
-        effectiveArchiveKey, libraryRoot, cancelled, progressCallback, options,
+        effectiveArchiveKey, libraryRoot, cancelled, progressCallback, downloadOptions,
         attempt, lookup.candidate->archiveName, effectiveArchiveKey);
 
     if (attempt.status == BmsSearchResult::Status::DownloadFailed &&
