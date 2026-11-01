@@ -95,7 +95,7 @@ void harder(Assignment &a, const Play &p, std::uint32_t choice) {
     }
     options.push_back(std::move(next));
   }
-  if (a.targetLamp >= 0 && a.targetLamp < 600) {
+  if (a.targetLamp >= 0 && clearLampOrder(a.targetLamp) < clearLampOrder(lamps.back())) {
     auto next = a;
     next.targetLamp = *std::upper_bound(lamps.begin(), lamps.end(), a.targetLamp,
         [](int left, int right) { return clearLampOrder(left) < clearLampOrder(right); });
