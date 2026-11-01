@@ -179,6 +179,8 @@ bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.U
   UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"Browse Sites" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
   [menu addAction:[UIAlertAction actionWithTitle:@"Manbow" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://manbow.nothing.sh/event/event.cgi"]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"GingerRush" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://gingerrush.com/"]; }]];
+  [menu addAction:[UIAlertAction actionWithTitle:@"BMS Search" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://bmssearch.net/"]; }]];
+  [menu addAction:[UIAlertAction actionWithTitle:@"horieyuuka.github.io" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://horieyuuka.github.io/"]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Downloads" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { downloads::requestDownloadsPresentation(); [self close]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Open externally" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self external:self.web.URL]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
