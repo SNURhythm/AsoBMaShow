@@ -115,9 +115,12 @@ inline int maximumClear(const GameplayScoreState &state, int remaining,
   if (state.assistClearMark) best = kClearTypeAssistedEasyClearRank;
   else if (state.lightAssistClearMark) best = kClearTypeLightAssistedEasyClearRank;
   const int total = state.stagePassedNotes + remaining;
+  const int projectedCombo = state.combo + remaining;
+  const int qualifyingCombo = state.gaugeRules().ruleset == GameplayRuleset::Beatoraja
+      ? projectedCombo : std::max(state.maxCombo, projectedCombo);
   const bool fullCombo = total > 0 && state.comboBreak == 0 &&
       projection.pendingClassicJudgements[Bad] == 0 &&
-      std::max(state.maxCombo, state.combo + remaining) >= total;
+      qualifyingCombo >= total;
   if (state.assistClearMark || state.lightAssistClearMark || !fullCombo) return best;
   const int good = state.judgeCount.at(Good) + projection.pendingClassicJudgements[Good];
   const int great = state.judgeCount.at(Great) + projection.pendingClassicJudgements[Great];
@@ -180,6 +183,10 @@ inline std::string failureReason(const GameplayScoreState &state, int totalNotes
   if (targets.score >= 0 && targets.lamp >= 0) return i18n::tr("gameplay.quick_retry.goals_unreachable");
   if (targets.lamp >= 0) {
     const int lamp = normalizeClearLamp(targets.lamp);
+    if (lamp >= kClearTypePerfectRank) {
+      return i18n::format("gameplay.quick_retry.target_unreachable",
+          {{"target", lamp >= kClearTypeMaxRank ? "MAX" : "PERFECT"}});
+    }
     if (lamp >= kClearTypeFullComboRank) return i18n::tr("gameplay.quick_retry.full_combo_unreachable");
     const char *gauge = lamp >= kClearTypeExHardClearRank ? "EX-HARD" :
         lamp >= kClearTypeHardClearRank ? "HARD" :
