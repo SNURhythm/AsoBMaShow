@@ -2,6 +2,8 @@
 
 #include "bms_search/ArchiveExtraction.h"
 #include "bms_search/GoogleDriveDriver.h"
+#include "downloads/DownloadJobs.h"
+#include "downloads/DownloadImport.h"
 #include "RAII.h"
 #include "../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
 
@@ -27,18 +29,61 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   return true;
 }
 
-bool GoogleDriveDriver::resolveWarningDownload(
-    const std::string &, const std::string &, const std::filesystem::path &,
-    std::atomic_bool &, std::string &, BmsSearchDownloadProgressCallback,
-    BmsSearchDownloadRetryCallback) {
-  return true;
-}
-
 #include "find_bms_download_attempt_methods.inc"
 
 }
 
 namespace {
+
+void testGoogleDriveContinuationStaysOnSelectedFile() {
+  using namespace asobmshow::bms_search;
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = createFindBmsDownloadAttempt("confirmation.html", error);
+  assert(attempt); cleanup.add(attempt->root);
+  const std::string original = "https://drive.google.com/uc?id=fixture-id&export=download";
+  const auto write = [&](const std::string &host, const std::string &id) {
+    std::ofstream(attempt->archivePath) << "<html><form action=\"https://" << host
+        << "/download\"><input name=\"id\" value=\"" << id
+        << "\"><input name=\"confirm\" value=\"yes\"></form></html>";
+  };
+  write("drive.usercontent.google.com", "fixture-id");
+  const auto next = GoogleDriveDriver::warningContinuation(original, original, attempt->archivePath);
+  assert(next && next->starts_with("https://drive.usercontent.google.com/download?") && next->find("id=fixture-id") != next->npos);
+  write("untrusted.invalid", "fixture-id");
+  assert(!GoogleDriveDriver::warningContinuation(original, original, attempt->archivePath));
+  write("drive.usercontent.google.com", "another-file");
+  assert(!GoogleDriveDriver::warningContinuation(original, original, attempt->archivePath));
+  write("drive.usercontent.google.com", "fixture-id");
+  assert(!GoogleDriveDriver::warningContinuation("https://untrusted.invalid/file", original, attempt->archivePath));
+  std::filesystem::resize_file(attempt->archivePath, 64ull * 1024 * 1024 * 1024);
+  assert(!GoogleDriveDriver::warningContinuation(original, original, attempt->archivePath));
+}
+
+void testResolvedDownloadHandoffDoesNotStartSceneOwnedTransfer() {
+  using namespace asobmshow::bms_search;
+  observedDownloadAttempt.clear();
+  std::optional<downloads::Request> submitted;
+  BmsSearchDownloadOptions options;
+  options.skipUnarchivingForNonSolidArchives = true;
+  options.storagePolicy.bga = storage_management::BgaAction::Delete;
+  options.enqueueDownload = [&](const downloads::Request &request) {
+    submitted = request;
+    return "durable-job";
+  };
+  std::atomic_bool cancelled = false;
+  BmsSearchResult result;
+  assert(downloadAndExtractArchive("https://fixture.invalid/package.zip", "", std::string(64, 'a'),
+      std::filesystem::temp_directory_path() / "library", cancelled, {}, options, result, "song.zip", "source-id"));
+  assert(submitted);
+  assert(submitted->expectedHash == std::string(64, 'a'));
+  assert(submitted->skipUnarchiving);
+  assert(submitted->storagePolicy.bga == storage_management::BgaAction::Delete);
+  assert(submitted->storageIdentity == "source-id");
+  assert(observedDownloadAttempt.empty());
+  assert(result.queuedDownloadId == "durable-job");
+  assert(result.outputPath.empty());
+}
 
 struct ExtractionZipMember {
   std::string name;
@@ -308,6 +353,91 @@ void testDownloadAttemptExtractionCleanup() {
       assert(result.message == "Lookup cancelled.");
     } else {
       assert(result.message.find("extract") != std::string::npos);
+    }
+  }
+}
+
+void testDurableDownloadImportsExistingFileWithoutTransport() {
+  using namespace asobmshow::bms_search;
+  for (const auto &name : {"song.zip", "download", "download.bin", "download.archive", "mismatch.zip"}) {
+    CleanupPaths cleanup;
+    std::string error;
+    const auto fixture = createFindBmsDownloadAttempt("fixture.zip", error);
+    assert(fixture);
+    cleanup.add(fixture->root);
+    writeExtractionZip(fixture->archivePath, {{"chart.bms", "#TITLE test\n#BPM 120\n"}});
+    downloads::Job job;
+    auto stagingId = fixture->root.filename().string();
+    stagingId[19] = '8';
+    cleanup.add(findBmsStagingBasePath() / stagingId);
+    job.id = stagingId;
+    std::erase(job.id, '-');
+    job.request.url = job.request.displayUrl = "https://fixture.invalid/package.zip";
+    job.request.archiveName = name;
+    const bool mismatch = job.request.archiveName == "mismatch.zip";
+    if (mismatch) job.request.expectedHash = std::string(64, 'a');
+    job.request.libraryRoot = testDownloadRoot(*fixture).parent_path();
+    cleanup.add(job.request.libraryRoot);
+    job.request.skipUnarchiving = !mismatch;
+    const auto privateJobRoot = findBmsStagingBasePath().parent_path() / job.id;
+    std::filesystem::create_directories(privateJobRoot);
+    cleanup.add(privateJobRoot);
+    const auto retained = privateJobRoot / ("archive.1" + archive_file::archiveExtensionFromName(name));
+    std::filesystem::rename(fixture->archivePath, retained);
+    std::atomic_bool cancelled = false;
+    int prepared = 0;
+    std::optional<BmsSearchPendingArtifact> preparedArtifact;
+    std::vector<std::filesystem::path> variants;
+    if (job.request.archiveName == "song.zip") {
+      const auto names = findBmsStorageNames("song.zip", ".zip", job.request.url);
+      const auto previous = findBmsStorageNames("old.7z", ".7z", job.request.url);
+      variants = {makeDownloadDirectory(job.request.libraryRoot) / names.storageKey,
+                  makeDownloadDirectory(job.request.libraryRoot) / "_archives" / previous.archiveName};
+      writeText(variants[0] / "old.bms", "old chart");
+      writeText(variants[1], "old archive");
+    }
+    observedDownloadAttempt.clear();
+    const auto result = downloads::importArchiveJob(job, retained, privateJobRoot,
+        cancelled, {}, [&](const BmsSearchPendingArtifact &artifact) {
+          preparedArtifact = artifact;
+          assert(std::filesystem::hard_link_count(retained) == 1);
+          ++prepared; return true;
+        });
+    if (mismatch) {
+      assert(result.status == BmsSearchResult::Status::HashMismatch && result.pendingArtifact);
+      assert(std::filesystem::exists(retained) && "extracted mismatch must retain the completed archive");
+      job.result = result;
+      const auto rejected = downloads::resolveArchiveJob(job, privateJobRoot,
+          BmsSearchPendingArtifactDecision::Keep, cancelled, [](const auto &) { return false; });
+      assert(rejected.status == BmsSearchResult::Status::DownloadFailed && rejected.pendingArtifact);
+      assert(std::filesystem::exists(retained));
+      const auto retried = downloads::importArchiveJob(job, retained, privateJobRoot, cancelled, {}, {});
+      assert(retried.status == BmsSearchResult::Status::HashMismatch && retried.pendingArtifact);
+      assert(observedDownloadAttempt.empty());
+      downloads::cleanupArchiveJob(job);
+      continue;
+    }
+    if (result.status != BmsSearchResult::Status::Downloaded) std::cerr << result.message << '\n';
+    assert(result.status == BmsSearchResult::Status::Downloaded);
+    assert(!result.outputPath.empty());
+    if (archive_file::archiveExtensionFromName(name).empty()) {
+      assert(std::filesystem::is_directory(result.outputPath));
+      assert(readText(result.outputPath / "chart.bms") == "#TITLE test\n#BPM 120\n");
+    } else assert(std::filesystem::is_regular_file(result.outputPath));
+    assert(std::filesystem::exists(retained)); // Retained until durable result delivery.
+    assert(std::filesystem::hard_link_count(retained) == 1);
+    assert(observedDownloadAttempt.empty());
+    assert(prepared == 1);
+    if (!variants.empty()) {
+      for (const auto &path : variants) assert(!std::filesystem::exists(path));
+      // Simulate death after deletion but before the coordinator saves completion.
+      job.publicationPrepared = true;
+      job.result = BmsSearchResult{.pendingArtifact = preparedArtifact};
+      const auto recovered = downloads::resolveArchiveJob(job, privateJobRoot,
+          BmsSearchPendingArtifactDecision::Keep, cancelled, [](const auto &) { return true; });
+      assert(recovered.status == BmsSearchResult::Status::Downloaded);
+      for (const auto &path : variants)
+        assert(std::find(recovered.removedPaths.begin(), recovered.removedPaths.end(), path) != recovered.removedPaths.end());
     }
   }
 }

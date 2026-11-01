@@ -1142,6 +1142,31 @@ void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
          "difficulty table update requests a list-only selector reload");
 }
 
+void testBrowserTableImportUsesTheSharedTaskOperation() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "browser table repository is ready");
+  bool reloadRequested = false;
+  std::string importedUrl;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.importDifficultyTableFromUrl = [&](ChartRepository::Session &, const std::string &url,
+      std::string *, DifficultyTableImportProgressCallback progress,
+      const DifficultyTableImportCheckpoint &checkpoint, const DifficultyTableImportPauseProbe &) {
+    importedUrl = url;
+    progress({.current = 1, .total = 1, .tableName = "Selected event"});
+    return checkpoint();
+  };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+  const auto result = operations.run({.kind = chart_library_tasks::TaskKind::ImportDifficultyTable,
+      .tableUrl = "https://gingerrush.com/api/v1/table/meta/header/109.json"}, {},
+      [](const ChartScanProgress &, const i18n::Text &) {}, [] { return true; });
+  expect(result.disposition == chart_library_tasks::TaskRunDisposition::Complete,
+      "browser selection imports through the existing table importer");
+  expect(importedUrl == "https://gingerrush.com/api/v1/table/meta/header/109.json",
+      "only the user-selected published header is requested");
+  expect(reloadRequested, "browser table import refreshes the folder sidebar immediately");
+}
+
 void testDifficultyTableUpdateStopsAtAnImporterCheckpoint() {
   TempDirectory temporary;
   ChartRepository repository(temporary.path() / "chart.db");
@@ -1418,6 +1443,7 @@ int main() {
   testRefreshPausesInsideDefaultTableSeeding();
   testRefreshPausesInsideLocalTableImport();
   testDifficultyTableUpdateUsesTheSharedTaskOperation();
+  testBrowserTableImportUsesTheSharedTaskOperation();
   testDifficultyTableUpdateStopsAtAnImporterCheckpoint();
   testDesktopLibraryEntryResolutionPreservesTheStoredPath();
   if (failures != 0) {

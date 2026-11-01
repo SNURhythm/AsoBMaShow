@@ -4,8 +4,9 @@
 FindBmsDialogPolicy findBmsDialogPolicy(bool running,
                                         const BmsSearchResult &result) {
   const bool pending = result.pendingArtifact.has_value();
-  return {.canDismiss = !running && !pending,
+  return {.canDismiss = !pending,
           .showCloseOrCancel = !pending,
+          .showBackgroundClose = running && !pending,
           .showPendingActions = pending && !running,
           .showNormalResultActions = !pending};
 }

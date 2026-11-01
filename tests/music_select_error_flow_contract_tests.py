@@ -236,11 +236,15 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_healthy_settings_still_retains_selector(self):
         self.run_error_recovery_fixture("testHealthySettingsRetainsSelector")
 
+    def test_native_browser_blocks_selector_input_until_closed(self):
+        self.run_error_recovery_fixture("testBrowserInputIsolation")
+
     def run_error_recovery_fixture(self, test_name):
         source = read_music_select_scene()
         events = function_body(source, "EventHandleResult MusicSelectScene::handleEvents(")
         prefix = events[1:events.index("if (selectorInputBlocked())")]
         signatures = [
+            "bool MusicSelectScene::selectorInputBlocked() const",
             "void MusicSelectScene::enterError(std::vector<skin::SkinDiagnostic> diagnostics)",
             "void MusicSelectScene::openSettings()",
         ]
@@ -872,6 +876,8 @@ struct MusicSelectScene {
   std::optional<int> chartSession_ = 0;
   std::unique_ptr<ContextMenuView> revealContextMenu_;
   int folders = 0, resets = 0;
+  struct TasksDialog { int notificationCount() const { return 0; } };
+  TasksDialog *tasksDialog_ = nullptr;
   bool selectorInputBlocked() const { return blocked || (revealContextMenu_ && revealContextMenu_->isOpen()); }
   bool openSameFolder(bool notify) { assert(notify && !selectorInputBlocked()); ++folders; return true; }
   void resetLogicalInput() { ++resets; }

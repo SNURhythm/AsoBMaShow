@@ -73,6 +73,7 @@ TaskRunResult ChartLibraryOperations::run(
   case TaskKind::RefreshPath:
     return runPathRefresh(request, stopToken, progress, waitForResume);
   case TaskKind::UpdateDifficultyTable:
+  case TaskKind::ImportDifficultyTable:
     return runDifficultyTableUpdate(request, stopToken, progress,
                                     waitForResume);
   case TaskKind::IndexDownloadedPath:
@@ -114,9 +115,15 @@ TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
            (dependencies_.pauseRequested && dependencies_.pauseRequested());
   };
   std::string errorMessage;
-  if (!dependencies_.updateDifficultyTableFromSourceUrl(
-          *session, request.tableId, &errorMessage, checkpoint,
-          pauseRequested)) {
+  const bool imported = request.kind == TaskKind::ImportDifficultyTable
+      ? dependencies_.importDifficultyTableFromUrl(*session, request.tableUrl, &errorMessage,
+          [&](const DifficultyTableImportProgress &event) {
+            progress({.current = event.current, .total = event.total,
+                      .stage = ChartScanProgressStage::Preparing}, event.tableName);
+          }, checkpoint, pauseRequested)
+      : dependencies_.updateDifficultyTableFromSourceUrl(*session, request.tableId, &errorMessage,
+          checkpoint, pauseRequested);
+  if (!imported) {
     if (interrupted.load(std::memory_order_acquire) ||
         stopToken.stop_requested()) {
       return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
@@ -129,7 +136,8 @@ TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
       stopToken.stop_requested()) {
     return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
-  if (dependencies_.requestReload) dependencies_.requestReload(false);
+  if (dependencies_.requestReload)
+    dependencies_.requestReload(request.kind == TaskKind::ImportDifficultyTable);
   return {.detail = i18n::message("library.tasks.complete.label")};
 }
 

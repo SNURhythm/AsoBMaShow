@@ -64,7 +64,6 @@
 namespace asobmshow::bms_search {
 using json = nlohmann::json;
 
-inline constexpr const char *kHorieApiOrigin = "https://horie.synology.me:8443";
 
 struct ParsedUrl {
   std::string scheme;
@@ -85,22 +84,6 @@ struct DownloadCandidate {
 struct ExtractedLink {
   std::string url;
   std::string label;
-};
-
-struct HorieArchiveNameParts {
-  std::string artist;
-  std::string title;
-};
-
-struct HorieLookupTerms {
-  std::string title;
-  std::string artist;
-};
-
-struct HorieCandidateSearchResult {
-  std::vector<json> candidates;
-  std::string sourceUrl;
-  std::string errorMessage;
 };
 
 struct PackageSourceLookupResult {
@@ -145,7 +128,6 @@ std::string storageKeyFromArchiveName(const std::string &archiveName);
 std::string collapseWhitespace(const std::string &value);
 std::string plainTextFromHtmlFragment(const std::string &html);
 std::string archiveNameFromText(const std::string &text);
-HorieArchiveNameParts parseHorieArchiveName(const json &item);
 std::string archiveExtensionFromUrl(const std::string &url);
 bool isRecognizedArchiveExtension(const std::string &extension);
 bool isSupportedArchiveExtension(const std::string &extension);
@@ -175,13 +157,8 @@ std::string stripTitleDecorations(const std::string &title);
 std::string stripArtistDecorations(const std::string &artist);
 std::string stripArtistAfterSlash(const std::string &artist);
 bool titleNeedsExactCandidateMatch(const std::string &title);
-HorieLookupTerms horieLookupTermsForMeta(
-    const std::string &title, const std::string &artist);
 void appendUniqueQuery(std::vector<std::string> &queries,
                        const std::string &query);
-std::vector<std::string> horieArtistQueryVariants(const std::string &artist);
-bool artistMatchesArchiveResult(const json &item, const std::string &artist);
-bool titleMatchesArchiveResult(const json &item, const std::string &title);
 
 std::optional<std::string> htmlAttributeValue(const std::string &tag,
                                               const std::string &attribute);

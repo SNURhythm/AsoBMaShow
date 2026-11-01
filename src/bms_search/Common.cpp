@@ -433,30 +433,6 @@ std::string archiveNameFromText(const std::string &text) {
   return archiveExtensionFromName(cleaned).empty() ? std::string() : cleaned;
 }
 
-HorieArchiveNameParts parseHorieArchiveName(const json &item) {
-  HorieArchiveNameParts parts;
-  std::string name = stripArchiveExtension(jsonStringAt(item, "name"));
-  if (name.empty()) {
-    name = stripArchiveExtension(jsonStringAt(item, "relativePath"));
-    const size_t slash = name.find_last_of("/\\");
-    if (slash != std::string::npos) {
-      name = name.substr(slash + 1);
-    }
-  }
-
-  if (!name.empty() && name.front() == '[') {
-    const size_t close = name.find(']');
-    if (close != std::string::npos) {
-      parts.artist = trimCopy(name.substr(1, close - 1));
-      parts.title = trimCopy(name.substr(close + 1));
-      return parts;
-    }
-  }
-
-  parts.title = trimCopy(name);
-  return parts;
-}
-
 std::string archiveExtensionFromUrl(const std::string &url) {
   return archiveExtensionFromName(fileNameFromUrl(url));
 }
@@ -629,58 +605,6 @@ bool titleNeedsExactCandidateMatch(const std::string &title) {
          requiresExactTitleTokenMatch(normalizedMinimalTitle);
 }
 
-std::optional<HorieLookupTerms>
-splitCombinedHorieLookupTerms(const std::string &value) {
-  const std::string trimmed = trimCopy(value);
-  for (size_t i = trimmed.size(); i > 0; --i) {
-    const unsigned char c = static_cast<unsigned char>(trimmed[i - 1]);
-    if (std::isspace(c) == 0) {
-      continue;
-    }
-
-    HorieLookupTerms terms;
-    terms.artist = trimCopy(trimmed.substr(0, i - 1));
-    terms.title = trimCopy(trimmed.substr(i));
-    if (terms.artist.empty() || terms.title.empty()) {
-      return std::nullopt;
-    }
-
-    const std::string normalizedTitle =
-        normalizedSearchText(stripTitleDecorations(terms.title));
-    if (!requiresExactTitleTokenMatch(normalizedTitle)) {
-      return std::nullopt;
-    }
-
-    if (!containsNonAscii(terms.artist) &&
-        !looksLikeArtistDecoration(terms.artist)) {
-      return std::nullopt;
-    }
-    return terms;
-  }
-  return std::nullopt;
-}
-
-HorieLookupTerms horieLookupTermsForMeta(const std::string &title,
-                                         const std::string &artist) {
-  HorieLookupTerms terms{trimCopy(title), trimCopy(artist)};
-  if (const auto splitTerms = splitCombinedHorieLookupTerms(terms.title)) {
-    if (terms.artist.empty()) {
-      return *splitTerms;
-    }
-
-    const std::string normalizedArtist =
-        normalizedSearchText(stripArtistDecorations(terms.artist));
-    const std::string normalizedSplitArtist =
-        normalizedSearchText(stripArtistDecorations(splitTerms->artist));
-    if (!normalizedArtist.empty() && !normalizedSplitArtist.empty() &&
-        (normalizedSplitArtist.find(normalizedArtist) != std::string::npos ||
-         normalizedArtist.find(normalizedSplitArtist) != std::string::npos)) {
-      terms.title = splitTerms->title;
-    }
-  }
-  return terms;
-}
-
 void appendUniqueQuery(std::vector<std::string> &queries,
                        const std::string &query) {
   const std::string trimmed = trimCopy(query);
@@ -701,21 +625,6 @@ void appendUniqueQuery(std::vector<std::string> &queries,
   queries.push_back(trimmed);
 }
 
-std::vector<std::string> horieArtistQueryVariants(const std::string &artist) {
-  std::vector<std::string> variants;
-  const std::string trimmedArtist = trimCopy(artist);
-  const std::string objectStrippedArtist =
-      stripArtistDecorations(trimmedArtist);
-  const std::string slashStrippedArtist = stripArtistAfterSlash(trimmedArtist);
-  const std::string slashObjectStrippedArtist =
-      stripArtistAfterSlash(objectStrippedArtist);
-
-  appendUniqueQuery(variants, trimmedArtist);
-  appendUniqueQuery(variants, objectStrippedArtist);
-  appendUniqueQuery(variants, slashStrippedArtist);
-  appendUniqueQuery(variants, slashObjectStrippedArtist);
-  return variants;
-}
 
 
 } // namespace asobmshow::bms_search

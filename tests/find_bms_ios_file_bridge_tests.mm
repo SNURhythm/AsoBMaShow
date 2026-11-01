@@ -4,6 +4,7 @@
 #include "RAII.h"
 #include "BmsSearchService.h"
 #include "bms_search/DownloadRetryWait.h"
+#include "downloads/DownloadIOSDispatch.h"
 
 #include <algorithm>
 #include <array>
@@ -718,7 +719,28 @@ void exerciseDownloadProbe(const std::string &origin) {
          "cancelled availability probe stops");
 }
 
+void exerciseOwnedDownloadDispatch() {
+  auto queue = dispatch_queue_create("download-lifetime-test", DISPATCH_QUEUE_SERIAL);
+  dispatch_suspend(queue);
+  downloads::Job job;
+  job.id = "original-job";
+  job.request.headers = {{"Cookie", "original-cookie"}};
+  job.totalBytes = 100;
+  __block bool owned = false;
+  downloads::dispatchOwnedJob(queue, job, ^(const downloads::Job &snapshot) {
+    owned = snapshot.id == "original-job" && snapshot.totalBytes == 100 &&
+        snapshot.request.headers == std::vector<std::pair<std::string, std::string>>{{"Cookie", "original-cookie"}};
+  });
+  job.id = "caller-reused";
+  job.request.headers.clear();
+  job.totalBytes = 0;
+  dispatch_resume(queue);
+  dispatch_sync(queue, ^{});
+  expect(owned, "deferred download callbacks own the job and its request headers");
+}
+
 int main(int argc, char **argv) {
+  exerciseOwnedDownloadDispatch();
   if (argc != 2) return 2;
   @autoreleasepool {
     const std::string origin = argv[1];

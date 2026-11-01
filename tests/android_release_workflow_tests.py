@@ -289,6 +289,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         expected_exclusions = {
             ("file", "profiles"),
             ("sharedpref", "kombo_notifications.xml"),
+            ("root", "app_webview_bms_browser"),
         }
         legacy_rules = ET.parse(
             ROOT / "android/app/src/main/res/xml/backup_rules.xml"

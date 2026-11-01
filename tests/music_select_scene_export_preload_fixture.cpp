@@ -1,3 +1,7 @@
+namespace downloads {
+inline bool browserFocused = false;
+inline bool browserHasInputFocus() { return browserFocused; }
+}
 #include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
 #include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
 #include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"
@@ -429,6 +433,7 @@ struct MusicSelectScene {
   int songBarChangeMicros_ = 0;
   int elapsedMicros() { return 1000; }
   void refreshTasksModal() {}
+  void refreshTaskNotifications() {}
   void applyRecordsExportProgress() {}
   void consumeLogicalInput() { ++inputConsumptions; if (logicalHandoff) logicalHandoff(); }
   void consumeActions() { ++inputConsumptions; if (actionHandoff) actionHandoff(); }

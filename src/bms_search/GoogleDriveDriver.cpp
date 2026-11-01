@@ -149,6 +149,21 @@ std::optional<std::string> GoogleDriveDriver::fileIdFromUrls(
   return fileId(downloadUrl);
 }
 
+std::optional<std::string> GoogleDriveDriver::warningContinuation(
+    const std::string &downloadUrl, const std::string &displayUrl,
+    const std::filesystem::path &archivePath) {
+  const auto id = fileIdFromUrls(downloadUrl, displayUrl);
+  const auto original = parseUrl(downloadUrl);
+  if (!id || !original || !isHost(*original)) return {};
+  const auto html = htmlBodyFromDownloadedFile(archivePath);
+  if (!html) return {};
+  const auto next = confirmationUrl(*id, *html, downloadUrl);
+  if (!next) return {};
+  const auto parsed = parseUrl(*next);
+  if (!parsed || parsed->scheme != "https" || !isHost(*parsed) || fileId(*next) != id) return {};
+  return next;
+}
+
 bool GoogleDriveDriver::resolveWarningDownload(
     const std::string &downloadUrl, const std::string &displayUrl,
     const std::filesystem::path &archivePath, std::atomic_bool &cancelled,

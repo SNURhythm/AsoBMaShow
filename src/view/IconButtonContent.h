@@ -18,6 +18,21 @@ inline void setBadgeCount(TextView *badge, int count) {
   badge->setVisible(count > 0);
 }
 
+inline TextView *makeBadge() {
+  auto *badge = new TextView(app_theme::boldFont, 12, TextView::FontWeight::Bold);
+  badge->setName("iconButtonBadge");
+  badge->setPositionType(YGPositionTypeAbsolute);
+  badge->setPosition(Edge::Top, 2)->setPosition(Edge::Right, 2);
+  badge->setHeight(20)->setCornerRadius(10);
+  badge->setBackgroundColor(Color(196, 36, 55, 255));
+  badge->setColor(SDL_Color{255, 255, 255, 255});
+  badge->setAlign(TextView::CENTER);
+  badge->setVAlign(TextView::MIDDLE);
+  badge->setAutoFitText(true);
+  setBadgeCount(badge, 0);
+  return badge;
+}
+
 // Overlay the badge inside the hit target so updates never resize the toolbar.
 inline View *makeContent(uint32_t glyph, TextView **badgeOut = nullptr) {
   auto *content = new View();
@@ -31,17 +46,7 @@ inline View *makeContent(uint32_t glyph, TextView **badgeOut = nullptr) {
   icon->setThemedColor(app_theme::textPrimary);
   content->addView(icon);
   if (badgeOut) {
-    auto *badge = new TextView(app_theme::boldFont, 12, TextView::FontWeight::Bold);
-    badge->setName("iconButtonBadge");
-    badge->setPositionType(YGPositionTypeAbsolute);
-    badge->setPosition(Edge::Top, 2)->setPosition(Edge::Right, 2);
-    badge->setHeight(20)->setCornerRadius(10);
-    badge->setBackgroundColor(Color(196, 36, 55, 255));
-    badge->setColor(SDL_Color{255, 255, 255, 255});
-    badge->setAlign(TextView::CENTER);
-    badge->setVAlign(TextView::MIDDLE);
-    badge->setAutoFitText(true);
-    setBadgeCount(badge, 0);
+    auto *badge = makeBadge();
     content->addView(badge);
     *badgeOut = badge;
   }

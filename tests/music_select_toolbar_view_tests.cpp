@@ -29,6 +29,8 @@ int ui_view_width = design_width;
 int ui_view_height = design_height;
 } // namespace rendering
 
+void testTasksModalTabs();
+
 namespace {
 int failures = 0;
 
@@ -444,6 +446,26 @@ void testDisabledChildReleaseFinishesToolbarDrag() {
     expect(actions.empty(), "releasing over a disabled chart control never activates it");
   }
 }
+void testTaskBadgeSurvivesRebuilds() {
+  std::vector<std::string> actions;
+  std::vector<MusicSelectToolbarState> saved;
+  auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved), 1000, 700);
+  toolbar->setTaskCount(7);
+  const auto badge = [&]() -> TextView * {
+    for (const auto &control : toolbar->controls())
+      if (control.button && (control.control == MusicSelectToolbarControl::MoreMenu || control.control == MusicSelectToolbarControl::Expand))
+        return dynamic_cast<TextView *>(control.button->getContentView()->findViewByName("tasksCountBadge"));
+    return nullptr;
+  };
+  expect(badge() && badge()->getVisible() && badge()->getText() == "7", "combined task count is visible on More");
+  auto state = toolbar->state(); state.mode = MusicSelectToolbarMode::Collapsed;
+  toolbar->applyState(state);
+  expect(badge() && badge()->getVisible() && badge()->getText() == "7", "collapsed toolbar retains its task notification");
+  toolbar->setTaskCount(105);
+  expect(badge() && badge()->getText() == "99+", "large task counts fit in the notification bubble");
+  toolbar->setTaskCount(0);
+  expect(badge() && !badge()->getVisible(), "completed work clears the notification");
+}
 } // namespace
 
 int main() {
@@ -455,6 +477,8 @@ int main() {
     std::cerr << "FAIL: bgfx noop initialization failed\n";
     return 1;
   }
+  testTasksModalTabs();
+  testTaskBadgeSurvivesRebuilds();
   testQuickRetryWarningSurvivesRebuilds();
   testExpandedShowsLabeledMenuEntrypoints();
   testUnavailableCallbacksDisableButtons();

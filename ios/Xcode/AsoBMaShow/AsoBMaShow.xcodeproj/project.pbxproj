@@ -2005,6 +2005,10 @@
 				);
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
 					"$(inherited)",
+					"-framework",
+					BackgroundTasks,
+					"-framework",
+					WebKit,
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",
@@ -2015,6 +2019,10 @@
 				);
 				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
+					"-framework",
+					BackgroundTasks,
+					"-framework",
+					WebKit,
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",
@@ -2093,6 +2101,10 @@
 				);
 				"OTHER_LDFLAGS[sdk=iphoneos*]" = (
 					"$(inherited)",
+					"-framework",
+					BackgroundTasks,
+					"-framework",
+					WebKit,
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",
@@ -2103,6 +2115,10 @@
 				);
 				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = (
 					"$(inherited)",
+					"-framework",
+					BackgroundTasks,
+					"-framework",
+					WebKit,
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/RarCodecsRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/7zRegister.cpp.o",
 					"$(DERIVED_FILE_DIR)/7zip-rar-codecs/LzmaRegister.cpp.o",

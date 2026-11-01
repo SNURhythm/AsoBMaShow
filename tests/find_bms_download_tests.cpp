@@ -1467,35 +1467,35 @@ void testPublicDownloadApiAcceptsOptions() {
       const std::string &, const std::string &, const std::filesystem::path &,
       std::atomic_bool &, BmsSearchDownloadProgressCallback,
       const std::string &, const std::string &, BmsSearchDownloadOptions) const;
-  using CandidateMethod = BmsSearchResult (BmsSearchService::*)(
-      const BmsSearchCandidate &, const std::string &, const std::string &,
-      const std::filesystem::path &, std::atomic_bool &,
-      BmsSearchDownloadProgressCallback, BmsSearchDownloadOptions) const;
   static_assert(
       std::is_same_v<decltype(&BmsSearchService::findAndDownload), FindMethod>);
-  static_assert(std::is_same_v<decltype(&BmsSearchService::downloadCandidate),
-                               CandidateMethod>);
 }
 
 void testPendingMismatchCannotDismiss() {
   BmsSearchResult result;
+  const auto downloading = findBmsDialogPolicy(true, result);
+  assert(downloading.canDismiss && downloading.showBackgroundClose);
+  assert(downloading.showCloseOrCancel);
   result.status = BmsSearchResult::Status::HashMismatch;
   result.pendingArtifact = BmsSearchPendingArtifact{};
   const auto pending = findBmsDialogPolicy(false, result);
   assert(!pending.canDismiss);
   assert(!pending.showCloseOrCancel);
+  assert(!pending.showBackgroundClose);
   assert(pending.showPendingActions);
   assert(!pending.showNormalResultActions);
 
   const auto resolving = findBmsDialogPolicy(true, result);
   assert(!resolving.canDismiss);
   assert(!resolving.showCloseOrCancel);
+  assert(!resolving.showBackgroundClose);
   assert(!resolving.showPendingActions);
 
   result.pendingArtifact.reset();
   const auto resolved = findBmsDialogPolicy(false, result);
   assert(resolved.canDismiss);
   assert(resolved.showCloseOrCancel);
+  assert(!resolved.showBackgroundClose);
   assert(!resolved.showPendingActions);
 }
 
@@ -1538,8 +1538,6 @@ void testExtractionProgressLocalizesWithoutChangingFilenames() {
 void testActualSourceProgressLocalizesWithoutChangingMetadata() {
   struct Expected { const char *raw; const char *korean; const char *japanese; };
   for (const auto &entry : {
-           Expected{"Searching Horie archive", "Horie 아카이브 검색 중", "Horieアーカイブを検索中"},
-           Expected{"Preparing Horie archive download", "Horie 아카이브 다운로드 준비 중", "Horieアーカイブのダウンロードを準備中"},
            Expected{"Confirming Google Drive download", "Google Drive 다운로드 확인 중", "Google Driveのダウンロードを確認中"},
            Expected{"Searching mirror {source} package source", "mirror {source} 패키지 소스 검색 중", "mirror {source}のパッケージソースを検索中"},
            Expected{"Preparing mirror {source} package download", "mirror {source} 패키지 다운로드 준비 중", "mirror {source}のパッケージのダウンロードを準備中"},
@@ -1564,8 +1562,8 @@ void testRunningDetailFollowsProgress() {
   assert(findBmsRunningDetailMessage("").resolve() == "Searching available sources...");
   assert(findBmsRunningDetailMessage("Downloading archive").resolve() == "Downloading archive");
   assert(findBmsRunningDetailMessage("Extracting archive").resolve() == "Extracting archive");
-  assert(findBmsRunningDetailMessage("Searching Horie archive").resolve() ==
-         findBmsProgressDisplayText("Searching Horie archive", 0, 0, false));
+  assert(findBmsRunningDetailMessage("Searching GingerRush package source").resolve() ==
+         findBmsProgressDisplayText("Searching GingerRush package source", 0, 0, false));
 }
 
 void testFindBmsDownloadProgressDisplaysSizes() {
@@ -1596,6 +1594,7 @@ int main(int argc, char **argv) {
   testRunningDetailFollowsProgress();
   testProviderSelectionStopsAfterAFileIsFound();
   testChosenProviderRetriesOnlyOnUserDecision();
+  testQueuedPixelDrainRetainsAlternativeSource();
   testPixelDrainApiErrorDownloadsFromNextProvider();
   testPixelDrainApiErrorsContinueThroughRemainingSources();
   testApiWaterfallDoesNotOverrideCancellationOrOtherFailures();
@@ -1604,6 +1603,9 @@ int main(int argc, char **argv) {
   testUnknownSizeStreamIsBounded();
 #endif
   testDownloadAttemptExtractionCleanup();
+  testGoogleDriveContinuationStaysOnSelectedFile();
+  testResolvedDownloadHandoffDoesNotStartSceneOwnedTransfer();
+  testDurableDownloadImportsExistingFileWithoutTransport();
   testStorageNamesDistinguishSameNamedPackages();
   testStorageNamesPreserveLongAndCompoundExtensions();
   testPackageCandidateRespectsBuildArchiveSupport();

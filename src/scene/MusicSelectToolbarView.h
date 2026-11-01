@@ -75,6 +75,7 @@ public:
   void setControlEnabled(MusicSelectToolbarControl control, bool enabled);
   [[nodiscard]] bool isControlEnabled(MusicSelectToolbarControl control) const;
   void setQuickRetryEnabled(bool enabled);
+  void setTaskCount(int count);
   void setViewportSize(int width, int height);
   void setGoalState(bool present, bool achieved, int lampRank, std::string lamp, std::string score,
                     bool recommended = false, std::string coverage = {});
@@ -103,6 +104,8 @@ private:
   std::set<MusicSelectToolbarControl> disabledControls_;
   GoalTargetBubble *goalBubble_ = nullptr;
   View *goalRecommendationBadge_ = nullptr;
+  TextView *tasksBadge_ = nullptr;
+  int taskCount_ = 0;
   bool quickRetryEnabled_ = false;
   bool goalPresent_ = false, goalAchieved_ = false;
   bool goalRecommended_ = false;

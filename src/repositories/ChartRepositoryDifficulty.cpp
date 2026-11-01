@@ -812,7 +812,7 @@ bool replaceDifficultyTable(sqlite3 *database,
   if (!chart_repository_detail::EnsureDifficultySchema(database)) {
     return false;
   }
-  if (document.name.empty() || document.symbol.empty()) {
+  if (document.name.empty()) {
     return false;
   }
 

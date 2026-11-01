@@ -13,7 +13,7 @@ enum {
   SDL_EVENT_MOUSE_BUTTON_UP, SDLK_RETURN, SDLK_KP_ENTER, SDLK_6, SDLK_ESCAPE, SDLK_DOWN,
   SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_START,
   SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_DPAD_DOWN,
-  SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_MOTION,
+  SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_FINGER_DOWN, SDL_EVENT_FINGER_MOTION,
   SDL_TOUCH_MOUSEID, SDL_MOUSE_TOUCHID
 };
 struct SDL_Event {
@@ -33,6 +33,10 @@ void normalizedToUi(float x, float y, float &outX, float &outY) {
   screenToUi(x * 1920.0F, y * 1080.0F, outX, outY);
 }
 }
+namespace downloads {
+bool browserFocused = false;
+bool browserHasInputFocus() { return browserFocused; }
+}
 struct EventHandleResult { bool quit = false; };
 struct View {
   bool visible = true;
@@ -40,11 +44,18 @@ struct View {
   int events = 0;
   void setVisible(bool value) { visible = value; }
   void endEditing() { editing = false; }
+  void cancelPointerInput() {}
   bool handleEvents(SDL_Event &) { ++events; return false; }
+  bool getVisible() const { return visible; }
+  bool isVisible() const { return visible; }
+  bool isOpen() const { return visible; }
+  bool getSelected() const { return editing; }
+  View *root() { return this; }
 };
 class Scene {
 public:
   View staleModal;
+  std::vector<View *> views;
   EventHandleResult handleEvents(SDL_Event &event) {
     staleModal.handleEvents(event);
     return {};
@@ -85,19 +96,24 @@ struct PreviewAudio {
 struct MusicSelectScene : Scene {
   void closeRankings() {}
 
-  struct RevealMenu { void dismiss() {} };
+  struct RevealMenu { void dismiss() {} bool isOpen() const { return false; } };
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
   struct UnzipModal {
     bool handleEvents(SDL_Event &) { return true; }
+    bool isVisible() const { return false; }
     bool cancelled = false;
     void cancelAndWait() { cancelled = true; }
   } unzipModal;
   UnzipModal *archiveUnzipModal_ = &unzipModal;
-  UnzipModal *findBmsModal_ = nullptr, *readmeModal_ = nullptr;
+  UnzipModal *findBmsModal_ = nullptr, *readmeModal_ = nullptr, *tasksDialog_ = nullptr;
   SceneManager manager;
   struct { SceneManager *sceneManager; } context{&manager};
-  bool failed_ = false;
+  bool failed_ = false, launching_ = false;
+  View *recordsModal_ = nullptr, *rankingsModal_ = nullptr, *tasksModal_ = nullptr, *playOptionsModal_ = nullptr;
+  bool selectorInputBlocked() const;
+  int resets = 0;
+  void resetLogicalInput() { ++resets; }
   bool reactivateSkinOnResume_ = false;
   bool listening = true;
   bool directoryPending = true;
@@ -217,10 +233,35 @@ void testHealthySettingsRetainsSelector() {
   assert(scene.manager.settingsReturn.retained == &scene && scene.reactivateSkinOnResume_);
 }
 
+void testBrowserInputIsolation() {
+  MusicSelectScene scene;
+  scene.searchOverlay.visible = false;
+  scene.skinTextInput.editing = false;
+  assert(!scene.selectorInputBlocked());
+  downloads::browserFocused = true;
+  assert(scene.selectorInputBlocked() && "native browser must block physical/logical input too");
+  for (const int type : {SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_KEY_DOWN,
+                         SDL_EVENT_GAMEPAD_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_DOWN,
+                         SDL_EVENT_FINGER_DOWN, SDL_EVENT_MOUSE_MOTION}) {
+    SDL_Event event;
+    event.type = type;
+    scene.handleEvents(event);
+  }
+  assert(scene.normalEvents == 0 && scene.resets == 6);
+  assert(!scene.skinPointerUiPosition_ && !scene.skinSession_->pointer);
+  downloads::browserFocused = false;
+  assert(!scene.selectorInputBlocked());
+  SDL_Event wheel;
+  wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  scene.handleEvents(wheel);
+  assert(scene.normalEvents == 1 && "fresh selector input resumes after browser closes");
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
   const std::string test = argv[1];
-  if (test == "testSettingsRecovery") testSettingsRecovery();
+  if (test == "testBrowserInputIsolation") testBrowserInputIsolation();
+  else if (test == "testSettingsRecovery") testSettingsRecovery();
   else if (test == "testBackRecovery") testBackRecovery();
   else if (test == "testErrorModalIsolation") testErrorModalIsolation();
   else if (test == "testHealthySettingsRetainsSelector") testHealthySettingsRetainsSelector();

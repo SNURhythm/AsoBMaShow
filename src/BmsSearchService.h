@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+namespace downloads { struct Request; }
+
 struct BmsSearchDownloadProgress {
   std::string message;
   std::uint64_t downloadedBytes = 0;
@@ -31,6 +33,10 @@ struct BmsSearchDownloadOptions {
   storage_management::StoragePolicy storagePolicy;
   // Application-owned probe; never captures a view or mutable settings.
   std::function<bool()> storagePauseRequested;
+  // Mobile admission transfers ownership after provider resolution, before any
+  // scene-owned payload work. Empty retains the synchronous desktop workflow.
+  std::function<std::string(const downloads::Request &)> enqueueDownload;
+  std::vector<std::string> fallbackDownloadUrls;
 };
 
 enum class BmsSearchPendingArtifactKind { Archive, ExtractedDirectory };
@@ -50,20 +56,6 @@ struct BmsSearchPendingArtifact {
 
 enum class BmsSearchPendingArtifactDecision { Keep, Delete };
 
-struct BmsSearchCandidate {
-  enum class Source {
-    Horie,
-  };
-
-  Source source = Source::Horie;
-  std::string id;
-  std::string name;
-  std::string title;
-  std::string artist;
-  std::string query;
-  std::string sourceUrl;
-};
-
 struct BmsSearchResult {
   enum class Status {
     NotFound,
@@ -71,7 +63,6 @@ struct BmsSearchResult {
     UnsupportedLink,
     Downloaded,
     HashMismatch,
-    AmbiguousCandidates,
     DownloadFailed,
   };
 
@@ -84,12 +75,12 @@ struct BmsSearchResult {
   std::filesystem::path outputPath;
   std::filesystem::path debugPath;
   std::vector<std::filesystem::path> removedPaths;
-  std::vector<BmsSearchCandidate> candidates;
   std::optional<BmsSearchPendingArtifact> pendingArtifact;
   // App-owned presentation retains its identity; transport diagnostics stay raw.
   i18n::Text presentationMessage;
   long downloadHttpStatus = 0;
   std::optional<storage_management::StorageReport> storageReport;
+  std::string queuedDownloadId;
 };
 
 class BmsSearchService {
@@ -103,13 +94,6 @@ public:
       const std::filesystem::path &libraryRoot, std::atomic_bool &cancelled,
       BmsSearchDownloadProgressCallback progressCallback = nullptr,
       const std::string &title = "", const std::string &artist = "",
-      BmsSearchDownloadOptions options = {}) const;
-
-  BmsSearchResult downloadCandidate(
-      const BmsSearchCandidate &candidate, const std::string &sha256,
-      const std::string &md5, const std::filesystem::path &libraryRoot,
-      std::atomic_bool &cancelled,
-      BmsSearchDownloadProgressCallback progressCallback = nullptr,
       BmsSearchDownloadOptions options = {}) const;
 
   BmsSearchResult resolvePendingArtifact(

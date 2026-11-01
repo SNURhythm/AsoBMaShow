@@ -381,7 +381,8 @@ bool processDownloadedArchive(
   if (extractedDecision.disposition ==
       ExtractedArchiveDisposition::HashMismatch) {
     std::error_code ignoredCleanupError;
-    std::filesystem::remove(request.attempt.archivePath, ignoredCleanupError);
+    if (!request.retainArchive)
+      std::filesystem::remove(request.attempt.archivePath, ignoredCleanupError);
     result.status = BmsSearchResult::Status::HashMismatch;
     result.pendingArtifact = extractedArtifact(request);
     result.message =

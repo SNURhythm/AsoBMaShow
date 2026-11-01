@@ -293,6 +293,7 @@ struct MusicSelectScene {
     finishRecordsLoading(); modal.status = message;
   }
   void publishRecordsDiagnostic(const std::string &) const {}
+  void refreshTaskNotifications() {}
   void update(float);
   void drainRecords() {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);

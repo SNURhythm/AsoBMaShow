@@ -5,8 +5,13 @@
 #include "../Uuid.h"
 #include "../RAII.h"
 #include "../sqlite3.h"
+#include "../targets.h"
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+#include "../downloads/DownloadPlatform.h"
+#endif
 
 #include <array>
+#include <algorithm>
 #include <cerrno>
 #include <filesystem>
 #include <optional>
@@ -54,6 +59,27 @@ bool isSafePathComponent(const std::string &value) {
          path.filename() == path;
 }
 
+bool isRetainedJobArchive(const std::filesystem::path &source,
+                          const std::filesystem::path &stagingRoot,
+                          const std::filesystem::path &base) {
+  // Durable jobs retain their immutable archive beside imports/<UUID>. Only
+  // that same job's numbered archive may be borrowed by the staging workflow.
+  if (source.parent_path().parent_path() != base.parent_path()) return false;
+  auto id = source.parent_path().filename().string();
+  if (id.size() != 32 || id.find_first_not_of("0123456789abcdef") != std::string::npos) return false;
+  id[12] = '4'; id[16] = '8';
+  id.insert(20, "-"); id.insert(16, "-"); id.insert(12, "-"); id.insert(8, "-");
+  if (stagingRoot.filename() != id) return false;
+  auto name = source.filename().string();
+  const auto extension = archive_file::archiveExtensionFromName(name);
+  if (extension.empty()) return false;
+  name.resize(name.size() - extension.size());
+  if (name != "archive" && (!name.starts_with("archive.") || name.size() == 8 ||
+      name.find_first_not_of("0123456789", 8) != std::string::npos)) return false;
+  std::error_code error;
+  return std::filesystem::is_regular_file(std::filesystem::symlink_status(source, error)) && !error;
+}
+
 bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
                              std::string &errorMessage) {
   std::error_code error;
@@ -69,8 +95,11 @@ bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
     return false;
   }
   const auto sourcePath = normalizedPath(artifact.sourcePath, error);
+  const bool retainedArchive = !error && artifact.kind == BmsSearchPendingArtifactKind::Archive &&
+      !std::filesystem::is_symlink(std::filesystem::symlink_status(artifact.sourcePath, error)) && !error &&
+      isRetainedJobArchive(sourcePath, stagingRoot, base);
   if (error || sourcePath.empty() ||
-      !isStrictDescendant(sourcePath, stagingRoot)) {
+      (!isStrictDescendant(sourcePath, stagingRoot) && !retainedArchive)) {
     errorMessage = "Refusing an unsafe Find BMS source path.";
     return false;
   }
@@ -120,7 +149,7 @@ bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
     }
     const bool pathsMatch =
         artifact.kind == BmsSearchPendingArtifactKind::Archive
-            ? sourcePath == expectedArchiveSource &&
+            ? (sourcePath == expectedArchiveSource || retainedArchive) &&
                   destinationPath == expectedArchivePath &&
                   alternateDestinationPath == expectedExtractedPath
             : destinationPath == expectedExtractedPath &&
@@ -131,7 +160,7 @@ bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
     }
   }
   if (artifact.kind == BmsSearchPendingArtifactKind::Archive) {
-    if (sourcePath.parent_path() != stagingRoot ||
+    if ((!retainedArchive && sourcePath.parent_path() != stagingRoot) ||
         destinationPath.parent_path() != downloadRoot / "_archives") {
       errorMessage = "Refusing invalid Find BMS archive metadata.";
       return false;
@@ -305,14 +334,14 @@ void removePath(const std::filesystem::path &path) {
   std::filesystem::remove_all(path, ignored);
 }
 
-void removeVariantPath(
+bool removeVariantPath(
     const std::filesystem::path &path,
-    std::vector<std::filesystem::path> *removedPaths) {
+    std::vector<std::filesystem::path> *removedPaths, std::string &message) {
   std::error_code error;
-  const std::uintmax_t removed = std::filesystem::remove_all(path, error);
-  if (!error && removed > 0 && removedPaths != nullptr) {
-    removedPaths->push_back(path.lexically_normal());
-  }
+  std::filesystem::remove_all(path, error);
+  if (error) { message = "Could not remove an older downloaded variant: " + error.message(); return false; }
+  if (removedPaths) removedPaths->push_back(path.lexically_normal());
+  return true;
 }
 
 std::optional<std::string_view> storageIdFromKey(std::string_view storageKey) {
@@ -347,7 +376,7 @@ bool storageKeysShareIdentity(std::string_view candidateKey,
   return candidateId && *candidateId == *storageId;
 }
 
-void removeStaleExtractedVariants(
+void collectStaleExtractedVariants(
     const BmsSearchPendingArtifact &artifact,
     std::vector<std::filesystem::path> *removedPaths) {
   std::error_code error;
@@ -367,12 +396,12 @@ void removeStaleExtractedVariants(
     }
     if (storageKeysShareIdentity(fspath_to_utf8(path.filename()),
                                  artifact.storageKey)) {
-      removeVariantPath(path, removedPaths);
+      removedPaths->push_back(path.lexically_normal());
     }
   }
 }
 
-void removeStaleArchiveVariants(
+void collectStaleArchiveVariants(
     const BmsSearchPendingArtifact &artifact,
     std::vector<std::filesystem::path> *removedPaths) {
   if (artifact.storageKey.empty()) {
@@ -397,7 +426,7 @@ void removeStaleArchiveVariants(
     archiveKey.resize(archiveKey.size() - extension.size());
     if (storageKeysShareIdentity(archiveKey, artifact.storageKey) &&
         path.lexically_normal() != artifact.destinationPath.lexically_normal()) {
-      removeVariantPath(path, removedPaths);
+      removedPaths->push_back(path.lexically_normal());
     }
   }
 }
@@ -405,7 +434,11 @@ void removeStaleArchiveVariants(
 } // namespace
 
 std::filesystem::path findBmsStagingBasePath() {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  return downloads::platform::privateRoot() / "imports";
+#else
   return std::filesystem::temp_directory_path() / "AsoBMaShowFindBms";
+#endif
 }
 
 std::optional<FindBmsDownloadAttempt>
@@ -454,7 +487,8 @@ createFindBmsDownloadAttempt(const std::string &archiveName,
 bool commitFindBmsPendingArtifact(
     const BmsSearchPendingArtifact &artifact, std::string &errorMessage,
     FindBmsRenameOperation renameOperation,
-    std::vector<std::filesystem::path> *removedPaths) {
+    std::vector<std::filesystem::path> *removedPaths,
+    FindBmsPrepareVariantRemoval prepareRemoval) {
   if (removedPaths != nullptr) {
     removedPaths->clear();
   }
@@ -510,7 +544,7 @@ bool commitFindBmsPendingArtifact(
   }
   const auto transactionRoot =
       artifact.downloadRoot / kFindBmsTransactionDirectoryName;
-  const auto transactionPath = transactionRoot / uuid::generateV4();
+  const auto transactionPath = transactionRoot / artifact.stagingRoot.filename();
   const auto commitPath = transactionPath / "commit";
   const auto backupPath = transactionPath / "backup";
   removePath(transactionPath);
@@ -609,14 +643,7 @@ bool commitFindBmsPendingArtifact(
     removePath(backupPath);
   }
   cleanupTransaction();
-  if (!artifact.alternateDestinationPath.empty()) {
-    removeVariantPath(artifact.alternateDestinationPath, removedPaths);
-  }
-  removeStaleExtractedVariants(artifact, removedPaths);
-  removeStaleArchiveVariants(artifact, removedPaths);
-  removePath(artifact.stagingRoot);
-  errorMessage.clear();
-  return true;
+  return finishFindBmsPendingArtifactPublication(artifact, errorMessage, removedPaths, std::move(prepareRemoval));
 }
 
 bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
@@ -638,6 +665,29 @@ bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
     errorMessage = "Could not delete downloaded files: " + error.message();
     return false;
   }
+  errorMessage.clear();
+  return true;
+}
+
+bool finishFindBmsPendingArtifactPublication(const BmsSearchPendingArtifact &artifact,
+    std::string &errorMessage, std::vector<std::filesystem::path> *removedPaths,
+    FindBmsPrepareVariantRemoval prepareRemoval) {
+  auto recovered = artifact;
+  // The original-file index may already have been discarded after publication.
+  recovered.originalFilesIndexPath.clear();
+  if (!validatePendingArtifact(recovered, errorMessage)) return false;
+  std::vector<std::filesystem::path> variants;
+  if (!recovered.alternateDestinationPath.empty() && std::filesystem::exists(recovered.alternateDestinationPath))
+    variants.push_back(recovered.alternateDestinationPath.lexically_normal());
+  collectStaleExtractedVariants(recovered, &variants);
+  collectStaleArchiveVariants(recovered, &variants);
+  std::sort(variants.begin(), variants.end());
+  variants.erase(std::unique(variants.begin(), variants.end()), variants.end());
+  // Persist the entire metadata-only removal set before deleting the first path.
+  if (prepareRemoval && !prepareRemoval(variants, errorMessage)) return false;
+  for (const auto &path : variants)
+    if (!removeVariantPath(path, removedPaths, errorMessage) && prepareRemoval) return false;
+  removePath(recovered.stagingRoot);
   errorMessage.clear();
   return true;
 }

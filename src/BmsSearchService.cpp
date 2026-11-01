@@ -1,7 +1,6 @@
 #include "BmsSearchService.h"
 
 #include "bms_search/BmsSearchDriver.h"
-#include "bms_search/HorieYuukaDriver.h"
 #include "bms_search/Internal.h"
 #include "bms_search/PackageSourceDrivers.h"
 
@@ -44,10 +43,6 @@ BmsSearchResult BmsSearchService::findAndDownload(
   const std::string titleQuery = trimCopy(
       titleOnly + (artistOnly.empty() ? std::string() : " " + artistOnly));
   const std::string archiveKey = hash.empty() ? md5Hash : hash;
-  const HorieLookupTerms horieTerms =
-      horieLookupTermsForMeta(titleOnly, artistOnly);
-  const auto horieQueries = HorieYuukaDriver::searchQueries(
-      horieTerms.title, horieTerms.artist, hash, md5Hash);
   result.patternUrl = hash.empty() ? std::string() : patternUrlForSha256(hash);
   const std::string titleSearchQuery =
       titleQuery.empty() ? (!md5Hash.empty() ? md5Hash : hash) : titleQuery;
@@ -95,30 +90,6 @@ BmsSearchResult BmsSearchService::findAndDownload(
     return std::nullopt;
   };
 
-  auto tryHorieAfterAutomaticFailure =
-      [&](const BmsSearchResult &automaticFailure)
-      -> std::optional<BmsSearchResult> {
-    BmsSearchResult horieResult;
-    preserveLookupContext(horieResult, automaticFailure);
-    if (HorieYuukaDriver::tryDownload(
-            horieQueries, horieTerms.title, horieTerms.artist,
-            !horieTerms.title.empty(), archiveKey, libraryRoot, cancelled,
-            progressCallback, options, horieResult)) {
-      return horieResult;
-    }
-    preserveLookupContext(horieResult, automaticFailure);
-    if (horieResult.message.empty()) {
-      horieResult.status = BmsSearchResult::Status::NotFound;
-      horieResult.message = "Horie did not find a matching BMS archive.";
-    } else if (packageFailure &&
-               horieResult.status == BmsSearchResult::Status::NotFound) {
-      horieResult.message =
-          "Automatic sources did not produce a usable archive. " +
-          horieResult.message;
-    }
-    return horieResult;
-  };
-
   if (const auto packageResult = tryPackageSources()) {
     return *packageResult;
   }
@@ -128,11 +99,10 @@ BmsSearchResult BmsSearchService::findAndDownload(
     result.message =
         "Selected entry does not have SHA256 for BMS Search lookup.";
     result.fallbackUrl = bmsTitleSearchUrl;
-    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
-      return *fallbackResult;
+    if (packageFailure &&
+        packageFailure->status == BmsSearchResult::Status::DownloadFailed) {
+      return *packageFailure;
     }
-    result.message =
-        "No package source or Horie archive found a matching song.";
     return result;
   }
 
@@ -154,9 +124,6 @@ BmsSearchResult BmsSearchService::findAndDownload(
         errorMessage.empty() ? "BMS Search did not return a pattern page."
                              : errorMessage;
     result.fallbackUrl = bmsTitleSearchUrl;
-    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
-      return *fallbackResult;
-    }
     return result;
   }
 
@@ -166,9 +133,6 @@ BmsSearchResult BmsSearchService::findAndDownload(
     result.status = BmsSearchResult::Status::NoDownloadLink;
     result.message = "BMS Search found the pattern, but no BMS page link.";
     result.fallbackUrl = result.patternUrl;
-    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
-      return *fallbackResult;
-    }
     return result;
   }
 
@@ -226,9 +190,6 @@ BmsSearchResult BmsSearchService::findAndDownload(
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
     }
-    if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
-      return *fallbackResult;
-    }
     return result;
   }
 
@@ -237,35 +198,10 @@ BmsSearchResult BmsSearchService::findAndDownload(
                                  hash, libraryRoot, cancelled,
                                  progressCallback, options, result,
                                  supportedIt->archiveName)) {
-    if (!cancelled.load() &&
-        isPixelDrainApiError(effectiveDownloadUrl, result.downloadHttpStatus)) {
-      if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
-        return *fallbackResult;
-      }
-    }
     if (result.fallbackUrl.empty()) {
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
     }
   }
-  return result;
-}
-
-BmsSearchResult BmsSearchService::downloadCandidate(
-    const BmsSearchCandidate &candidate, const std::string &sha256,
-    const std::string &md5, const std::filesystem::path &libraryRoot,
-    std::atomic_bool &cancelled,
-    BmsSearchDownloadProgressCallback progressCallback,
-    BmsSearchDownloadOptions options) const {
-  BmsSearchResult result;
-  const std::string hash = normalizedHash(sha256);
-  const std::string md5Hash = normalizedHash(md5);
-  const std::string archiveKey = hash.empty() ? md5Hash : hash;
-  if (progressCallback) {
-    progressCallback({.message = "Preparing Horie archive download"});
-  }
-  HorieYuukaDriver::downloadCandidateById(candidate, archiveKey, libraryRoot,
-                                          cancelled, progressCallback, options,
-                                          result);
   return result;
 }

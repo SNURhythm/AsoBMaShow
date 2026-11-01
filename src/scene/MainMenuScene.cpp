@@ -4,6 +4,8 @@
 #include "../platform/SDLMainThread.h"
 #include "../i18n/Localization.h"
 #include "MainMenuScene.h"
+#include "../downloads/BmsBrowser.h"
+#include "../downloads/DownloadService.h"
 #include "play/QuickRetrySummary.h"
 #include "../view/PlayStartButton.h"
 #include "NewcomerTutorialView.h"
@@ -706,6 +708,10 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
 }
 
 EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
+  if (downloads::browserHasInputFocus()) {
+    for (auto *view : views) view->cancelPointerInput();
+    return {};
+  }
   if (pendingTab_) return {};
   if (tutorial_ != nullptr && tutorial_->getVisible()) {
     (void)tutorial_->handleEvents(event);
@@ -715,6 +721,7 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
       !archiveUnzipModal_->handleEvents(event)) {
     return {};
   }
+  if (tasksDialog_ && !tasksDialog_->handleEvents(event)) return {};
   if (readmeModal_ && !readmeModal_->handleEvents(event)) return {};
   if (findBmsModal_ != nullptr && !findBmsModal_->handleEvents(event)) {
     return {};
@@ -848,6 +855,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     scene->onPause();
   }
   for (auto *view : views) view->cancelPointerInput();
+  if (addBmsContextMenu_) addBmsContextMenu_->dismiss();
   if (revealContextMenu) revealContextMenu->dismiss();
   activeTab_ = tab;
   const float inset = getSafeAreaInsetsUi().top +
@@ -1089,6 +1097,7 @@ void MainMenuScene::onPause() {
     willStart.store(false);
   }
   onApplicationBackgroundChanged(true);
+  if (addBmsContextMenu_) addBmsContextMenu_->dismiss();
   if (revealContextMenu != nullptr) {
     revealContextMenu->dismiss();
   }
@@ -1206,7 +1215,7 @@ void MainMenuScene::onLanguageChanged() {
   refreshTasksButton();
   refreshTasksModal(true);
   refreshMusicModal();
-  refreshFindBmsModal(false);
+  refreshFindBmsModal();
   if (rootLayout != nullptr) rootLayout->applyYogaLayout();
 }
 
@@ -1243,6 +1252,7 @@ void MainMenuScene::applyThemeChange() {
       view->propagateThemeChange();
     }
   }
+  if (addBmsContextMenu_) addBmsContextMenu_->propagateThemeChange();
   if (revealContextMenu != nullptr && !revealContextMenu->isOpen()) {
     revealContextMenu->propagateThemeChange();
   }
@@ -1319,7 +1329,9 @@ void MainMenuScene::requestLibraryScanFlush() {
 }
 
 void MainMenuScene::refreshTasksButton() {
-  icon_button::setBadgeCount(tasksCountBadge, activeLibraryTaskCount());
+  const int libraryCount = activeLibraryTaskCount();
+  if (tasksDialog_) { tasksDialog_->setLibraryCount(libraryCount); tasksDialog_->update(); }
+  icon_button::setBadgeCount(tasksCountBadge, tasksDialog_ ? tasksDialog_->notificationCount() : libraryCount);
 }
 
 void MainMenuScene::initView(ApplicationContext &context) {
@@ -1332,8 +1344,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsAvailableWithoutTutorial_ = false;
   archiveUnzipModal_.reset();
   readmeModal_.reset();
+  tasksDialog_.reset();
   findBmsModal_.reset();
   // Initialize the view
+  addBmsContextMenu_.reset();
   revealContextMenu.reset();
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
@@ -1418,12 +1432,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicStopButtonText = nullptr;
   musicCloseButtonText = nullptr;
   tasksScrollView = nullptr;
-  tasksContent = nullptr;
   tasksText = nullptr;
-  tasksRefreshButton = nullptr;
-  tasksRefreshButtonText = nullptr;
-  tasksCloseButton = nullptr;
-  tasksCloseButtonText = nullptr;
   readyGaugeText = nullptr;
   readySpeedText = nullptr;
   readyPlayOptionText = nullptr;
@@ -2085,28 +2094,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->addView(libraryActions);
 
   TextView *addFolderText = nullptr;
-#if TARGET_OS_ANDROID
-  auto *addFolderButton = makeSelectorButton(i18n::message("menu.manage_files.label"),
-                                              18, &addFolderText, ui_icons::kReveal);
-#else
-  auto *addFolderButton = makeSelectorButton(i18n::message("menu.add_folder.label"),
-                                              18, &addFolderText, ui_icons::kFolderPlus);
-#endif
+  auto *addFolderButton = makeSelectorButton(i18n::message("menu.add_bms.label"),
+                                              18, &addFolderText, ui_icons::kPlus);
   addFolderButton_ = addFolderButton;
   addFolderButton->setName("mainMenuFiles");
   styleMenuButton(addFolderButton, addFolderText);
   addFolderButton->setCornerRadius(0);
   addFolderButton->setStyledBorderWidth(1);
-  addFolderButton->setOnClickListener([this]() {
-#if TARGET_OS_ANDROID
-    showFileActionsModal();
-#else
-    if (this->context.requestAddChartFolderFromFiles) {
-      this->context.requestAddChartFolderFromFiles();
-    }
-#endif
-  });
+  addFolderButton->setOnClickListener([this] { toggleAddBmsMenu(); });
   libraryActions->addView(addFolderButton);
+
   TextView *folderGoalText=nullptr;
   auto *folderGoalButton=makeSelectorButton(i18n::message("folder_goals.ui.title"),18,&folderGoalText,0xf024);
   styleMenuButton(folderGoalButton,folderGoalText);
@@ -5665,6 +5662,56 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
       true);
 }
 
+void MainMenuScene::toggleAddBmsMenu() {
+  if (!overlayPortal || !addFolderButton_) return;
+  if (!addBmsContextMenu_) {
+    addBmsContextMenu_ = std::make_unique<ContextMenuView>(overlayPortal, ContextMenuView::Callbacks{
+        .onActionSelected = [this](const std::string &actionId) {
+          addBmsContextMenu_->dismiss();
+          if (context.storageMaintenanceActive) return;
+          if (actionId == "add-folder") {
+            if (context.requestAddChartFolderFromFiles) context.requestAddChartFolderFromFiles();
+#if TARGET_OS_ANDROID
+          } else if (actionId == "manage-files") {
+            showFileActionsModal();
+#endif
+          } else if (actionId == "browse-bms") {
+            openBmsBrowser();
+          }
+        }});
+  }
+  if (addBmsContextMenu_->isOpen()) { addBmsContextMenu_->dismiss(); return; }
+  if (willStart.load() || replayExportJob_.inProgress()) return;
+  const bool available = !context.storageMaintenanceActive.load();
+  std::vector<ContextMenuView::Action> actions;
+#if TARGET_OS_ANDROID
+  if (AndroidBuildHasManageExternalStorage())
+#endif
+    actions.push_back({.id = "add-folder", .label = i18n::message("menu.add_folder.label"),
+                       .enabled = available && bool(context.requestAddChartFolderFromFiles)});
+#if TARGET_OS_ANDROID
+  actions.push_back({.id = "manage-files", .label = i18n::message("menu.manage_files.label"), .enabled = available});
+#endif
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  actions.push_back({.id = "browse-bms", .label = i18n::message("downloads.ui.browse"), .enabled = available});
+#endif
+  addBmsContextMenu_->setViewportSize(rendering::window_width, rendering::window_height);
+  addBmsContextMenu_->show({.x = addFolderButton_->getX(), .y = addFolderButton_->getY(),
+      .width = addFolderButton_->getWidth(), .height = addFolderButton_->getHeight()}, std::move(actions), 260);
+}
+
+void MainMenuScene::openBmsBrowser() {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  if (context.storageMaintenanceActive.load()) return;
+  downloads::Request defaults;
+  defaults.libraryRoot = preferredBmsDownloadRoot();
+  defaults.skipUnarchiving = context.settings.findBmsSkipUnarchivingForNonSolidArchives;
+  defaults.storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences);
+  downloads::configureBrowser(std::move(defaults));
+  downloads::openBrowser();
+#endif
+}
+
 void MainMenuScene::toggleRevealContextMenu(View *anchor) {
   if (!anchor) anchor = revealButton;
   if (revealContextMenu == nullptr || revealButton == nullptr) {
@@ -5771,6 +5818,7 @@ void MainMenuScene::openSelectedReadme() {
   const auto record = selectedRecordSnapshot();
   if (!record || record->courseStart || record->solidArchive ||
       record->unavailable || record->meta.BmsPath.empty()) return;
+  if (addBmsContextMenu_) addBmsContextMenu_->dismiss();
   if (revealContextMenu) revealContextMenu->dismiss();
   if (!readmeModal_) readmeModal_ = ChartReadmeModal::Create(rootLayout);
   if (readmeModal_) readmeModal_->show(record->meta.BmsPath, record->meta.Title);
@@ -6389,7 +6437,7 @@ void MainMenuScene::resizeTasksModal() {
   tasksModalRoot->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
   const float width = std::min(760.0f, std::max(0.0f,
       float(rendering::window_width - safe.left - safe.right - 32)));
-  const float height = std::min(460.0f, std::max(0.0f,
+  const float height = std::min(660.0f, std::max(0.0f,
       float(rendering::window_height - safe.top - safe.bottom - 32)));
   tasksModalRoot->findViewByName("mainMenuTasksPanel")->setWidth(width)->setHeight(height);
   tasksScrollView->setWidth(std::max(0.0f, width - 46));
@@ -7111,123 +7159,41 @@ void MainMenuScene::stopMusicPlayback() {
 }
 
 void MainMenuScene::buildTasksModal() {
-  if (rootLayout == nullptr) {
-    return;
-  }
-
-  constexpr float kModalPanelWidth = 760.0f;
-  constexpr float kModalPanelPadding = 22.0f;
-  constexpr float kModalContentWidth =
-      kModalPanelWidth - kModalPanelPadding * 2.0f;
-
-  tasksModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
-                                           rendering::window_height);
-  tasksModalRoot->setPositionType(YGPositionTypeAbsolute);
-  tasksModalRoot->setPosition(Edge::Left, 0);
-  tasksModalRoot->setPosition(Edge::Top, 0);
-  tasksModalRoot->setZIndex(1000);
-  tasksModalRoot->setVisible(false);
-  tasksModalRoot->setFlexDirection(FlexDirection::Column);
-  tasksModalRoot->setAlignItems(YGAlignCenter);
-  tasksModalRoot->setJustifyContent(YGJustifyCenter);
-  tasksModalRoot->setThemedBackgroundColor(app_theme::scrim);
-
-  auto *panel = new View();
-  panel->setName("mainMenuTasksPanel");
-  panel->setWidth(kModalPanelWidth)
-      ->setHeight(460)
-      ->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setGap(14)
-      ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(app_theme::panelStrong)
-      ->setCornerRadius(app_theme::panelRadius())
-      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
-      ->setThemedBorderColor(modalPanelBorder)
-      ->setBorderWidth(1);
-
-  auto *title = new TextView(app_theme::font, 30);
-  title->setLocalizedText(i18n::message("menu.tasks.label"));
-  title->setThemedColor(app_theme::textPrimary);
-  title->setHeight(42);
-  panel->addView(title);
-
-  tasksScrollView =
-      new ScrollView(0, 0, static_cast<int>(kModalContentWidth), 400);
-  tasksScrollView->setWidth(kModalContentWidth);
-  tasksScrollView->setFlex(1);
-  tasksScrollView->setMinHeight(0);
-  tasksScrollView->setThemedBackgroundColor(app_theme::insetSurface);
-  tasksScrollView->setCornerRadius(app_theme::controlRadius());
-  tasksScrollView->setThemedBorderColor(app_theme::hairline);
-  tasksScrollView->setBorderWidth(1);
-  tasksScrollView->setContentPadding(Edge::All, 12);
-
-  tasksContent = new View();
-  tasksContent->setFlexDirection(FlexDirection::Column);
-  tasksContent->setAlignItems(YGAlignStretch);
-
-  tasksText = new TextView(app_theme::font, 18);
-  tasksText->setText(tasksModalTextSnapshot());
-  tasksText->setThemedColor(app_theme::textSecondary);
-  tasksText->setWrap(true);
-  tasksText->setOverflow(TextView::TextOverflow::Visible);
-  tasksContent->addView(tasksText);
-  tasksScrollView->setContentView(tasksContent);
-  panel->addView(tasksScrollView);
-
-  auto *footer = new View();
-  footer->setFlexDirection(FlexDirection::Row);
-  footer->setJustifyContent(YGJustifyFlexEnd);
-  footer->setAlignItems(YGAlignStretch);
-  footer->setGap(12);
-  footer->setHeight(58);
-
-  tasksRefreshButton =
-      makeModalButton(i18n::message("menu.refresh_list.label"), 18, &tasksRefreshButtonText);
-  tasksRefreshButton->setWidth(150);
-  tasksRefreshButton->setOnClickListener([this]() {
-    requestLibraryScanFlush();
-    applyPendingUiUpdates();
-    hideTasksModal();
-  });
-  styleThemedActionButton(tasksRefreshButton, tasksRefreshButtonText, true,
-                          app_theme::successAction, app_theme::successActionHover,
-                          app_theme::successActionPressed,
-                          app_theme::accentBorder);
-
-  tasksCloseButton = makeModalButton(i18n::message("menu.tasks.close.label"), 20, &tasksCloseButtonText);
-  tasksCloseButton->setWidth(130);
-  tasksCloseButton->setOnClickListener([this]() { hideTasksModal(); });
-  styleThemedActionButton(tasksCloseButton, tasksCloseButtonText, true,
-                          app_theme::infoAction, app_theme::infoActionHover,
-                          app_theme::infoActionPressed, app_theme::accentBorder);
-
-#if TARGET_OS_ANDROID
-  footer->setFlexShrink(0);
-  tasksRefreshButton->setWidth(0)->setFlex(1)->setMinWidth(0);
-  tasksCloseButton->setWidth(0)->setFlex(1)->setMinWidth(0);
-  tasksRefreshButtonText->setWrap(true);
-  tasksCloseButtonText->setWrap(true);
-#endif
-  footer->addView(tasksRefreshButton);
-  footer->addView(tasksCloseButton);
-  panel->addView(footer);
-
-  tasksModalRoot->addView(panel);
-  rootLayout->addView(tasksModalRoot);
+  if (!rootLayout) return;
+  tasksDialog_ = std::make_unique<TasksModal>(rootLayout,
+      [this] { requestLibraryScanFlush(); applyPendingUiUpdates(); },
+      [this](const std::filesystem::path &path) {
+        if (!chartSession || this->context.storageMaintenanceActive || willStart.load() ||
+            replayExportJob_.inProgress()) return false;
+        selectTab(Tab::Play);
+        defer([this, path, profile = this->context.profileManager.activeProfile().id] {
+          if (profile != this->context.profileManager.activeProfile().id) return true;
+          if (pendingTab_) return false;
+          applyFolderGoalSelection(
+              {.kind = folder_goals::SourceKind::Directory,
+               .identity = chart_storage_identity::StoredFolderPathText(path),
+               .name = fspath_to_utf8(path.filename())},
+              long_note_mode::valueFromId(this->context.settings.selectedLnMode));
+          refreshChartFilterPanel();
+          return true;
+        }, 0, true);
+        return true;
+      });
+  tasksModalRoot = tasksDialog_->root();
+  tasksScrollView = tasksDialog_->libraryScroll();
+  tasksText = tasksDialog_->libraryText();
   resizeTasksModal();
   displayedLibraryTasksRevision = 0;
   displayedLibraryProgressRevision = 0;
-  refreshTasksModal();
+  refreshTasksModal(true);
 }
 
-void MainMenuScene::showTasksModal() {
+void MainMenuScene::showTasksModal(bool downloads) {
   if (tasksModalRoot == nullptr) {
     return;
   }
   tasksModalRoot->setSize(rendering::window_width, rendering::window_height);
-  tasksModalRoot->setVisible(true);
+  tasksDialog_->show(downloads ? TasksModal::Tab::Downloads : TasksModal::Tab::Library);
 #if TARGET_OS_ANDROID
   resizeTasksModal();
   tasksModalRoot->applyYogaLayout();
@@ -7370,7 +7336,13 @@ void MainMenuScene::buildFindBmsModal() {
             .storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences),
             .storagePauseRequested = [app = &context] {
               return app->backgroundTasksPausedForForegroundScene.load() || app->appInBackground.load();
-            }};
+            }
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+            , .enqueueDownload = [](const downloads::Request &request) {
+              return downloads::service()->submit(request).id;
+            }
+#endif
+            };
       },
       .downloadStarted = [this]() {
         findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
@@ -7384,7 +7356,12 @@ void MainMenuScene::buildFindBmsModal() {
             matched ? findBmsSelectionGenerationAtDownloadStart : 0,
             result.removedPaths);
       },
-      .refreshLibrary = [this]() { startLibraryRefresh(); }});
+      .refreshLibrary = [this]() { startLibraryRefresh(); },
+      .openDownloads = [](const std::string &id) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+        downloads::requestDownloadsPresentation(id);
+#endif
+      }});
 }
 
 void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
@@ -7395,8 +7372,8 @@ void MainMenuScene::hideFindBmsModal() {
   if (findBmsModal_ != nullptr) findBmsModal_->hide();
 }
 
-void MainMenuScene::refreshFindBmsModal(bool refreshCandidates) {
-  if (findBmsModal_ != nullptr) findBmsModal_->refresh(refreshCandidates);
+void MainMenuScene::refreshFindBmsModal() {
+  if (findBmsModal_ != nullptr) findBmsModal_->refresh();
 }
 
 void MainMenuScene::applyFindBmsUpdates() {
@@ -8885,6 +8862,10 @@ bool MainMenuScene::needsContinuousPresentation() const {
 }
 
 void MainMenuScene::update(float dt) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  if (downloads::takeDownloadsPresentation()) showTasksModal(true);
+#endif
+  refreshTasksButton();
   context.refreshAudioTimingProfile();
   if (!applyPendingTabSwitch()) return;
   if (!context.pendingKomboNotificationProfile.empty()) {
@@ -8942,7 +8923,6 @@ void MainMenuScene::update(float dt) {
   // Update the scene logic
   if (selectorTabActive()) refreshScoreClearRanksIfNeeded();
   refreshIrRecordListIfNeeded();
-  refreshTasksButton();
   applyPendingUiUpdates();
   applyFindBmsUpdates();
   if (archiveUnzipModal_ != nullptr) {
@@ -9023,6 +9003,7 @@ void MainMenuScene::renderScene() {
   if (decideOverlay_ != nullptr) {
     decideOverlay_->setSize(rendering::window_width, rendering::window_height);
   }
+  if (addBmsContextMenu_) addBmsContextMenu_->setViewportSize(rendering::window_width, rendering::window_height);
   if (revealContextMenu != nullptr) {
     revealContextMenu->setViewportSize(rendering::window_width,
                                        rendering::window_height);
@@ -9049,6 +9030,7 @@ void MainMenuScene::renderScene() {
     resizeTasksModal();
     resizeParseLogModal();
   }
+
   if (findBmsModal_ != nullptr && (layoutChanged || findBmsModal_->isVisible())) {
     findBmsModal_->resize(rendering::window_width, rendering::window_height);
   }
@@ -9093,6 +9075,7 @@ void MainMenuScene::cleanupScene() {
   detailsControlsContent_ = nullptr;
   detailsControlsScroll_ = nullptr;
   // Cleanup resources when exiting the scene
+  addBmsContextMenu_.reset();
   revealContextMenu.reset();
   rankingsModal.reset();
   playOptionsModal.reset();
@@ -9107,6 +9090,7 @@ void MainMenuScene::cleanupScene() {
     replayExportJob_.cancelAndWait();
   }
   readmeModal_.reset();
+  tasksDialog_.reset();
   findBmsModal_.reset();
   archiveUnzipModal_.reset();
   stopAndClearSelectedChart();
@@ -9200,12 +9184,7 @@ void MainMenuScene::cleanupScene() {
   musicStopButtonText = nullptr;
   musicCloseButtonText = nullptr;
   tasksScrollView = nullptr;
-  tasksContent = nullptr;
   tasksText = nullptr;
-  tasksRefreshButton = nullptr;
-  tasksRefreshButtonText = nullptr;
-  tasksCloseButton = nullptr;
-  tasksCloseButtonText = nullptr;
   readyGaugeText = nullptr;
   readySpeedText = nullptr;
   readyPlayOptionText = nullptr;

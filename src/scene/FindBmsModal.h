@@ -1,6 +1,8 @@
 #pragma once
 
 #include "FindBmsTask.h"
+#include "../downloads/DownloadJobs.h"
+#include <chrono>
 #include "../repositories/ChartRepository.h"
 
 #include <SDL3/SDL.h>
@@ -9,8 +11,8 @@
 
 class Button;
 class TextView;
+class ScrollView;
 class View;
-template <typename T> class RecyclerView;
 
 std::filesystem::path findBmsDownloadRoot(ChartRepository::Session *session);
 
@@ -22,6 +24,10 @@ struct FindBmsModalCallbacks {
   std::function<void(const ChartMetaRecord &, const BmsSearchResult &,
                      bool matched)> filesReady;
   std::function<void()> refreshLibrary;
+  std::function<void(const std::string &)> openDownloads;
+  std::function<std::optional<downloads::Job>(const std::string &)> readDownload;
+  std::function<bool(const std::string &)> cancelDownload, retryDownload;
+  std::function<bool(const std::string &, BmsSearchPendingArtifactDecision)> decideDownload;
 };
 
 // The parent owns the views. Destroy this controller before its parent view.
@@ -36,7 +42,7 @@ public:
   void show(const ChartMetaRecord &record, bool requireConfirmation = false);
   void update();
   void resize(int width, int height);
-  void refresh(bool refreshCandidates = true);
+  void refresh();
   void cancelAndWait();
   bool inProgress() const;
   bool isVisible() const;
@@ -47,8 +53,8 @@ public:
 private:
   explicit FindBmsModal(FindBmsModalCallbacks callbacks);
   void build(View *parent);
+  bool updateQueuedDownload(bool force = false);
   void startLookup();
-  void startCandidateDownload(size_t candidateIndex);
   void startPendingArtifactResolution(BmsSearchPendingArtifactDecision decision);
   void cancelOrClose();
   void openResultUrl(const std::string &url);
@@ -60,8 +66,10 @@ private:
   View *findBmsProgressFill = nullptr;
   TextView *findBmsModalTitleText = nullptr;
   TextView *findBmsStatusText = nullptr;
+  ScrollView *findBmsDetailScroll = nullptr;
   TextView *findBmsDetailText = nullptr;
   Button *findBmsCloseButton = nullptr;
+  Button *findBmsBackgroundButton = nullptr;
   Button *findBmsConfirmButton = nullptr;
   Button *findBmsRetryButton = nullptr;
   Button *findBmsKeepFilesButton = nullptr;
@@ -69,8 +77,8 @@ private:
   Button *findBmsOpenButton = nullptr;
   Button *findBmsGoogleButton = nullptr;
   Button *findBmsRefreshButton = nullptr;
-  RecyclerView<BmsSearchCandidate> *findBmsCandidateRecyclerView = nullptr;
   TextView *findBmsCloseButtonText = nullptr;
+  TextView *findBmsBackgroundButtonText = nullptr;
   TextView *findBmsConfirmButtonText = nullptr;
   TextView *findBmsRetryButtonText = nullptr;
   TextView *findBmsKeepFilesButtonText = nullptr;
@@ -78,6 +86,9 @@ private:
   TextView *findBmsOpenButtonText = nullptr;
   TextView *findBmsGoogleButtonText = nullptr;
   TextView *findBmsRefreshButtonText = nullptr;
+  bool queuedDownloadRunning_ = false, queuedDownloadRetry_ = false;
+  std::chrono::steady_clock::time_point queuedDownloadUpdateAt_{};
+  std::string queuedDownloadSnapshot_;
   bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;

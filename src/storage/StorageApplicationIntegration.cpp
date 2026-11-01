@@ -8,6 +8,9 @@
 #include "../view/ImageView.h"
 #include "../RAII.h"
 #include "../targets.h"
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+#include "../downloads/DownloadService.h"
+#endif
 #include <map>
 #include <SDL3/SDL.h>
 #if TARGET_OS_ANDROID
@@ -183,6 +186,14 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
         error = "A chart folder picker is active."; return {};
       }
       if (auto reason = context.profileSwitchBlockers.firstReason()) { error = *reason; return {}; }
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+      const auto downloadOwner = downloads::service();
+      if (!downloadOwner->tryReserveMaintenance()) {
+        error = "Finish or recover the active download import in Tasks before managing storage.";
+        return {};
+      }
+      auto downloadReservationRollback = makeScopeExit([&] { downloadOwner->releaseMaintenance(); });
+#endif
       const auto token = context.chartLibraryTasks->tryReserveMaintenance();
       if (!token) { error = "A chart library scan or import is active."; return {}; }
       // Guard construction and its captured roots can allocate. Reserve cleanup
@@ -213,14 +224,24 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
             }
             context.chartLibraryListReloadRequested = true;
           },
-          [&context, token, environment] {
+          [&context, token, environment
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+           , downloadOwner
+#endif
+          ] {
             environment->scopes.clear();
             std::string ignored;
             context.musicPlayer.SetStorageMaintenance(false, ignored);
             context.chartLibraryTasks->releaseMaintenance(*token);
             context.storageMaintenanceActive = false;
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+            downloadOwner->releaseMaintenance();
+#endif
           });
       reservationRollback.dismiss();
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+      downloadReservationRollback.dismiss();
+#endif
       context.storageMaintenanceActive = true;
       auto access = accessFolders(context, error);
       if (!access) return {};
