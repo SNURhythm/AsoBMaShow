@@ -72,6 +72,7 @@ std::optional<result_persistence::ModernCourseResult>
 rebuildJudgedCourseResult(
     const result_persistence::ModernCourseResult &saved,
     std::vector<result_persistence::ModernCourseStageResult> stages,
+    int endingCombo,
     std::string &diagnostic) {
   const bool completeCourse = stages.size() == saved.entryFacts.size();
   const auto totalNotes = std::accumulate(
@@ -79,6 +80,9 @@ rebuildJudgedCourseResult(
       [](std::int64_t sum, const auto &entry) { return sum + entry.totalNotes; });
   const bool fullCombo = completeCourse && totalNotes > 0 &&
       stages.back().score.maxCombo >= totalNotes &&
+      // Beatoraja empty POOR can reset the surviving course combo without
+      // changing the maximum or the BAD/MISS combo-break counters.
+      (saved.provenance.ruleset.id != "beatoraja" || endingCombo >= totalNotes) &&
       std::all_of(stages.begin(), stages.end(), [](const auto &stage) {
         return stage.score.comboBreak == 0;
       });
@@ -453,7 +457,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
     }
 
     auto judgedCourse = rebuildJudgedCourseResult(
-        verified.result, std::move(judgedStages), diagnostic);
+        verified.result, std::move(judgedStages), continuation->combo, diagnostic);
     if (!judgedCourse) {
       return failure(CourseReplayConsumerState::MaterializationFailed,
                      diagnostic.empty()
