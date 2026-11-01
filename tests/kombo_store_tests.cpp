@@ -349,12 +349,12 @@ int main() {
   auto orderedConfig = config;
   orderedConfig.dailyGoal = 1;
   orderedConfig.assignments[0].levels[0].level = "intro";
-  orderedConfig.assignments[0].targetLamp = 600;
+  orderedConfig.assignments[0].targetLamp = 800;
   orderedConfig.assignments[0].scoreNumerator = orderedConfig.assignments[0].scoreDenominator = 27;
   const auto importedDay = localDay(1700000000);
   configure(imported, orderedConfig, importedDay);
   save(db, imported);
-  auto savedPlay = Play{.chart="goal", .lamp=600, .score=27, .maxScore=27};
+  auto savedPlay = Play{.chart="goal", .lamp=800, .score=27, .maxScore=27};
   recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:13:20", 0);
   imported = load(db);
   CHECK(imported.days.at(importedDay).assignments[0].requirement.levels[0].level == "Z");

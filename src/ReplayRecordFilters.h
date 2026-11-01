@@ -31,6 +31,8 @@ namespace replay_record_filters {
 
 inline int clearMarkBucket(int clearTypeRank) {
   clearTypeRank = normalizeClearLamp(clearTypeRank);
+  if (clearTypeRank >= kClearTypeMaxRank) return kClearTypeMaxRank;
+  if (clearTypeRank >= kClearTypePerfectRank) return kClearTypePerfectRank;
   if (clearTypeRank >= kClearTypeFullComboRank) {
     return kClearTypeFullComboRank;
   }

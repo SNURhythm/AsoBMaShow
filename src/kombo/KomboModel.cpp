@@ -13,7 +13,7 @@
 
 namespace kombo {
 namespace {
-constexpr std::array lamps{-1, 0, 50, 100, 200, 300, 400, 500, 600};
+constexpr std::array lamps{-1, 0, 50, 100, 200, 300, 400, 500, 600, 700, 800};
 constexpr std::array rankNumerators{6, 9, 12, 15, 18, 21, 24, 26, 27};
 constexpr std::array rankLabels{"E", "D", "C", "B", "A", "AA", "AAA", "MAX -", "MAX"};
 using namespace std::chrono;
@@ -95,7 +95,7 @@ void harder(Assignment &a, const Play &p, std::uint32_t choice) {
     }
     options.push_back(std::move(next));
   }
-  if (a.targetLamp >= 0 && a.targetLamp < 600) {
+  if (a.targetLamp >= 0 && clearLampOrder(a.targetLamp) < clearLampOrder(lamps.back())) {
     auto next = a;
     next.targetLamp = *std::upper_bound(lamps.begin(), lamps.end(), a.targetLamp,
         [](int left, int right) { return clearLampOrder(left) < clearLampOrder(right); });
@@ -199,6 +199,8 @@ std::string lampLabel(int lamp) {
   case 400: return "HARD";
   case 500: return "EX HARD";
   case 600: return "FULL COMBO";
+  case 700: return "PERFECT";
+  case 800: return "MAX";
   default: return "Unknown";
   }
 }

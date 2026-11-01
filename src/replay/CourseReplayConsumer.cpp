@@ -2,6 +2,7 @@
 
 #include "../CourseConstraintUtils.h"
 #include "../CoursePlaySession.h"
+#include "../ResultClearLamp.h"
 
 #include <algorithm>
 #include <numeric>
@@ -71,6 +72,7 @@ std::optional<result_persistence::ModernCourseResult>
 rebuildJudgedCourseResult(
     const result_persistence::ModernCourseResult &saved,
     std::vector<result_persistence::ModernCourseStageResult> stages,
+    int endingCombo,
     std::string &diagnostic) {
   const bool completeCourse = stages.size() == saved.entryFacts.size();
   const auto totalNotes = std::accumulate(
@@ -78,12 +80,20 @@ rebuildJudgedCourseResult(
       [](std::int64_t sum, const auto &entry) { return sum + entry.totalNotes; });
   const bool fullCombo = completeCourse && totalNotes > 0 &&
       stages.back().score.maxCombo >= totalNotes &&
+      // Beatoraja empty POOR can reset the surviving course combo without
+      // changing the maximum or the BAD/MISS combo-break counters.
+      (saved.provenance.ruleset.id != "beatoraja" || endingCombo >= totalNotes) &&
       std::all_of(stages.begin(), stages.end(), [](const auto &stage) {
         return stage.score.comboBreak == 0;
       });
+  // A stage achievement is not the course's gauge result.
+  const auto &last = stages.back();
+  const int baseRank = last.score.clearType >= kClearTypeFullComboRank
+      ? clearTypeToRank(clearTypeForGauge(last.adoptedGaugeType,
+            last.score.finalGauge, false, saved.gaugeProfile))
+      : last.score.clearType;
   const int clearType = completeCourse
-      ? clear_policy::fullComboRankForPlayback(stages.back().score.clearType,
-                                               fullCombo, saved.provenance.playback)
+      ? clear_policy::fullComboRankForPlayback(baseRank, fullCombo, saved.provenance.playback)
       : kClearTypeFailedRank;
   result_persistence::ModernCourseResultCapture capture{
       .attemptId = saved.attemptId,
@@ -107,6 +117,10 @@ rebuildJudgedCourseResult(
   auto judged =
       result_persistence::captureModernCourseResult(capture, diagnostic);
   if (judged) {
+    const int effective = result_clear_lamp::effectiveRank(*judged);
+    judged->clearType = effective == result_clear_lamp::effectiveRank(saved)
+        ? saved.clearType : effective;
+    judged->resultFingerprint = result_persistence::modernResultFingerprint(*judged);
     judged->resultId = saved.resultId;
   }
   return judged;
@@ -443,7 +457,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
     }
 
     auto judgedCourse = rebuildJudgedCourseResult(
-        verified.result, std::move(judgedStages), diagnostic);
+        verified.result, std::move(judgedStages), continuation->combo, diagnostic);
     if (!judgedCourse) {
       return failure(CourseReplayConsumerState::MaterializationFailed,
                      diagnostic.empty()
@@ -465,7 +479,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
     replayData->finalScore = judgedCourse->finalScore;
     replayData->maxCombo = judgedCourse->maxCombo;
     replayData->finalGauge = judgedCourse->finalGauge;
-    replayData->clearType = judgedCourse->clearType;
+    replayData->clearType = result_clear_lamp::effectiveRank(*judgedCourse);
     return {.state = CourseReplayConsumerState::Ready,
             .context = std::move(context),
             .charts = std::move(preparedCharts),

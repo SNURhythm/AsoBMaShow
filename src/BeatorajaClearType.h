@@ -8,6 +8,8 @@
 [[nodiscard]] inline int beatorajaSongClearType(int rank) noexcept {
   rank = normalizeClearLamp(rank);
   if (rank == kNoClearTypeRank) return 0;
+  if (rank >= kClearTypeMaxRank) return 10;
+  if (rank >= kClearTypePerfectRank) return 9;
   if (rank >= kClearTypeFullComboRank) return 8;
   if (rank >= kClearTypeExHardClearRank) return 7;
   if (rank >= kClearTypeHardClearRank) return 6;

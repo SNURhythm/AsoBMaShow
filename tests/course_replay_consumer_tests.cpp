@@ -208,6 +208,7 @@ struct ConsumerHarness {
   bool disagreeingCarriedGauge = false;
   bool disagreeingStageResult = false;
   bool perfectCourse = false;
+  std::optional<int> finalComboOverride;
   CourseJudgementConstraint expectedJudgement = CourseJudgementConstraint::None;
   std::optional<GaugeProfile> expectedCourseProfile;
 
@@ -303,7 +304,9 @@ struct ConsumerHarness {
               .finalGaugeState = gauge(
                   index == 0 ? 76.0F
                              : (disagreeingCarriedGauge ? 50.0F : 62.5F)),
-              .endingCombo = perfectCourse ? static_cast<int>((index + 1) * 5)
+              .endingCombo = index + 1 == listed.result.stages.size() && finalComboOverride
+                                 ? *finalComboOverride
+                                 : perfectCourse ? static_cast<int>((index + 1) * 5)
                                            : (index == 0 ? 3 : 0),
               .replayData = std::make_shared<ReplayData>(),
           };
@@ -441,8 +444,51 @@ void testCompleteFullComboCourseRetainsDerivedClearRank() {
   const auto loaded = consumer.load(harness.listed,
       {"selected/stage-0.bms", "selected/stage-1.bms"}, cancelled);
   expect(loaded.ready() && loaded.replayData && !loaded.replayData->staleResult &&
-             loaded.replayData->clearType == kClearTypeFullComboRank,
-         "matching full course derives its full-combo rank without stale drift");
+             loaded.replayData->clearType == kClearTypeMaxRank,
+         "matching historical full course projects Max without stale drift");
+  expect(loaded.context.verified && loaded.context.verified->result == saved &&
+             saved.clearType == kClearTypeFullComboRank &&
+             saved.resultFingerprint == result_persistence::modernResultFingerprint(saved),
+         "course presentation promotion preserves authenticated historical facts");
+}
+
+void testEndingEmptyPoorPreservesCourseLamp() {
+  for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    for (const int keyMode : {5, 10, 9}) {
+      ConsumerHarness harness;
+      harness.perfectCourse = true;
+      const bool broken = ruleset == GameplayRuleset::Beatoraja;
+      harness.finalComboOverride = broken ? 0 : 10;
+      auto &saved = harness.listed.result;
+      saved.entryFacts.resize(2);
+      saved.totalCharts = 2;
+      saved.maxScore = saved.finalScore = 20;
+      saved.maxCombo = 10;
+      saved.clearType = broken ? kClearTypeHardClearRank : kClearTypeMaxRank;
+      saved.provenance.ruleset = RulesetDescriptor::For(ruleset);
+      for (std::size_t index = 0; index < saved.stages.size(); ++index) {
+        auto &stage = saved.stages[index];
+        stage.keyMode = keyMode;
+        auto &score = stage.score;
+        score.provenance.ruleset = saved.provenance.ruleset;
+        score.pGreat = 5;
+        score.great = score.good = score.comboBreak = 0;
+        score.kPoor = index == 1 ? 1 : 0;
+        score.maxCombo = static_cast<int>((index + 1) * 5);
+        score.score = 10;
+        score.clearType = index == 1 ? saved.clearType : kClearTypeMaxRank;
+      }
+      saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+      harness.replay = document(saved);
+      auto consumer = harness.makeConsumer();
+      std::atomic_bool cancelled = false;
+      const auto loaded = consumer.load(harness.listed,
+          {"selected/stage-0.bms", "selected/stage-1.bms"}, cancelled);
+      expect(loaded.ready() && loaded.replayData && !loaded.replayData->staleResult &&
+                 loaded.replayData->clearType == saved.clearType,
+             "ending empty POOR preserves the course lamp without false stale drift");
+    }
+  }
 }
 
 void testHistoricalCourseRetainsCurrentConstraintPolicy() {
@@ -522,6 +568,7 @@ int main() {
   testMaterializedCarriedStateDriftRejectsPlayback();
   testStageResultDriftProducesStaleCourseLaunchAdapters();
   testCompleteFullComboCourseRetainsDerivedClearRank();
+  testEndingEmptyPoorPreservesCourseLamp();
   testHistoricalCourseRetainsCurrentConstraintPolicy();
   testVerifiedLaunchAdaptersSeparateWatchFromRetrySame();
 #else

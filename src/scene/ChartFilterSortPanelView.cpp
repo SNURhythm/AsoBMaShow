@@ -36,6 +36,8 @@ struct ClearMarkFilterDefinition {
 };
 
 constexpr ClearMarkFilterDefinition kClearMarkFilters[] = {
+    {"MAX", kClearTypeMaxRank},
+    {"PERFECT", kClearTypePerfectRank},
     {"FULL COMBO", kClearTypeFullComboRank},
     {"EXH-CLEAR", kClearTypeExHardClearRank},
     {"H-CLEAR", kClearTypeHardClearRank},

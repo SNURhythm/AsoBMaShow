@@ -39,7 +39,7 @@ std::vector<Goal> load(sqlite3 *db) {
     g.source={static_cast<SourceKind>(integer(j,"kind",0,2)), j.at("identity").get<std::string>(),
         j.at("level").get<std::string>(), j.at("name").get<std::string>()};
     g.longNoteMode=integer(j,"mode",1,3);
-    g.target={static_cast<Type>(integer(j,"type",0,version==3 ? 2 : 1)), normalizeClearLamp(integer(j,"lamp",0,600)),
+    g.target={static_cast<Type>(integer(j,"type",0,version==3 ? 2 : 1)), normalizeClearLamp(integer(j,"lamp",0,800)),
         static_cast<int>(integer(j,"percent",1,10000))};
     if (version==3) g.target.scoreRank=integer(j,"scoreRank",0,27);
     if (g.target.type==Type::ExCoverage) g.target.exPercent=integer(j,"exPercent",1,10000);

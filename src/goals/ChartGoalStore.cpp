@@ -56,7 +56,7 @@ Goal decode(sqlite3_stmt *query) {
   goal.chart.LnMode = integer(body, "lnMode", 0, 3);
   goal.chart.TotalLongNotes = integer(body, "longNotes", 0, 2147483647);
   goal.chart.TotalBackSpinNotes = integer(body, "backSpins", 0, 2147483647);
-  goal.target.lamp = normalizeClearLamp(integer(body, "lamp", -1, 600));
+  goal.target.lamp = normalizeClearLamp(integer(body, "lamp", -1, 800));
   goal.target.scoreNumerator = integer(body, "numerator", 0, 10000);
   goal.target.scoreDenominator = integer(body, "denominator", 1, 10000);
   for (const auto &[name, output] : std::array{

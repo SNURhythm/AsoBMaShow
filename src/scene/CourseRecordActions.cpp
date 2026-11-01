@@ -1,4 +1,5 @@
 #include "CourseRecordActions.h"
+#include "../ReplayClearMarkUtils.h"
 
 #include "../CourseConstraintUtils.h"
 #include "../CoursePlaySession.h"
@@ -140,7 +141,7 @@ PreparedCourseResult prepareCourseResult(
                     [](const auto &stage) { return !stage.score.badPoints; })) {
       session->recalledResultPassedNotes = view.result.maxScore / 2;
     }
-    session->restoreFinalClearTypeForResult(view.result.clearType);
+    session->restoreFinalClearTypeForResult(replay_clear_mark::effectiveClearRank(view.result));
     session->modernCourseRetrySameAllowed =
         retrySameAllowed && currentSelection->completeCourse;
     session->gaugeType = view.result.initialGaugeType;

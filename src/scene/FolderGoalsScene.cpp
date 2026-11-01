@@ -291,7 +291,7 @@ void FolderGoalsScene::build() {
       if (draft_.target.type==folder_goals::Type::Lamp) {
         text(panel,i18n::tr("folder_goals.ui.minimum_lamp"),18);
         auto state=std::make_shared<DropdownView::State>(); state->selectedId=std::to_string(draft_.target.lamp); state->maxVisibleItems=7;
-        for (int lamp:{0,50,100,200,300,400,500,600}) state->options.push_back({.id=std::to_string(lamp),.label=kombo::lampLabel(lamp),.leadingColor=clearLampColorForRank(lamp)});
+        for (int lamp:{0,50,100,200,300,400,500,600,700,800}) state->options.push_back({.id=std::to_string(lamp),.label=kombo::lampLabel(lamp),.leadingColor=clearLampColorForRank(lamp)});
         auto *dropdown=new DropdownView({.onOptionSelected=[this](const std::string &id){later([this,id]{
           draft_.target.lamp=std::stoi(id);
           auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);

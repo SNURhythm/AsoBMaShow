@@ -3,6 +3,7 @@
 #include "BmsMetadataText.h"
 #include "PlayOptionUtils.h"
 #include "ResultContracts.h"
+#include "ReplayClearMarkUtils.h"
 #include "repositories/ChartStorageIdentity.h"
 
 #include <exception>
@@ -159,7 +160,7 @@ RhythmState resultStateFrom(
   state.setAssistClearMark(clear_policy::assistClearMarkRequired(
       assistOption, chart.Meta.MinBpm, chart.Meta.MaxBpm,
       score.provenance.playback));
-  state.restoreClearTypeRankForResult(score.clearType);
+  state.restoreClearTypeRankForResult(replay_clear_mark::effectiveClearRank(score));
 
   state.resetJudgeCounts();
   state.judgeCount[PGreat] = score.pGreat;

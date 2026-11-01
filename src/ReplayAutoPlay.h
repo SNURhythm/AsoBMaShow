@@ -89,8 +89,9 @@ inline ReplaySummary BuildSummary(
           ? kClearTypeAssistedEasyClearRank
           : assistClearMark == AssistClearMark::LightAssistedEasy
                 ? kClearTypeLightAssistedEasyClearRank
-                : clear_policy::fullComboRankForPlayback(
-                      kClearTypeFullComboRank, true, playback);
+                : clear_policy::completedClearRank(
+                      kClearTypeFullComboRank, meta.TotalNotes, meta.TotalNotes,
+                      0, 0, 0, 0, 0, playback);
   summary.createdAt = kLabel;
   summary.eventCount = std::max(0, meta.TotalNotes);
   summary.touchSampleCount = 0;
@@ -204,9 +205,7 @@ inline ReplayData BuildReplayData(
   replay.finalScore = state.getScore();
   replay.maxCombo = state.maxCombo;
   replay.finalGauge = state.currentGauge;
-  replay.clearType = clear_policy::fullComboRankForPlayback(
-      state.getClearTypeRank(), state.comboBreak == 0,
-      replay.provenance.playback);
+  replay.clearType = state.completedClearTypeRank(chart.Meta.TotalNotes, replay.provenance.playback);
   return replay;
 }
 } // namespace replay_autoplay

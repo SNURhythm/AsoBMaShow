@@ -978,10 +978,13 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   const std::span<const ReplayData> attempts(&replay, 1);
   const std::optional<practice::ResultModel> analyticsModel(
       std::in_place, chart, attempts, 0);
+  const int clearRank = state.completedClearTypeRank(
+      chart.Meta.TotalNotes, replay.provenance.playback);
   return exportResultImage(
       context, chart.Meta, state, display.mode, display.laneOrder,
-      difficultyLabel, previousBest, previousLampBest, std::nullopt,
-      std::nullopt, std::nullopt, pacemaker,
+      difficultyLabel, previousBest, previousLampBest,
+      replay.autoPlay ? "AUTO PLAY" : clearTypeRankToLabel(clearRank),
+      clearRank, std::nullopt, pacemaker,
       replay_result::BuildSkinGameplayGraphState(chart, replay, state),
       analyticsModel);
 }

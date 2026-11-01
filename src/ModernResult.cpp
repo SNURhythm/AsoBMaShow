@@ -1,4 +1,5 @@
 #include "ModernResult.h"
+#include "ResultClearLamp.h"
 
 #include "BmsMetadataText.h"
 #include "CourseIdentity.h"
@@ -283,7 +284,7 @@ bool sameScoreOutcome(const ChartScoreWrite &left,
          left.kPoor == right.kPoor && left.fast == right.fast &&
          left.slow == right.slow &&
          sameFloatBits(left.finalGauge, right.finalGauge) &&
-         normalizeClearLamp(left.clearType) == normalizeClearLamp(right.clearType) &&
+         result_clear_lamp::effectiveRank(left) == result_clear_lamp::effectiveRank(right) &&
          left.badPoints == right.badPoints;
 }
 
@@ -329,8 +330,7 @@ ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
       result_contract::maximumScoreForNotes(meta.TotalNotes);
   const int maximumScore =
       meta.TotalNotes > 0 && derivedMaximum ? *derivedMaximum : -1;
-  const int clearType = clear_policy::capRankForPlayback(
-      state.getClearTypeRank(), provenance.playback);
+  const int clearType = state.completedClearTypeRank(meta.TotalNotes, provenance.playback);
   const std::int64_t badPoints =
       static_cast<std::int64_t>(judgementCount(state, Bad)) +
       judgementCount(state, Poor) + judgementCount(state, Kpoor) +
@@ -778,7 +778,7 @@ compareModernCourseResultFacts(const ModernCourseResult &expected,
         expected.maxScore != actual.maxScore ||
         expected.maxCombo != actual.maxCombo ||
         !sameFloatBits(expected.finalGauge, actual.finalGauge) ||
-        normalizeClearLamp(expected.clearType) != normalizeClearLamp(actual.clearType)) {
+        result_clear_lamp::effectiveRank(expected) != result_clear_lamp::effectiveRank(actual)) {
       return disagreement(ResultFactAgreementIssue::CourseAggregate,
                           "course aggregate facts differ");
     }

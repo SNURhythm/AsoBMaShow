@@ -3,6 +3,7 @@
 #include "../CanonicalDigest.h"
 #include "../ResultContracts.h"
 #include "IrProfileSettings.h"
+#include "tachi/TachiEligibility.h"
 #include "../Uuid.h"
 #include "../scene/play/GameplayGaugeTypes.h"
 
@@ -36,6 +37,11 @@ struct ProofKeyHash {
   }
 };
 
+int providerLampRank(std::string_view providerId, int rank) {
+  rank = normalizeClearLamp(rank);
+  return providerId == tachi::kProviderId ? std::min(rank, kClearTypeFullComboRank) : rank;
+}
+
 using ProofIndex =
     std::unordered_map<ProofKey, std::vector<const IrRemoteScore *>,
                        ProofKeyHash>;
@@ -55,6 +61,8 @@ bool knownLampRank(int value) {
       kClearTypeHardClearRank,
       kClearTypeExHardClearRank,
       kClearTypeFullComboRank,
+      kClearTypePerfectRank,
+      kClearTypeMaxRank,
   };
   return std::ranges::find(ranks, normalizeClearLamp(value)) != ranks.end();
 }
@@ -122,7 +130,8 @@ std::array<std::string_view, 2> candidateGames(int keyMode) {
   return {};
 }
 
-const IrRemoteScore *findUniqueProofMatch(const IrLocalReceiptCandidate &local,
+const IrRemoteScore *findUniqueProofMatch(std::string_view providerId,
+                                          const IrLocalReceiptCandidate &local,
                                           const ProofIndex &sha256Index,
                                           const ProofIndex &md5Index) {
   std::unordered_set<const IrRemoteScore *> possible;
@@ -135,7 +144,7 @@ const IrRemoteScore *findUniqueProofMatch(const IrLocalReceiptCandidate &local,
       const auto found = sha256Index.find({.game = game,
                                            .hash = local.chartSha256,
                                            .score = local.score,
-                                           .lampRank = normalizeClearLamp(local.lampRank)});
+                                           .lampRank = providerLampRank(providerId, local.lampRank)});
       if (found != sha256Index.end()) {
         possible.insert(found->second.begin(), found->second.end());
       }
@@ -144,7 +153,7 @@ const IrRemoteScore *findUniqueProofMatch(const IrLocalReceiptCandidate &local,
       const auto found = md5Index.find({.game = game,
                                         .hash = local.chartMd5,
                                         .score = local.score,
-                                        .lampRank = normalizeClearLamp(local.lampRank)});
+                                        .lampRank = providerLampRank(providerId, local.lampRank)});
       if (found != md5Index.end()) {
         possible.insert(found->second.begin(), found->second.end());
       }
@@ -289,14 +298,14 @@ IrScoreReconciliationPlan planScoreReconciliation(
       sha256Index[{.game = score.game,
                    .hash = score.chartSha256,
                    .score = score.score,
-                   .lampRank = normalizeClearLamp(score.lampRank)}]
+                   .lampRank = providerLampRank(providerId, score.lampRank)}]
           .push_back(&score);
     }
     if (!score.chartMd5.empty()) {
       md5Index[{.game = score.game,
                 .hash = score.chartMd5,
                 .score = score.score,
-                .lampRank = normalizeClearLamp(score.lampRank)}]
+                .lampRank = providerLampRank(providerId, score.lampRank)}]
           .push_back(&score);
     }
   }
@@ -346,7 +355,7 @@ IrScoreReconciliationPlan planScoreReconciliation(
       continue;
     }
     const IrRemoteScore *match =
-        findUniqueProofMatch(candidate, sha256Index, md5Index);
+        findUniqueProofMatch(providerId, candidate, sha256Index, md5Index);
     if (match == nullptr || match->chartSha256.empty()) {
       preserveAmbiguousSubmission();
       continue;

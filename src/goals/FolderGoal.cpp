@@ -25,7 +25,7 @@ void validate(const Target &t) {
   if (t.exPercent<1 || t.exPercent>10000)
     throw std::invalid_argument("Choose a valid minimum EX rate.");
   if (t.type == Type::Lamp && t.lamp != 0 && t.lamp != 50 && t.lamp != 100 &&
-      t.lamp != 200 && t.lamp != 300 && t.lamp != 400 && t.lamp != 500 && t.lamp != 600)
+      t.lamp != 200 && t.lamp != 300 && t.lamp != 400 && t.lamp != 500 && t.lamp != 600 && t.lamp != 700 && t.lamp != 800)
     throw std::invalid_argument("Choose a valid minimum lamp.");
 }
 void validate(const Goal &g) {

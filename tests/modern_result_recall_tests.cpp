@@ -1,4 +1,5 @@
 #include "ModernResultRecallBuilder.h"
+#include "ResultPresentationUtils.h"
 
 #include "BmsMetadataText.h"
 #include "CoursePlaySession.h"
@@ -537,6 +538,47 @@ void testCourseRecallPreservesPersistedAggregateClearType() {
          "rederiving it from reconstructed stage gauges");
 }
 
+void testCourseRecallPreservesStageAchievements() {
+  for (const int rank : {kClearTypeFullComboRank, kClearTypePerfectRank, kClearTypeMaxRank}) {
+    auto saved = courseResult();
+    saved.provenance.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+    saved.finalScore = 0;
+    saved.maxCombo = 10;
+    for (std::size_t index = 0; index < saved.stages.size(); ++index) {
+      auto &score = saved.stages[index].score;
+      score.provenance.ruleset = saved.provenance.ruleset;
+      score.clearType = rank;
+      score.comboBreak = score.bad = score.poor = score.kPoor = 0;
+      score.good = rank == kClearTypeFullComboRank ? 1 : 0;
+      score.great = rank != kClearTypeMaxRank ? 1 : 0;
+      score.pGreat = 5 - score.good - score.great;
+      score.score = score.pGreat * 2 + score.great;
+      score.maxCombo = static_cast<int>((index + 1) * 5);
+      saved.finalScore += score.score;
+      saved.stages[index].judgementTiming.reset();
+    }
+    const std::vector stageProvenance{
+        saved.stages[0].score.provenance, saved.stages[1].score.provenance};
+    saved.provenance = mergeCourseProvenance(stageProvenance);
+    saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+    std::atomic_bool cancelled{false};
+    const auto outcome = result_recall::BuildCourseResult(
+        result_persistence::ModernCourseResult(saved), cancelled,
+        [&](const std::filesystem::path &path, std::atomic_bool &) {
+          const auto index = path == saved.stages.front().score.chartPath ? 0 : 1;
+          return parsedChartFor(saved.stages[index].score);
+        });
+    expect(outcome.value.has_value(), "achievement course recalls from authenticated facts: " + outcome.diagnostic);
+    if (!outcome.value) continue;
+    for (const auto &stage : outcome.value->completedStages) {
+      expect(stage.state.combo == 0 && stage.state.stageCombo == 0,
+             "recall does not invent surviving combo counters");
+      expect(result_presentation::courseStageClearRank(stage.state, stage.chart->Meta) == rank,
+             "recalled stage preserves FC/Perfect/Max without live combo counters");
+    }
+  }
+}
+
 void testCourseRecallReappliesEachStageSetupBeforeAgreement() {
   auto saved = courseResult();
   std::vector<ScoreProvenance> stageProvenance;
@@ -605,6 +647,7 @@ void testMovedCourseRecallUsesCurrentOrderedLocations() {
 } // namespace
 
 int main() {
+  testCourseRecallPreservesStageAchievements();
   testChartRecallUsesOnlySavedFacts();
   testChartRecallReappliesSavedRandomAndLongNoteSetup();
   testChartRecallFailsClosedBeforePublishing();

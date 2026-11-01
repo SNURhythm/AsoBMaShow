@@ -1,6 +1,7 @@
 #include "../src/ReplaySummaryFormatting.h"
 #include "../src/ReplayResultStateBuilder.h"
 #include "../src/ReplayAutoPlay.h"
+#include "../src/ResultPresentationUtils.h"
 #include "../src/scene/play/Pacemaker.h"
 #include "../src/scene/play/SkinGameplayGraphState.h"
 
@@ -211,6 +212,45 @@ bool testAutoPlayDemotedUnpairedHead() {
 }
 
 int main() {
+  for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    for (const int keyMode : {5, 7, 9, 10, 14, 18}) {
+      for (const auto finalJudge : {Good, Great, PGreat}) {
+        bms_parser::Chart chart;
+        chart.Meta.KeyMode = keyMode;
+        chart.Meta.TotalNotes = 2;
+        ReplayData replay;
+        replay.provenance.ruleset = RulesetDescriptor::For(ruleset);
+        replay.resultPassedNotes = 2;
+        replay.events = {
+            {.action = ReplayEventAction::Press, .judgement = PGreat,
+             .gauge = 100.0f, .combo = 11},
+            {.action = ReplayEventAction::Press, .judgement = finalJudge,
+             .gauge = 100.0f, .combo = 12},
+        };
+        const int expectedRank = finalJudge == Good ? kClearTypeFullComboRank
+            : finalJudge == Great ? kClearTypePerfectRank : kClearTypeMaxRank;
+        const auto state = replay_result::BuildResultState(
+            chart, replay, GaugeProfile::CourseDefault, nullptr, 10, 20);
+        if (state.stageCombo != 2 || state.combo != 12 || state.maxCombo != 20 ||
+            result_presentation::courseStageClearRank(state, chart.Meta) != expectedRank) {
+          std::cerr << "course export must reconstruct the stage combo independently of carried combo\n";
+          return 1;
+        }
+        const bool emptyPoorBreaks = ruleset == GameplayRuleset::Beatoraja &&
+            (keyMode == 5 || keyMode == 10 || keyMode == 9 || keyMode == 18);
+        replay.events.push_back({.action = ReplayEventAction::Press, .judgement = Kpoor,
+                                 .gauge = 100.0f, .combo = emptyPoorBreaks ? 0 : 12});
+        const auto broken = replay_result::BuildResultState(
+            chart, replay, GaugeProfile::CourseDefault, nullptr, 10, 20);
+        if (broken.stageCombo != (emptyPoorBreaks ? 0 : 2) || broken.comboBreak != 0 ||
+            result_presentation::courseStageClearRank(broken, chart.Meta) !=
+                (emptyPoorBreaks ? kNoClearTypeRank : expectedRank)) {
+          std::cerr << "course export must apply ruleset-specific ending empty-POOR behavior\n";
+          return 1;
+        }
+      }
+    }
+  }
   {
     const pacemaker::Target target{.enabled = true, .finalScore = 180,
                                    .maxScore = 200, .totalNotes = 100};
@@ -861,6 +901,14 @@ int main() {
     return 1;
   }
 
+  // Autoplay achievement evidence must contain the note promised by metadata.
+  chart.Meta.KeyMode = 7;
+  auto *autoMeasure = new bms_parser::Measure();
+  auto *autoTimeline = new bms_parser::TimeLine(8, false);
+  autoTimeline->SetNote(0, new bms_parser::Note(0));
+  autoMeasure->TimeLines.push_back(autoTimeline);
+  chart.Measures.push_back(autoMeasure);
+
   const ReplayData autoExport = replay_autoplay::BuildReplayData(
       chart, GaugeType::Normal, GaugeAutoShiftMode::None, {.percent = 200},
       std::nullopt, std::nullopt, std::nullopt, std::nullopt,
@@ -936,8 +984,8 @@ int main() {
           assist_options::kBpmGuide ||
       constantTempoBpmGuideAutoSummary.assistOption !=
           assist_options::kBpmGuide ||
-      constantTempoBpmGuideAutoExport.clearType != kClearTypeFullComboRank ||
-      constantTempoBpmGuideAutoSummary.clearType != kClearTypeFullComboRank) {
+      constantTempoBpmGuideAutoExport.clearType != kClearTypeMaxRank ||
+      constantTempoBpmGuideAutoSummary.clearType != kClearTypeMaxRank) {
     std::cerr << "constant-tempo BPM Guide replays retain guide rendering "
                  "without an assisted clear"
               << std::endl;

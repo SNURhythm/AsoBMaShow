@@ -61,11 +61,36 @@ fullComboClearRankExpr(std::string_view alias,
   return "(CASE" + importedBranch + " WHEN " + clearType +
          " >= " + std::to_string(kClearTypeLightAssistedEasyClearRank) +
          " AND " + playbackPercentExpression + " <> 100 THEN " +
-         std::to_string(kClearTypeLightAssistedEasyClearRank) + " WHEN " + prefix +
+         std::to_string(kClearTypeLightAssistedEasyClearRank) +
+         " WHEN " + clearType + " < " + std::to_string(kClearTypeFullComboRank) +
+         " AND (CASE WHEN json_valid(" + prefix + ".provenance_json) THEN "
+         "json_extract(" + prefix + ".provenance_json,'$.ruleset.id') END)='beatoraja'"
+         " AND (" + prefix + ".kpoor>0 OR " + prefix + ".max_score<=0 OR " +
+         prefix + ".max_score%2<>0 OR " + prefix + ".max_combo<" + prefix +
+         ".max_score/2) THEN " + clearType + " WHEN " + prefix +
          ".combo_break = 0 AND " + clearType +
          " >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
-         " THEN " + std::to_string(kClearTypeFullComboRank) + " ELSE " +
-         clearType + " END)";
+         " THEN MAX(" + clearType + ", CASE WHEN " + prefix +
+         ".final_gauge>0 AND " + prefix + ".max_score>0 AND " + prefix + ".max_score%2=0 AND " + prefix +
+         ".max_combo>=" + prefix + ".max_score/2 AND " + prefix +
+         ".pgreat>=0 AND " + prefix + ".great>=0 AND " + prefix +
+         ".good=0 AND " + prefix + ".bad=0 AND " + prefix + ".poor=0 AND " +
+         prefix + ".pgreat+" + prefix + ".great=" + prefix + ".max_score/2 AND " +
+         prefix + ".pgreat*2+" + prefix + ".great=" + prefix + ".score " +
+         "THEN CASE WHEN " + prefix + ".great=0 THEN " +
+         std::to_string(kClearTypeMaxRank) + " ELSE " +
+         std::to_string(kClearTypePerfectRank) + " END ELSE " +
+         std::to_string(kClearTypeFullComboRank) + " END) ELSE " + clearType + " END)";
+}
+
+inline std::string courseClearRankExpr(std::string_view alias) {
+  const std::string prefix(alias);
+  return "(CASE WHEN " + prefix + ".total_charts>0 AND " + prefix +
+      ".completed_charts=" + prefix + ".total_charts AND (CASE WHEN json_valid(" +
+      prefix + ".provenance_json) THEN COALESCE(json_extract(" + prefix +
+      ".provenance_json,'$.assistOption')," + prefix + ".assist_option) ELSE " +
+      prefix + ".assist_option END)='OFF' THEN " +
+      fullComboClearRankExpr(alias) + " ELSE " + clearLampOrderSql(prefix + ".clear_type") + " END)";
 }
 
 inline std::string playableLongNoteModesSql() {
@@ -250,8 +275,9 @@ inline std::string scoreIdentityCte(std::string_view schema,
   const std::string scoreSource =
       sourceAware ? "score_source" : "0 AS score_source";
   return "SELECT lower(trim(chart_sha256)) AS chart_sha256, modes.ln_mode, "
-         "id AS score_id, score, max_score, max_combo, combo_break, "
+         "id AS score_id, score, max_score, max_combo, combo_break, pgreat, great, good, bad, poor, kpoor, "
          "final_gauge, clear_type, " + scoreSource + ", " +
+         (hasProvenance ? "provenance_json, " : "'{}' AS provenance_json, ") +
          playbackPercent + " AS playback_percent, created_at FROM " + scores +
          " s JOIN " + playableLongNoteModesSql() +
          " modes ON s.ln_mode = -1 OR s.ln_mode = modes.ln_mode WHERE " +
@@ -474,7 +500,9 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
     return error;
   }
 
-  // Revision 3 includes assisted lamps separately from EX bests and canonicalizes historical Light Assist IDs in denormalized
+  // Revision 5 also retains Beatoraja combo qualification when projecting
+  // historical lamps. Revision 4 derives Perfect/Max from complete judgments, includes assisted
+  // lamps separately from EX bests and canonicalizes historical Light Assist IDs in denormalized
   // columns. Immutable provenance, result fingerprints and links are untouched.
   // Keep the marker separate from user_version so existing v15 profiles repair.
   const std::string revisions =
@@ -493,7 +521,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
     return sqliteDatabaseError(db);
   }
   bool rebuildRequired = revisionResult == SQLITE_DONE ||
-                         sqlite3_column_int(revision.get(), 0) < 3;
+                         sqlite3_column_int(revision.get(), 0) < 5;
   revision.reset();
 
   // Empty summaries are valid for historical-only profiles. Index the same
@@ -606,7 +634,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
       if (const auto error = executeSqlite(db, clear.c_str())) return error;
     }
     const std::string recordRevision = "INSERT OR REPLACE INTO " + revisions +
-        "(name, revision) VALUES('clear_lamp_order', 3)";
+        "(name, revision) VALUES('clear_lamp_order', 5)";
     if (const auto error = executeSqlite(db, recordRevision.c_str())) return error;
   }
   if (!transaction.commit(transactionError)) {

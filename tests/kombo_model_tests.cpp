@@ -541,6 +541,19 @@ int main() {
   record(lamp, strong, 1);
   CHECK(lamp.days.at(29200).assignments[0].requirement.targetLamp == 400);
 
+  // Lamp-only bonus challenges can advance through both native achievements.
+  for (const auto [from, to] : {std::pair{600, 700}, std::pair{700, 800}, std::pair{800, 800}}) {
+    State achievement;
+    auto base = config(1, 1);
+    base.assignments[0].targetLamp = from;
+    base.assignments[0].scoreNumerator = 0;
+    configure(achievement, base, 29201);
+    auto completed = play(29201, "achievement");
+    completed.lamp = from;
+    record(achievement, completed, 0);
+    CHECK(achievement.days.at(29201).assignments[0].requirement.targetLamp == to);
+  }
+
   // One random condition is raised when every assignment enters bonus mode.
   for (unsigned choice = 0; choice < 3; ++choice) {
     State once;

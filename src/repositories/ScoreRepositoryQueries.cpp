@@ -744,7 +744,8 @@ void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
       score_cache_queries::detail::scoreParticipatesInBestExpr("c", true);
   const std::string query =
       "SELECT COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode, " +
-      bestClearMarkRankExpr("c") + " FROM " +
+      score_cache_queries::detail::bestClearRankExpr(
+          score_cache_queries::detail::courseClearRankExpr("c")) + " FROM " +
       qualifiedScoreTable(schema, "course_scores") + " c WHERE " + eligible +
       " GROUP BY COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode";
   SqliteStatementHandle stmt;
@@ -974,8 +975,8 @@ bool score_repository_detail::InsertCourseScoreOnConnection(
   const bool fullCombo = completedCharts == totalCharts && totalCharts > 0 &&
                          state.currentGauge > 0.0f && state.comboBreak == 0 &&
                          state.maxCombo >= courseTotalNotes;
-  clearRank = clear_policy::fullComboRankForPlayback(clearRank, fullCombo,
-                                                     provenance.playback);
+  clearRank = fullCombo ? state.completedClearTypeRank(courseTotalNotes, provenance.playback)
+                        : clear_policy::capRankForPlayback(clearRank, provenance.playback);
   sqlite3_bind_int(stmt.get(), bindIndex++, normalizeClearLamp(clearRank));
   sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
   sqlite3_bind_int(stmt.get(), bindIndex++,
@@ -2071,7 +2072,8 @@ CourseSelectorOptionScores ScoreRepository::LoadCourseSelectorOptionScores(
   if (!EnsureSessionDatabaseLocked()) return scores;
 
   const std::string query =
-      "SELECT score,max_score,COALESCE(bad_points,bad + poor + kpoor),clear_type,play_option,"
+      "SELECT score,max_score,COALESCE(bad_points,bad + poor + kpoor)," +
+      score_cache_queries::detail::courseClearRankExpr("c") + ",play_option,"
       "provenance_json FROM course_scores c WHERE "
       "((?1<>'' AND course_key=?1) OR "
       "(COALESCE(course_key,'')='' AND course_id=?2)) AND "
@@ -2149,8 +2151,8 @@ score_repository_detail::LoadBestCourseScoreOnConnection(
   const int lnMode = long_note_mode::normalizeValue(session.longNoteMode);
   std::string query =
       "SELECT score, max_score, max_combo, combo_break, fast, slow, "
-      "final_gauge, clear_type, created_at, attempt_id "
-      "FROM course_scores c "
+      "final_gauge, " + score_cache_queries::detail::courseClearRankExpr("c") +
+      " AS effective_clear_type, created_at, attempt_id FROM course_scores c "
       "WHERE ((? != '' AND course_key = ?) OR "
       "(COALESCE(course_key, '') = '' AND course_id = ?)) "
       "AND " +
@@ -2163,9 +2165,9 @@ score_repository_detail::LoadBestCourseScoreOnConnection(
         "COALESCE((SELECT id FROM course_scores WHERE attempt_id = ?), 0)) "
       : "AND (? = '' OR created_at < ?) ";
   query += preferClear
-      ? "ORDER BY " + clearLampOrderSql("clear_type") +
+      ? "ORDER BY " + clearLampOrderSql("effective_clear_type") +
             " DESC, score DESC, created_at DESC, id DESC LIMIT 1"
-      : "ORDER BY score DESC, " + clearLampOrderSql("clear_type") +
+      : "ORDER BY score DESC, " + clearLampOrderSql("effective_clear_type") +
             " DESC, created_at DESC, id DESC LIMIT 1";
 
   SqliteStatementHandle stmt;

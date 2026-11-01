@@ -456,7 +456,7 @@ void testModernChartProjectionUsesEffectiveLampAndBothPlayerOptions() {
   const auto fullCombo = makeModernChartResultRecord(
       ModernChartResultRecord{.result = result},
       replay::ReplayState::Missing, ir::IrRecordState::Hidden);
-  expect(fullCombo.clearRank == kClearTypeFullComboRank &&
+  expect(fullCombo.clearRank == kClearTypePerfectRank &&
              fullCombo.playOption == "NORMAL" &&
              fullCombo.playOption2 == "RANDOM",
          "modern Records projects the effective lamp and both player options");

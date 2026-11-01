@@ -157,7 +157,7 @@ State load(sqlite3 *db) {
           static_cast<std::uint64_t>(progress.charts) + progress.completedRounds > progress.usedCharts.size() ||
           progress.usedCharts.contains("") || (!day.played && !progress.usedCharts.empty()))
         throw std::runtime_error("Invalid assignment progress.");
-      constexpr std::array validLamps{-1, 0, 50, 100, 200, 300, 400, 500, 600};
+      constexpr std::array validLamps{-1, 0, 50, 100, 200, 300, 400, 500, 600, 700, 800};
       for (const auto &[chart, achievement] : progress.chartProgress) {
         if (chart.empty() || !day.played ||
             std::find(validLamps.begin(), validLamps.end(), achievement.lamp) == validLamps.end() ||

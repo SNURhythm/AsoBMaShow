@@ -533,6 +533,17 @@ void testQuickRetryReachability() {
           "resolved heads and earned ticks update cached totals");
   GameplayScoreState state(beatorajaScoreConfig(100, 7, 100.0));
   state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  require(!quick_retry::shouldRetry(state, 100, {.lamp = 800}), "Max lamp remains reachable at start");
+  quick_retry::Projection deferred;
+  deferred.pendingClassicJudgements[Great] = 1;
+  require(quick_retry::shouldRetry(state, 100, {.lamp = 800}, deferred), "deferred GREAT loses Max lamp");
+  require(quick_retry::failureReason(state, 100, {.lamp = 800}, deferred) == "MAX UNREACHABLE",
+          "lost Max goal names Max even while Full Combo remains reachable");
+  require(!quick_retry::shouldRetry(state, 100, {.lamp = 700}, deferred), "deferred GREAT retains Perfect");
+  deferred.pendingClassicJudgements[Good] = 1;
+  require(quick_retry::shouldRetry(state, 100, {.lamp = 700}, deferred), "deferred GOOD loses Perfect");
+  require(quick_retry::failureReason(state, 100, {.lamp = 700}, deferred) == "PERFECT UNREACHABLE",
+          "lost Perfect goal names Perfect even while Full Combo remains reachable");
   const std::array score{quick_retry::Condition{.score = 199}};
   require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(score)), "perfect start can reach target");
   quick_retry::Projection pending;
@@ -587,6 +598,32 @@ void testQuickRetryReachability() {
   require(!quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(hard)), "Best Clear retains surviving hard gauge");
   state.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] = true;
   require(quick_retry::shouldRetry(state, 100, quick_retry::compileTargets(hard)), "dead hard gauges cannot recover after shift");
+}
+
+void testQuickRetryEndingEmptyPoorLosesComboGoals() {
+  for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    for (const int mode : {5, 7, 9, 10, 14, 18, 24, 48}) {
+      bms_parser::Chart chart;
+      chart.Meta.TotalNotes = 2;
+      chart.Meta.KeyMode = mode;
+      RhythmState state(&chart, false, ruleset);
+      state.commitJudgeCounters(JudgeResult(PGreat, 0));
+      state.commitJudgeCounters(JudgeResult(PGreat, 0));
+      state.currentGauge = 100;
+      state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 100;
+      for (const int lamp : {kClearTypeFullComboRank, kClearTypePerfectRank, kClearTypeMaxRank}) {
+        require(!quick_retry::shouldRetry(state, 2, {.lamp = lamp}),
+                "completed intact combo retains all combo achievements");
+      }
+      state.commitJudgeCounters(JudgeResult(Kpoor, 0));
+      const bool broken = ruleset == GameplayRuleset::Beatoraja &&
+          (mode == 5 || mode == 9 || mode == 10 || mode == 18);
+      for (const int lamp : {kClearTypeFullComboRank, kClearTypePerfectRank, kClearTypeMaxRank}) {
+        require(quick_retry::shouldRetry(state, 2, {.lamp = lamp}) == broken,
+                "ending empty POOR loses combo goals only when the ruleset resets combo");
+      }
+    }
+  }
 }
 
 void testQuickRetrySummaryStartupEligibility() {
@@ -670,6 +707,7 @@ void testQuickRetrySummaryCollapsesActualHurdles() {
 }
 
 int main() {
+  testQuickRetryEndingEmptyPoorLosesComboGoals();
   testQuickRetrySummaryStartupEligibility();
   testQuickRetrySummaryCollapsesActualHurdles();
   testQuickRetryProjectedSurvivalToGroove();

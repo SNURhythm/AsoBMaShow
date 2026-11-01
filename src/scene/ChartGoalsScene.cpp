@@ -656,7 +656,7 @@ void ChartGoalsScene::build() {
       } else label(detail, i18n::tr("goals.ui.storage_error"));
       label(detail, i18n::tr("goals.ui.target_help"), 18);
       std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("goals.ui.no_target")}};
-      for (int rank : {50, 100, 200, 300, 400, 500, 600}) lamps.push_back({.id=std::to_string(rank), .label=kombo::lampLabel(rank), .leadingColor=clearLampColorForRank(rank)});
+      for (int rank : {50, 100, 200, 300, 400, 500, 600, 700, 800}) lamps.push_back({.id=std::to_string(rank), .label=kombo::lampLabel(rank), .leadingColor=clearLampColorForRank(rank)});
       select(detail, portal_, i18n::tr("goals.ui.lamp"), std::move(lamps), std::to_string(draft_.target.lamp),
           [this](const std::string &id) { draft_.target.lamp = std::stoi(id); });
       std::vector<DropdownView::Option> scores{{"0", i18n::tr("goals.ui.no_target")}};

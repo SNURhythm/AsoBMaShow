@@ -3317,6 +3317,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultSkinData.playModeLabel = playModeDisplay.mode;
     resultSkinData.laneOrderLabel = playModeDisplay.laneOrder;
     resultSkinData.difficultyLabel = difficultyLabel;
+    const int clearRank = replayResultState.completedClearTypeRank(
+        chart.Meta.TotalNotes, resultReplay.provenance.playback);
+    resultSkinData.currentClearRankOverride = clearRank;
+    resultSkinData.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
     if (replay.autoPlay) {
       resultSkinData.currentClearLabelOverride = "AUTO PLAY";
     }
