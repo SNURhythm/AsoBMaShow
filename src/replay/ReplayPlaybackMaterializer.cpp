@@ -468,9 +468,9 @@ ReplayPlaybackMaterializer::materializeForConsumers(
           judged.score.kPoor + *maximumScore / 2 - state.stagePassedNotes;
     }
     judged.score.finalGauge = state.currentGauge;
-    // Historical captures stored the gauge lamp. Keep that representation
-    // while re-judging; effective lamps are derived separately for display.
-    judged.score.clearType = savedResult.score.clearType <= kClearTypeFullComboRank
+    // Historical gauge-only captures keep that representation while re-judging.
+    // Explicit combo achievements, including FC, must use the completed policy.
+    judged.score.clearType = savedResult.score.clearType < kClearTypeFullComboRank
         ? state.getClearTypeRank()
         : state.completedClearTypeRank(*maximumScore / 2, savedResult.score.provenance.playback);
     if (result_clear_lamp::effectiveRank(judged.score) ==

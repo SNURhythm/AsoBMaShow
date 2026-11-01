@@ -397,13 +397,9 @@ std::optional<ChartResultAttempt> makeChartResultAttempt(
     return rejected("max combo mismatch", diagnostic);
   }
 
-  const int totalNotes = std::max(0, meta.TotalNotes);
-  const bool fullCombo =
-      totalNotes > 0 && score.comboBreak == 0 && score.maxCombo >= totalNotes;
-  const int expectedReplayClearType = clear_policy::fullComboRankForPlayback(
-      score.clearType, fullCombo && !state.assistClearMark && !state.lightAssistClearMark,
-      provenance.playback);
-  if (normalizeClearLamp(replay.clearType) != expectedReplayClearType) {
+  // captureChartScoreWrite already resolves the completed lamp, including
+  // ruleset-specific surviving combo and assist/playback restrictions.
+  if (normalizeClearLamp(replay.clearType) != score.clearType) {
     return rejected("clear type mismatch", diagnostic);
   }
 

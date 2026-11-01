@@ -458,6 +458,10 @@ void testAttemptValidationAndFingerprint() {
 
 void testFullComboNormalization() {
   AttemptFixture fixture;
+  fixture.state.resetJudgeCounts();
+  fixture.state.judgeCount[PGreat] = fixture.meta.TotalNotes - 1;
+  fixture.state.judgeCount[Good] = 1;
+  fixture.state.combo = fixture.meta.TotalNotes;
   fixture.state.maxCombo = fixture.meta.TotalNotes;
   fixture.state.comboBreak = 0;
   fixture.replay.maxCombo = fixture.state.maxCombo;
@@ -471,9 +475,9 @@ void testFullComboNormalization() {
       std::string(kAttemptId), fixture.meta, fixture.state, fixture.provenance,
       fixture.storageLongNoteMode, fixture.replay, diagnostic);
   expect(fullCombo.has_value(), "valid full-combo replay rank is accepted");
-  expect(fullCombo && fullCombo->score.clearType == kClearTypeNormalClearRank &&
+  expect(fullCombo && fullCombo->score.clearType == kClearTypeFullComboRank &&
              fullCombo->replay.clearType == kClearTypeFullComboRank,
-         "score keeps base rank while replay keeps full-combo rank");
+         "score and replay retain the same completed full-combo lamp");
 
   fixture.provenance.playback.percent = 75;
   fixture.replay.provenance = fixture.provenance;
@@ -489,6 +493,33 @@ void testFullComboNormalization() {
                  kClearTypeLightAssistedEasyClearRank,
          "altered playback persists Light Assist Easy for both score and "
          "replay");
+}
+
+void testEndingEmptyPoorReplayValidation() {
+  AttemptFixture fixture;
+  fixture.meta.KeyMode = 5;
+  fixture.provenance.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  fixture.replay.provenance = fixture.provenance;
+  fixture.state.setGaugeRules(compileGameplayGaugeRules(
+      GameplayRuleset::Beatoraja, fixture.meta, GaugeProfile::Standard), 5);
+  fixture.state.resetJudgeCounts();
+  fixture.state.combo = fixture.state.maxCombo = fixture.state.comboBreak = 0;
+  for (int note = 0; note < fixture.meta.TotalNotes; ++note) {
+    fixture.state.commitJudgeCounters(JudgeResult(PGreat, 0));
+  }
+  fixture.state.commitJudgeCounters(JudgeResult(Kpoor, 0));
+  fixture.replay.chartMeta = fixture.meta;
+  fixture.replay.maxCombo = fixture.state.maxCombo;
+  fixture.replay.finalScore = fixture.state.getScore();
+  fixture.replay.clearType = kClearTypeNormalClearRank;
+  std::string diagnostic;
+  const auto attempt = result_persistence::makeChartResultAttempt(
+      std::string(kAttemptId), fixture.meta, fixture.state, fixture.provenance,
+      fixture.storageLongNoteMode, fixture.replay, diagnostic);
+  expect(attempt.has_value() && diagnostic.empty(),
+         "ending empty POOR accepts matching gauge lamps despite maximum combo");
+  fixture.replay.clearType = kClearTypeFullComboRank;
+  expectRejected(fixture, std::string(kAttemptId), "clear type mismatch");
 }
 
 void testVersionOneFingerprintGolden() {
@@ -1015,6 +1046,7 @@ int main() {
   testScoreDifferenceDiagnostics();
   testAttemptValidationAndFingerprint();
   testFullComboNormalization();
+  testEndingEmptyPoorReplayValidation();
   testVersionOneFingerprintGolden();
   testReplayFingerprintCoverage();
   testProvenanceFingerprintCoverage();

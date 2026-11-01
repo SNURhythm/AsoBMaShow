@@ -243,6 +243,41 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
              beatoTrack.judgedResult->score.bad == 1 && beatoTrack.endingCombo == 0,
          "Beatoraja equal-time inputs retain their recorded arrival order");
 
+  auto comboChart = oneNoteChart();
+  auto comboProof = beatoProof;
+  comboProof.chartMeta = comboChart.Meta;
+  comboProof.totalNotes = 1;
+  auto comboSaved = saved;
+  comboSaved.score.provenance = makeScoreProvenance(comboProof);
+  auto comboReplay = beatoReplay;
+  comboReplay.playback.input = {
+      {.songTimeMicros = 200'000,
+       .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+       .pressed = true},
+      {.songTimeMicros = 210'000,
+       .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+       .pressed = false},
+      {.songTimeMicros = 580'000,
+       .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+       .pressed = true},
+      {.songTimeMicros = 590'000,
+       .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+       .pressed = false}};
+  const auto comboFacts = ReplayPlaybackMaterializer::materializeForConsumers(
+      comboReplay, comboSaved, comboChart);
+  expect(comboFacts.judgedResult && comboFacts.judgedResult->score.good == 1 &&
+             comboFacts.judgedResult->score.kPoor == 1 && comboFacts.endingCombo == 1,
+         "7K GOOD plus empty POOR retains its full combo");
+  if (comboFacts.judgedResult) {
+    comboSaved = *comboFacts.judgedResult;
+    comboSaved.score.clearType = kClearTypeFullComboRank;
+    comboSaved.resultFingerprint = result_persistence::modernResultFingerprint(comboSaved);
+    const auto comboMatched = ReplayPlaybackMaterializer::materializeForConsumers(
+        comboReplay, comboSaved, comboChart);
+    expect(comboMatched.matched(),
+           "native Full Combo with empty POOR matches rejudged replay facts");
+  }
+
   auto scratchChart = oneNoteChart();
   auto *scratchTimeline = scratchChart.Measures.front()->TimeLines.front();
   delete scratchTimeline->Notes[0];
