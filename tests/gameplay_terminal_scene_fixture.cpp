@@ -308,6 +308,8 @@ public:
   FixturePauseView *guidedAccessReminderLayout = &reminderLayout;
   void discardGuidedAccessReminderTouches();
   void showGuidedAccessReminder() { reminderLayout.setVisible(true); }
+  int controlSettingsFlushes = 0;
+  void persistFloatingLaneCoverSettings() { ++controlSettingsFlushes; }
   void onApplicationBackgroundChanged(bool background);
   void onInputQueueOverflow();
   bool continuesAudioInBackground() const;
@@ -715,6 +717,7 @@ void testPausePenaltyAndFreshAttemptBoundary() {
             "unpaused manual attempt starts verified");
     scene.context.jukebox.time = 2'500'000;
     scene.showPauseMenu(true);
+    require(scene.controlSettingsFlushes == 1, "pausing flushes pending control settings");
     require(scene.context.jukebox.paused &&
                 scene.attemptProvenance.assistOption == assist_options::kAssisted &&
                 scene.attemptProvenance.eligibility == ScoreEligibility::Modified &&
@@ -2436,6 +2439,7 @@ void testAndroidBackgroundReleasesHeldPhysicalInputWithoutPause() {
   input.pendingTouches = 2; input.dragOwned = true;
   legacy.context.jukebox.paused = paused;
   legacy.onApplicationBackgroundChanged(true);
+  require(legacy.controlSettingsFlushes == 1, "background entry flushes pending control settings");
   require(input.background && input.inputCancellations == 1 && input.pendingTouches == 0 && !input.dragOwned && legacy.context.jukebox.isPaused() == paused,
           "legacy background entry must cancel input without changing explicit playback state");
  }

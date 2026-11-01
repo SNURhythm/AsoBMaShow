@@ -3330,6 +3330,7 @@ GamePlayScene::~GamePlayScene() {
     coordinator->cancelTextInput();
     platform::stopFocusedTextInput();
   }
+  persistFloatingLaneCoverSettings();
   persistAutoAdjustedNotesDisplayTiming();
   persistSkinAudioSettings();
   stopBestReplayLoad();
@@ -4276,6 +4277,7 @@ void GamePlayScene::onInputQueueOverflow() {
 }
 
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
+  if (background) persistFloatingLaneCoverSettings();
   if (inputHandler != nullptr) inputHandler->setApplicationBackground(background);
   if (realtimeGameplayAuthorityActive()) {
     auto &session = *realtimeGameplaySession;
@@ -4703,6 +4705,7 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
   }
   if (pausePlayback) {
     context.jukebox.pause();
+    persistFloatingLaneCoverSettings();
     const long long gameplayTimeMicros =
         getGameplayTimeMicros(context.jukebox.getTimeMicros());
     int handledNotes = state != nullptr ? state->stagePassedNotes : 0;
@@ -4911,7 +4914,7 @@ void GamePlayScene::applyStartSelectControlActions(
           context.settings.gameplayHispeed = playfieldHispeedState->hispeed();
         }
         refreshRuntimePresentationConfiguration();
-        (void)context.saveSettings();
+        floatingLaneCoverSettingsDirty = true;
       }
       break;
     case gameplay::StartSelectControlActionKind::AdjustDuration:
@@ -4922,7 +4925,7 @@ void GamePlayScene::applyStartSelectControlActions(
         playfieldHispeedState->setDurationMilliseconds(
             context.settings.visibleTimeDurationMilliseconds);
         refreshRuntimePresentationConfiguration();
-        (void)context.saveSettings();
+        floatingLaneCoverSettingsDirty = true;
       }
       break;
     case gameplay::StartSelectControlActionKind::AdjustLaneCover:
@@ -4939,7 +4942,7 @@ void GamePlayScene::applyStartSelectControlActions(
             playfieldLaneCoverPercent,
             getGameplayTimeMicros(context.jukebox.getTimeMicros()),
             false, ReplayLaneCoverChangeKind::Enabled);
-        (void)context.saveSettings();
+        floatingLaneCoverSettingsDirty = true;
       }
       break;
     case gameplay::StartSelectControlActionKind::ToggleLiftHiddenTarget:
@@ -5078,7 +5081,6 @@ void GamePlayScene::adjustLaneCoverFromInput(float deltaPercent) {
       target == lane_cover::Target::Sudden ? ReplayLaneCoverChangeKind::Value :
       target == lane_cover::Target::Lift ? ReplayLaneCoverChangeKind::Lift :
                                            ReplayLaneCoverChangeKind::Hidden);
-  persistFloatingLaneCoverSettings();
 }
 
 void GamePlayScene::restartCurrentPattern() {
@@ -6841,6 +6843,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
     return;
   }
   resultTransitionScheduled = true;
+  persistFloatingLaneCoverSettings();
   persistAutoAdjustedNotesDisplayTiming();
   persistSkinAudioSettings();
 
@@ -9061,11 +9064,12 @@ void GamePlayScene::persistFloatingLaneCoverSettings() {
   if (!floatingLaneCoverSettingsDirty) {
     return;
   }
-  floatingLaneCoverSettingsDirty = false;
   context.settings.sanitize();
   if (!context.saveSettings()) {
-    SDL_Log("Failed to save lane cover drag settings");
+    SDL_Log("Failed to save gameplay control settings");
+    return;
   }
+  floatingLaneCoverSettingsDirty = false;
 }
 
 void GamePlayScene::persistAutoAdjustedNotesDisplayTiming() {
