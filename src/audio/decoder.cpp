@@ -199,6 +199,11 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   // Publish only complete decoded frames, including the duration consumers
   // use for resampling and playback. Never manufacture the declared tail.
   buffer.resize(static_cast<std::size_t>(numFrames) * channels);
+  if (buffer.capacity() > buffer.size()) {
+    // Shared PCM retains this allocation, while cache budgets count samples.
+    // Rebuild the short result rather than retaining the decode buffer's slack.
+    std::vector<short>(buffer.begin(), buffer.end()).swap(buffer);
+  }
   fileInfo.frames = numFrames;
 
   return true;

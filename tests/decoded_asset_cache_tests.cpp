@@ -388,6 +388,9 @@ void testForgedDurationUsesActualDecodedPcm(const std::filesystem::path &root) {
       require(largest <= 1024U * 1024U, "forged duration never causes an excessive allocation");
       require(cache.GetStatistics().retainedBytes == 64 && cache.GetStatistics().liveDecoders == 0,
               "cache accounts for actual decoded bytes and closes the decoder");
+      require(sound->pcm.storage()->capacity() * sizeof(short) ==
+                  cache.GetStatistics().retainedBytes,
+              "truncated PCM retains no unaccounted allocation capacity");
     }
   }
   const auto oversizedFile = root / "oversized-encoded.wav";
