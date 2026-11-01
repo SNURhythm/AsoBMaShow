@@ -479,7 +479,7 @@ CourseReplayConsumerOutcome CourseReplayConsumer::load(
     replayData->finalScore = judgedCourse->finalScore;
     replayData->maxCombo = judgedCourse->maxCombo;
     replayData->finalGauge = judgedCourse->finalGauge;
-    replayData->clearType = judgedCourse->clearType;
+    replayData->clearType = result_clear_lamp::effectiveRank(*judgedCourse);
     return {.state = CourseReplayConsumerState::Ready,
             .context = std::move(context),
             .charts = std::move(preparedCharts),

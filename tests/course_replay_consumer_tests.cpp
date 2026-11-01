@@ -444,8 +444,12 @@ void testCompleteFullComboCourseRetainsDerivedClearRank() {
   const auto loaded = consumer.load(harness.listed,
       {"selected/stage-0.bms", "selected/stage-1.bms"}, cancelled);
   expect(loaded.ready() && loaded.replayData && !loaded.replayData->staleResult &&
-             loaded.replayData->clearType == kClearTypeFullComboRank,
-         "matching full course derives its full-combo rank without stale drift");
+             loaded.replayData->clearType == kClearTypeMaxRank,
+         "matching historical full course projects Max without stale drift");
+  expect(loaded.context.verified && loaded.context.verified->result == saved &&
+             saved.clearType == kClearTypeFullComboRank &&
+             saved.resultFingerprint == result_persistence::modernResultFingerprint(saved),
+         "course presentation promotion preserves authenticated historical facts");
 }
 
 void testEndingEmptyPoorPreservesCourseLamp() {
