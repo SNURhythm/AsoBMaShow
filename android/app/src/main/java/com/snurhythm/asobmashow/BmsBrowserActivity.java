@@ -135,6 +135,8 @@ public final class BmsBrowserActivity extends Activity {
                     return false;
                 }
                 if ("about:blank".equals(request.getUrl().toString())) return false;
+                // Browser checks such as Turnstile use inline child documents.
+                if (!request.isForMainFrame() && "about:srcdoc".equals(request.getUrl().toString())) return false;
                 if (request.isForMainFrame()) unsupported(view.getUrl());
                 return true;
             }

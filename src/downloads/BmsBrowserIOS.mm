@@ -211,7 +211,10 @@ bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.U
   [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)webView:(WKWebView *)web decidePolicyForNavigationAction:(WKNavigationAction *)action decisionHandler:(void (^)(WKNavigationActionPolicy))decision {
-  if (!http(action.request.URL) && ![action.request.URL.absoluteString isEqualToString:@"about:blank"]) {
+  // Browser checks such as Turnstile create inline documents in child frames.
+  const bool inlineFrame = action.targetFrame && !action.targetFrame.mainFrame &&
+      [action.request.URL.absoluteString isEqualToString:@"about:srcdoc"];
+  if (!http(action.request.URL) && ![action.request.URL.absoluteString isEqualToString:@"about:blank"] && !inlineFrame) {
     decision(WKNavigationActionPolicyCancel); if (action.targetFrame.mainFrame || !action.targetFrame) [self unsupported]; return;
   }
   if (action.shouldPerformDownload) {
