@@ -4,6 +4,7 @@
 #include "visual_catch_up_video_fixture.h"
 
 #include <filesystem>
+#include <future>
 #include <chrono>
 #include <iostream>
 #include <memory>
@@ -335,6 +336,71 @@ void testAdmissionRecheckedUnderVideoMutex(const std::filesystem::path &clip) {
   std::cout << "admission race: a previously true output predicate is rechecked under videoMutex\n";
 }
 
+// Keep the decoder between its false predicate and atomic wait admission.
+// An unsynchronized notifier finishes here and loses its wake; a correct one
+// waits for the predicate mutex. The timeout bounds that intentional contention.
+template <typename Change>
+void changeDuringHeldWait(Change change) {
+  std::promise<void> started;
+  auto startedFuture = started.get_future();
+  auto changing = std::async(std::launch::async, [&] {
+    started.set_value();
+    change();
+  });
+  startedFuture.wait();
+  (void)changing.wait_for(std::chrono::milliseconds(100));
+  fixture::releaseHeldWait();
+  changing.get();
+}
+
+void testResumeCannotLoseWake(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "resume-race fixture loads");
+  player.playFrom(250'000);
+  player.setDecodeSuspended(true);
+  fixture::holdNextOutputWait(&player, false);
+  fixture::releaseWorkers();
+  fixture::awaitHeldWait();
+  changeDuringHeldWait([&] { player.setDecodeSuspended(false); });
+  fixture::awaitFrame(&player, 250'000);
+  expectUpload(&player, 250'000, 0, [&] { player.update(); });
+  std::cout << "resume wake: resumed decoder produces and presents its target frame\n";
+}
+
+void testEofSeekCannotLoseWake(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "EOF-seek-race fixture loads");
+  player.playFrom(950'000);
+  fixture::holdNextEofWait(&player);
+  fixture::releaseWorkers();
+  fixture::awaitHeldWait();
+  const auto after = fixture::events().size();
+  changeDuringHeldWait([&] { player.playFrom(100'000); });
+  fixture::awaitFrame(&player, 100'000, after);
+  expectUpload(&player, 100'000, after, [&] { player.update(); });
+  std::cout << "EOF seek wake: backward seek restarts the drained decoder\n";
+}
+
+void testSeekIncludesStreamOrigin(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "offset fixture loads");
+  player.playFrom(750'000);
+  // This real clip's first packet starts at 2 seconds, so its 750 ms image
+  // must be sought at absolute stream timestamp 2.75 seconds.
+  expectSeeks({2'750'000});
+  fixture::releaseWorkers();
+  expectUpload(&player, 750'000, 0, [&] { player.update(); });
+}
+
 void testTimelineEdges(const std::filesystem::path &clip) {
   Stopwatch stopwatch;
   Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>());
@@ -566,8 +632,8 @@ void testEofAndShutdown(const std::filesystem::path &clip) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 4) {
-    std::cerr << "usage: visual_catch_up_tests <marker-clip> <yuv-clip> <rgb-clip>\n";
+  if (argc != 5) {
+    std::cerr << "usage: visual_catch_up_tests <marker-clip> <yuv-clip> <rgb-clip> <offset-clip>\n";
     return 2;
   }
   bgfx::Init init;
@@ -579,6 +645,15 @@ int main(int argc, char **argv) {
   }
   rendering::PosTexCoord0Vertex::init();
   int result = 0;
+  for (const auto test : {testResumeCannotLoseWake, testEofSeekCannotLoseWake,
+                          testSeekIncludesStreamOrigin}) {
+    try {
+      test(test == testSeekIncludesStreamOrigin ? argv[4] : argv[1]);
+    } catch (const std::exception &error) {
+      std::cerr << "video wake/seek regression: " << error.what() << '\n';
+      result = 1;
+    }
+  }
   try {
     testSeekKeepsDisplayedFrame(argv[1]);
     testLateFirstFrameIsPresented(argv[1]);
