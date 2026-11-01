@@ -39,6 +39,7 @@ namespace skin {
 struct SkinResourcePolicy {
   static constexpr std::size_t maximumResources = 512;
   static constexpr std::size_t maximumRegions = 200000;
+  static constexpr std::size_t maximumPomyuAnimationFrames = 200000;
   static constexpr std::size_t maximumEncodedBytes = 32U * 1024U * 1024U;
   static constexpr std::size_t maximumSessionEncodedBytes = 128U * 1024U * 1024U;
   static constexpr int maximumDimension = 8192;

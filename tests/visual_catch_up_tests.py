@@ -28,8 +28,12 @@ def main():
                         "-i", "color=black:size=512x256:rate=20", "-t", "1",
                         "-c:v", "ffv1", "-pix_fmt", "bgr0", str(rgb)],
                        check=True, timeout=10)
+        offset = Path(root) / "offset.mkv"
+        subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y", "-i", str(clip),
+                        "-c", "copy", "-output_ts_offset", "2", str(offset)],
+                       check=True, timeout=10)
         subprocess.run([str(args.binary.resolve()), str(playable.resolve()),
-                        str(yuv.resolve()), str(rgb.resolve())],
+                        str(yuv.resolve()), str(rgb.resolve()), str(offset.resolve())],
                        check=True, timeout=40)
 
 

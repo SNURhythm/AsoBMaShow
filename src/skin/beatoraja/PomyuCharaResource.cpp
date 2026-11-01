@@ -68,6 +68,7 @@ struct FileCache {
   std::set<std::tuple<std::string, int, int>> parsedCycleKeys;
   std::size_t encodedBytes = 0;
   std::size_t decodedBytes = 0;
+  std::size_t animationFrames = 0;
   bool budgetExceeded = false;
   bool cancelled = false;
   SkinResourceId nextImageId = 1;
@@ -744,9 +745,12 @@ int interpolationIncreaseRate(const ChpDirective &directive,
   if (!interpolates || frameMillis < 17) {
     return 1;
   }
-  for (int rate = 1; rate <= frameMillis; ++rate) {
-    if (frameMillis / rate < 17 && frameMillis % rate == 0) {
-      return rate;
+  // The first matching rate is frameMillis divided by its largest divisor
+  // below 17. Searching those divisors avoids work proportional to an authored
+  // duration (which can be INT_MAX).
+  for (int duration = 16; duration >= 1; --duration) {
+    if (frameMillis % duration == 0) {
+      return frameMillis / duration;
     }
   }
   return 1;
@@ -875,7 +879,8 @@ bool decodeValues(const std::string &encoded, int defaultValue, bool angle,
 
 std::optional<PreparedPomyuCharaAnimation> prepareAnimation(
     const ChpModel &model, const ChpDirective &directive,
-    SkinResourceId source, int type, int side, FileCache &cache) {
+    SkinResourceId source, int type, int side, FileCache &cache,
+    SkinSafetyPolicy safetyPolicy) {
   if (source == 0 || !validDestination(directive) || model.size[0] == 0 ||
       model.size[1] == 0) {
     return std::nullopt;
@@ -905,9 +910,17 @@ std::optional<PreparedPomyuCharaAnimation> prepareAnimation(
   if (frameMillis < 1 || cycleMillis < 1) {
     return std::nullopt;
   }
-  const auto destination = expandedDestinations(directive, increaseRate);
+  const std::size_t maximumFrames = skinResourceLimit(
+      safetyPolicy, SkinResourcePolicy::maximumPomyuAnimationFrames);
+  const std::size_t remainingFrames =
+      maximumFrames - std::min(cache.animationFrames, maximumFrames);
+  if (sourceFrameCount > remainingFrames / static_cast<std::size_t>(increaseRate)) {
+    cache.budgetExceeded = true;
+    return std::nullopt;
+  }
   const std::size_t expandedFrameCount = sourceFrameCount *
                                          static_cast<std::size_t>(increaseRate);
+  const auto destination = expandedDestinations(directive, increaseRate);
   std::vector<SkinSourceRect> geometry;
   if (destination[1].empty()) {
     geometry.assign(expandedFrameCount,
@@ -957,6 +970,7 @@ std::optional<PreparedPomyuCharaAnimation> prepareAnimation(
          .alpha = static_cast<std::uint8_t>(std::clamp(alpha[frame], 0, 255)),
          .angleDegrees = angle[frame]});
   }
+  cache.animationFrames += expandedFrameCount;
   return result;
 }
 
@@ -1115,7 +1129,11 @@ PomyuCharaPreparationResult preparePomyuCharaResources(
           continue;
         }
         auto animation = prepareAnimation(chp, directive, *images[sourceIndex],
-                                          object->type, object->side, cache);
+                                          object->type, object->side, cache,
+                                          safetyPolicy);
+        if (cache.budgetExceeded) {
+          break;
+        }
         if (!animation) {
           continue;
         }
@@ -1127,6 +1145,9 @@ PomyuCharaPreparationResult preparePomyuCharaResources(
           result.motionCyclesMillis[timer] = animation->cycleMillis;
         }
         prepared.animations.push_back(std::move(*animation));
+      }
+      if (cache.budgetExceeded) {
+        break;
       }
     }
     if (!prepared.animations.empty()) {

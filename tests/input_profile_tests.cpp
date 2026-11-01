@@ -1,5 +1,6 @@
 #include "input/InputProfile.h"
 #include "input/InputProfileStore.h"
+#include "AtomicFile.h"
 
 #include <SDL3/SDL_scancode.h>
 
@@ -867,17 +868,31 @@ int main() {
             "future schemas are never rewritten while loading");
 
     const auto rollbackPath = testRoot / "rollback.json";
-    constexpr std::string_view priorContents = "prior input profile bytes\n";
-    writeFile(rollbackPath, priorContents);
-#ifdef INPUT_PROFILE_STORE_TESTING
-    InputProfileStore::setForceFinalRenameFailureForTesting(true);
-#else
-#error input_profile_tests requires the deterministic rename-failure seam
-#endif
+    require(InputProfileStore::saveAtomic(rollbackPath, fixtureResult.profile,
+                                          errorMessage),
+            "custom input profile exists before interrupted replacement");
+    const std::string priorContents = readFile(rollbackPath);
+    auto operations = atomic_file::defaultOperations();
+    const auto replace = operations.replace;
+    bool replacementAttempted = false;
+    bool priorReadableBeforeReplacement = false;
+    operations.replace = [&](const auto &from, const auto &to, std::string &error) {
+      if (to == rollbackPath && from.extension() == ".tmp") {
+        replacementAttempted = true;
+        priorReadableBeforeReplacement =
+            readFile(rollbackPath) == priorContents &&
+            InputProfileStore::load(rollbackPath).status == InputProfileLoadStatus::Loaded;
+        error = "injected final replacement failure";
+        return false;
+      }
+      return replace(from, to, error);
+    };
     errorMessage.clear();
     require(
-        !InputProfileStore::saveAtomic(rollbackPath, defaults, errorMessage),
+        !InputProfileStore::saveAtomic(rollbackPath, defaults, errorMessage, &operations),
         "forced final rename failure is reported");
+    require(replacementAttempted && priorReadableBeforeReplacement,
+            "interruption at final replacement leaves the saved input profile readable");
     require(!errorMessage.empty(), "rename failure includes an error message");
     require(readFile(rollbackPath) == priorContents,
             "failed final rename restores the exact prior file");

@@ -119,6 +119,24 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_POST(self):
+        if urlsplit(self.path).path.startswith("/metadata/"):
+            # Grant requests have no body, even when the caller has piped stdin.
+            body = b""
+            if self.headers.get("Transfer-Encoding") == "chunked":
+                while True:
+                    size = int(self.rfile.readline().strip(), 16)
+                    if size == 0:
+                        self.rfile.readline()
+                        break
+                    body += self.rfile.read(size)
+                    self.rfile.read(2)
+            else:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if body:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
         self.do_GET()
 
     def retry_download(self, scenario):
@@ -236,6 +254,7 @@ def main():
     try:
         result = subprocess.run(
             [args.executable, f"http://127.0.0.1:{server.server_port}"],
+            input=b"synthetic stdin must not become an HTTP request body\n",
             timeout=45, check=False)
     finally:
         server.shutdown()

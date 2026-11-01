@@ -102,19 +102,16 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   if (isCancelled) {
     return false;
   }
-  if (fileInfo.frames < 0 || fileInfo.channels <= 0 ||
-      static_cast<std::uintmax_t>(fileInfo.frames) >
-          static_cast<std::uintmax_t>(maximumPcmSamples) /
-              static_cast<std::uintmax_t>(fileInfo.channels)) {
-    SDL_Log("Decoded audio exceeds the PCM sample limit for %s",
-            path_t_to_utf8(displayPath).c_str());
+  if (fileInfo.frames < 0 || fileInfo.channels <= 0) {
     return false;
   }
-  const std::size_t sampleCount =
-      static_cast<std::size_t>(fileInfo.frames) *
-      static_cast<std::size_t>(fileInfo.channels);
-  // Prepare a buffer to hold the PCM data
-  buffer.resize(sampleCount, 0);
+  const auto channels = static_cast<std::size_t>(fileInfo.channels);
+  const auto maximumFrames = static_cast<sf_count_t>(std::min<std::uintmax_t>(
+      fileInfo.frames, maximumPcmSamples / channels));
+  const std::size_t sampleCount = static_cast<std::size_t>(maximumFrames) * channels;
+  // Header frame counts are untrusted (for example FLAC STREAMINFO). Grow
+  // alongside decoding instead of zero-filling the entire declared duration.
+  buffer.clear();
   // PCM16 WAV can be read directly into the final buffer. Preserve the old
   // normalized-double scaling below rather than exposing sf_readf_short's
   // different amplitude convention. Vorbis already decodes to float internally;
@@ -126,7 +123,6 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   const bool vorbis = container == SF_FORMAT_OGG &&
       (fileInfo.format & SF_FORMAT_SUBMASK) == SF_FORMAT_VORBIS;
   const sf_count_t chunkFrames = std::min<sf_count_t>(fileInfo.frames, 4096);
-  const auto channels = static_cast<std::size_t>(fileInfo.channels);
   const auto scratchSamples = static_cast<std::size_t>(chunkFrames) * channels;
   std::vector<double> tempBuffer(pcm16 || vorbis ? 0 : scratchSamples);
   std::vector<float> floatBuffer(vorbis ? scratchSamples : 0);
@@ -135,7 +131,26 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
     if (isCancelled) {
       return false;
     }
-    const sf_count_t requested = std::min(chunkFrames, fileInfo.frames - numFrames);
+    if (numFrames == maximumFrames) {
+      // A dishonest duration can exceed the budget while its actual payload
+      // fits. Probe one frame without growing the output to distinguish EOF
+      // from decoded data that really exceeds the limit.
+      std::vector<short> probe(channels);
+      const auto extra = sf_readf_short(fileHandle.get(), probe.data(), 1);
+      if (isCancelled || extra != 0) {
+        buffer.clear();
+        return false;
+      }
+      break;
+    }
+    const sf_count_t requested = std::min(chunkFrames, maximumFrames - numFrames);
+    const auto needed = static_cast<std::size_t>(numFrames + requested) * channels;
+    if (needed > buffer.capacity()) {
+      const auto grown = buffer.capacity() > sampleCount / 2
+          ? sampleCount : buffer.capacity() * 2;
+      buffer.reserve(std::max(needed, grown));
+    }
+    buffer.resize(needed);
     auto *output = buffer.data() + static_cast<std::size_t>(numFrames) * channels;
     const sf_count_t read = ASOBM_AUDIO_MEASURE(read,
         pcm16 ? sf_readf_short(fileHandle.get(), output, requested) :
@@ -177,14 +192,19 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   }
 
   if (numFrames < fileInfo.frames) {
-    SDL_Log("Failed to read all audio data from file %s, read %" PRId64
-            " frames",
+    SDL_Log("Audio file %s ended early; playing %" PRId64 " decoded frames",
             path_t_to_utf8(displayPath).c_str(),
             static_cast<std::int64_t>(numFrames));
-    // Zero out the remaining buffer
-    std::fill(buffer.begin() + static_cast<std::size_t>(numFrames) * channels,
-              buffer.end(), 0);
   }
+  // Publish only complete decoded frames, including the duration consumers
+  // use for resampling and playback. Never manufacture the declared tail.
+  buffer.resize(static_cast<std::size_t>(numFrames) * channels);
+  if (buffer.capacity() > buffer.size()) {
+    // Shared PCM retains this allocation, while cache budgets count samples.
+    // Rebuild the short result rather than retaining the decode buffer's slack.
+    std::vector<short>(buffer.begin(), buffer.end()).swap(buffer);
+  }
+  fileInfo.frames = numFrames;
 
   return true;
 }

@@ -682,10 +682,13 @@ void testLargeZipCancellation(bool deflated, bool concurrent,
   std::atomic_int checkpoints{0};
   std::atomic_int emitted{0};
   bounded_allocation_probe::observedEntry = nullptr;
-  bounded_allocation_probe::observedEntrySize = payload.size();
+  // Mid-read cancellation observes the initial output buffer. Waiting for
+  // the final allocation misses most checkpoints when output grows in chunks.
+  bounded_allocation_probe::observedEntrySize =
+      afterOutputProduced || (concurrent && !deflated) ? payload.size() : 256 * 1024;
   auto checkpoint = [&] {
     const auto *entry = bounded_allocation_probe::observedEntry;
-    if (entry == nullptr ||
+    if (entry == nullptr || entry[0] != 'x' ||
         (afterOutputProduced && entry[payload.size() - 1] != 'x')) {
       return true;
     }
@@ -697,7 +700,7 @@ void testLargeZipCancellation(bool deflated, bool concurrent,
   };
   const bool read = concurrent
       ? archive_file::readArchiveEntriesConcurrently(
-            archivePath, {"large.bin"}, consume, 2, payload.size() * 2,
+            archivePath, {"large.bin"}, consume, 2, payload.size() * 2 + 65536,
             &error, checkpoint)
       : archive_file::readArchiveEntriesStreaming(
             archivePath, {"large.bin"}, consume, &error, checkpoint);
@@ -717,7 +720,7 @@ void testLargeZipCancellation(bool deflated, bool concurrent,
     return true;
   };
   assert(archive_file::readArchiveEntriesConcurrently(
-      archivePath, {"large.bin"}, verify, 2, payload.size() * 2, &error));
+      archivePath, {"large.bin"}, verify, 2, payload.size() * 2 + 65536, &error));
   assert(emitted == 1);
 }
 
@@ -1396,6 +1399,42 @@ void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
   assert(!error.empty());
 }
 
+void testZipForgedSizeDoesNotAllocateDeclaredPayload(bool concurrent) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "forged-size.zip";
+  writeStoredZipContents(path, "chart.bms", "#TITLE small chart\n", true);
+  constexpr std::size_t forgedBytes = 32 * 1024 * 1024;
+  assert(understateZipUncompressedSizes(path, "chart.bms", forgedBytes));
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(path, entries, &error));
+  assert(entries.size() == 1 && entries.front().size == forgedBytes);
+  bounded_allocation_probe::rejectedEntrySize = forgedBytes;
+  bounded_allocation_probe::rejectedAllocations = 0;
+  bounded_allocation_probe::allocationFailureKind = 1;
+  bounded_allocation_probe::rejectEntryAllocation = true;
+  const auto checkpoint = [] {
+    bounded_allocation_probe::rejectEntryAllocation = true;
+    return true;
+  };
+  std::atomic_size_t received = 0;
+  const auto consume = [&](archive_file::FileData &&) { ++received; return true; };
+  bool read = false;
+  bool threw = false;
+  try {
+    read = concurrent ? archive_file::readArchiveEntriesConcurrently(
+        path, {"chart.bms"}, consume, 2, forgedBytes * 2 + 65536, &error, checkpoint)
+        : archive_file::readArchiveEntriesStreaming(
+            path, {"chart.bms"}, consume, &error, checkpoint);
+  } catch (const std::bad_alloc &) {
+    threw = true;
+  }
+  bounded_allocation_probe::rejectEntryAllocation = false;
+  bounded_allocation_probe::rejectedEntrySize = 0;
+  assert(!threw && bounded_allocation_probe::rejectedAllocations == 0);
+  assert(!read && received == 0 && !error.empty());
+}
+
 void testBoundedReadRejectsOversizedSevenZipEntry() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "bounded.7z";
@@ -1802,6 +1841,28 @@ void testConcurrentStoredZipFitsExactBudget() {
         ++received;
         return true;
       }, 2, payload.size(), &error));
+  assert(received == 1);
+}
+
+void testConcurrentDeflatedZipAccountsForOutputGrowth() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "growth-budget.zip";
+  const std::string payload(256 * 1024 + 1, 'x');
+  writeStoredZipContents(path, "payload.bin", payload, true);
+  std::size_t received = 0;
+  const auto consume = [&](archive_file::FileData &&file) {
+    assert(std::string(file.bytes.begin(), file.bytes.end()) == payload);
+    ++received;
+    return true;
+  };
+  std::string error;
+  // During growth the old output allocation remains live alongside the new
+  // one. A budget that fits only the final output and input scratch is too small.
+  assert(!archive_file::readArchiveEntriesConcurrently(
+      path, {"payload.bin"}, consume, 2, payload.size() + 65536, &error));
+  assert(received == 0);
+  assert(archive_file::readArchiveEntriesConcurrently(
+      path, {"payload.bin"}, consume, 2, payload.size() * 2 + 65536, &error));
   assert(received == 1);
 }
 
@@ -4630,12 +4691,15 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc == 2 && std::string(argv[1]) == "--bounded-reader") {
+    testZipForgedSizeDoesNotAllocateDeclaredPayload(false);
+    testZipForgedSizeDoesNotAllocateDeclaredPayload(true);
     testSharedZipReadersReuseDirectory();
     testBoundedZipReaderReusesDirectory();
     testZipProbeInputBudget();
     return 0;
   }
   if (argc == 2 && std::string(argv[1]) == "--mapped-zip") {
+    testConcurrentDeflatedZipAccountsForOutputGrowth();
     testConcurrentMappedZipNeedsNoCompressedAllocation();
     testConcurrentZipMappingFallback();
     return 0;
@@ -4791,8 +4855,11 @@ int main(int argc, char **argv) {
   testBoundedZipReaderReusesDirectory();
   testZipProbeInputBudget();
   testBoundedStreamingRejectsOversizedPayload();
+  testZipForgedSizeDoesNotAllocateDeclaredPayload(false);
+  testZipForgedSizeDoesNotAllocateDeclaredPayload(true);
   testConcurrentReaderRejectsOversizedPayload();
   testConcurrentStoredZipFitsExactBudget();
+  testConcurrentDeflatedZipAccountsForOutputGrowth();
   testConcurrentZipMappingFallback();
   testConcurrentMappedZipNeedsNoCompressedAllocation();
   testConcurrentDeflatedZipBoundedScratch();

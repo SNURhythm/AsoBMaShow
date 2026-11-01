@@ -1,6 +1,8 @@
 #include "InputProfileStore.h"
 #include "LegacyScancodeMigration.h"
 
+#include "../AtomicFile.h"
+
 #include "../../yoga/lib/nlohmann/json.hpp"
 
 #include <algorithm>
@@ -13,10 +15,6 @@
 namespace {
 
 using Json = nlohmann::json;
-
-#ifdef INPUT_PROFILE_STORE_TESTING
-bool forceFinalRenameFailure = false;
-#endif
 
 std::string_view toString(input::DeviceClass value) {
   switch (value) {
@@ -408,17 +406,6 @@ InputProfileLoadResult defaultsResult(InputProfileLoadStatus status,
   return result;
 }
 
-std::filesystem::path siblingPath(const std::filesystem::path &path,
-                                  std::string_view suffix) {
-  return std::filesystem::path(path.string() + std::string(suffix));
-}
-
-bool removeTemporary(const std::filesystem::path &path) {
-  std::error_code ignored;
-  std::filesystem::remove(path, ignored);
-  return !ignored;
-}
-
 } // namespace
 
 InputProfileLoadResult
@@ -556,36 +543,11 @@ InputProfileStore::load(const std::filesystem::path &path) {
 
 bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
                                    const InputProfile &profile,
-                                   std::string &errorMessage) {
+                                   std::string &errorMessage,
+                                   const atomic_file::Operations *operations) {
   errorMessage.clear();
   if (path.empty()) {
     errorMessage = "Input profile path is empty.";
-    return false;
-  }
-
-  const auto temporaryPath = siblingPath(path, ".tmp");
-  const auto backupPath = siblingPath(path, ".bak");
-  std::error_code filesystemError;
-
-  if (!path.parent_path().empty()) {
-    std::filesystem::create_directories(path.parent_path(), filesystemError);
-    if (filesystemError) {
-      errorMessage = "Unable to create input profile directory: " +
-                     filesystemError.message();
-      return false;
-    }
-  }
-
-  if (std::filesystem::exists(temporaryPath, filesystemError)) {
-    if (filesystemError ||
-        !std::filesystem::remove(temporaryPath, filesystemError)) {
-      errorMessage = "Unable to remove stale input profile temporary file: " +
-                     filesystemError.message();
-      return false;
-    }
-  } else if (filesystemError) {
-    errorMessage = "Unable to inspect input profile temporary file: " +
-                   filesystemError.message();
     return false;
   }
 
@@ -626,104 +588,12 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
       document["bindings"].push_back(serializeBinding(binding));
     }
 
-    std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
-    if (!output.is_open()) {
-      errorMessage = "Unable to open input profile temporary file.";
-      return false;
-    }
-    output << document.dump(2) << '\n';
-    output.flush();
-    if (!output.good()) {
-      errorMessage = "Unable to flush input profile temporary file.";
-      output.close();
-      removeTemporary(temporaryPath);
-      return false;
-    }
-    output.close();
-    if (output.fail()) {
-      errorMessage = "Unable to close input profile temporary file.";
-      removeTemporary(temporaryPath);
-      return false;
-    }
+    const std::string encoded = document.dump(2) + "\n";
+    return atomic_file::writeWithBackup(path, std::as_bytes(std::span(encoded)),
+                                        errorMessage, operations);
   } catch (const std::exception &error) {
     errorMessage =
         "Unable to serialize input profile: " + std::string(error.what());
-    removeTemporary(temporaryPath);
     return false;
   }
-
-  filesystemError.clear();
-  const bool hadOriginal = std::filesystem::exists(path, filesystemError);
-  if (filesystemError) {
-    errorMessage =
-        "Unable to inspect prior input profile: " + filesystemError.message();
-    removeTemporary(temporaryPath);
-    return false;
-  }
-
-  if (hadOriginal) {
-    filesystemError.clear();
-    if (std::filesystem::exists(backupPath, filesystemError)) {
-      if (filesystemError ||
-          !std::filesystem::remove(backupPath, filesystemError)) {
-        errorMessage = "Unable to replace input profile backup: " +
-                       filesystemError.message();
-        removeTemporary(temporaryPath);
-        return false;
-      }
-    } else if (filesystemError) {
-      errorMessage = "Unable to inspect input profile backup: " +
-                     filesystemError.message();
-      removeTemporary(temporaryPath);
-      return false;
-    }
-
-    std::filesystem::rename(path, backupPath, filesystemError);
-    if (filesystemError) {
-      errorMessage =
-          "Unable to back up prior input profile: " + filesystemError.message();
-      removeTemporary(temporaryPath);
-      return false;
-    }
-  }
-
-  filesystemError.clear();
-#ifdef INPUT_PROFILE_STORE_TESTING
-  if (std::exchange(forceFinalRenameFailure, false)) {
-    filesystemError = std::make_error_code(std::errc::permission_denied);
-  } else {
-    std::filesystem::rename(temporaryPath, path, filesystemError);
-  }
-#else
-  std::filesystem::rename(temporaryPath, path, filesystemError);
-#endif
-
-  if (!filesystemError) {
-    return true;
-  }
-
-  const std::string renameFailure = filesystemError.message();
-  std::string restoreFailure;
-  if (hadOriginal) {
-    std::error_code removeError;
-    std::filesystem::remove(path, removeError);
-
-    std::error_code restoreError;
-    std::filesystem::rename(backupPath, path, restoreError);
-    if (restoreError) {
-      restoreFailure =
-          "; unable to restore prior input profile: " + restoreError.message();
-    }
-  }
-  removeTemporary(temporaryPath);
-  errorMessage =
-      "Unable to install input profile: " + renameFailure + restoreFailure;
-  return false;
 }
-
-#ifdef INPUT_PROFILE_STORE_TESTING
-void InputProfileStore::setForceFinalRenameFailureForTesting(
-    bool forceFailure) {
-  forceFinalRenameFailure = forceFailure;
-}
-#endif

@@ -41,6 +41,7 @@ void awaitFrame(const VideoPlayer *player, std::int64_t micros,
 void awaitBoundary(const VideoPlayer *player, Boundary boundary,
                    std::size_t after = 0);
 void holdNextOutputWait(const VideoPlayer *player, bool ready);
+void holdNextEofWait(const VideoPlayer *player);
 void awaitHeldWait();
 void releaseHeldWait();
 

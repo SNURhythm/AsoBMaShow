@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+namespace atomic_file {
+struct Operations;
+}
+
 enum class InputProfileLoadStatus {
   Loaded,
   MissingDefaults,
@@ -24,9 +28,6 @@ public:
   static InputProfileLoadResult load(const std::filesystem::path &path);
   static bool saveAtomic(const std::filesystem::path &path,
                          const InputProfile &profile,
-                         std::string &errorMessage);
-
-#ifdef INPUT_PROFILE_STORE_TESTING
-  static void setForceFinalRenameFailureForTesting(bool forceFailure);
-#endif
+                         std::string &errorMessage,
+                         const atomic_file::Operations *operations = nullptr);
 };

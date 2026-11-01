@@ -440,6 +440,8 @@ std::optional<std::string> postUrlText(
   char curlError[CURL_ERROR_SIZE] = {};
   curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
+  // A null POSTFIELDS source makes libcurl read the request body from stdin.
+  curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, "");
   curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
   curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");

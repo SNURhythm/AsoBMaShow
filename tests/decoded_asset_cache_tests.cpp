@@ -334,7 +334,7 @@ void testSeededGameplayPcmKeepsIdentityAndRetentionBounds(const std::filesystem:
           "changed sources are decoded afresh instead of serving seeded PCM");
 }
 
-void testRejectsExcessiveDecodeBeforeAllocation(const std::filesystem::path &root) {
+void testForgedDurationUsesActualDecodedPcm(const std::filesystem::path &root) {
   const auto flac = root / "oversized-header.flac";
   {
     SF_INFO info{}; info.samplerate = 48000; info.channels = 2;
@@ -369,6 +369,7 @@ void testRejectsExcessiveDecodeBeforeAllocation(const std::filesystem::path &roo
     const auto batch = cache.BeginArchiveBatch(zip);
     require(bool(batch), "begin oversized fixture archive batch");
     for (int mode = 0; mode < 4; ++mode) {
+      cache.Clear();
       audio::DecodedAssetCache::FailureKind failure{};
       std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> sound;
       std::size_t largest;
@@ -381,11 +382,15 @@ void testRejectsExcessiveDecodeBeforeAllocation(const std::filesystem::path &roo
         if (mode == 3) sound = cache.Load(logical, cancelled, {}, nullptr, &failure);
         largest = observer.largest();
       }
-      require(!sound && failure == audio::DecodedAssetCache::FailureKind::InvalidAsset,
-              "all cache decode paths must reject excessive PCM as an invalid asset");
-      require(largest <= 1024U * 1024U, "reject excessive PCM before attempting its allocation");
-      require(cache.GetStatistics().retainedBytes == 0 && cache.GetStatistics().liveDecoders == 0,
-              "rejected assets retain no PCM or decoder");
+      require(sound && failure == audio::DecodedAssetCache::FailureKind::None &&
+                  sound->info.frames == 16 && sound->pcm == std::vector<short>(32, 0),
+              "all cache decode paths publish only the actual PCM and duration");
+      require(largest <= 1024U * 1024U, "forged duration never causes an excessive allocation");
+      require(cache.GetStatistics().retainedBytes == 64 && cache.GetStatistics().liveDecoders == 0,
+              "cache accounts for actual decoded bytes and closes the decoder");
+      require(sound->pcm.storage()->capacity() * sizeof(short) ==
+                  cache.GetStatistics().retainedBytes,
+              "truncated PCM retains no unaccounted allocation capacity");
     }
   }
   const auto oversizedFile = root / "oversized-encoded.wav";
@@ -406,7 +411,7 @@ int main() {
     testCaseFallbackSymlinkParentDecode(root);
     testCaseLookupCancellation(root);
     testChartAudioFileLookup(root);
-    testRejectsExcessiveDecodeBeforeAllocation(root);
+    testForgedDurationUsesActualDecodedPcm(root);
     testSeededGameplayPcmKeepsIdentityAndRetentionBounds(root);
     testWholeLoadAndConcurrentReuse(root);
     testCancellationAndInvalidAssets(root);

@@ -779,10 +779,13 @@ void VideoPlayer::stop() {
 }
 
 void VideoPlayer::setDecodeSuspended(bool suspended) {
-  const bool previous =
-      decodeSuspended.exchange(suspended, std::memory_order_acq_rel);
-  if (previous == suspended) {
-    return;
+  {
+    // Resume must not notify between the output wait's false predicate and
+    // its atomic unlock-and-wait, or an empty queue can remain asleep forever.
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    if (decodeSuspended.exchange(suspended, std::memory_order_acq_rel) == suspended) {
+      return;
+    }
   }
   {
     std::lock_guard<std::mutex> frameLock(videoFrameMutex);
@@ -887,7 +890,7 @@ void VideoPlayer::seek(int64_t micro) {
     return;
 
   // Convert microseconds to stream time base
-  int64_t seekTarget =
+  int64_t seekTarget = startPTS +
       av_rescale_q(micro, {1, AV_TIME_BASE},
                    formatContext->streams[videoStreamIndex]->time_base);
 
@@ -911,7 +914,11 @@ void VideoPlayer::seek(int64_t micro) {
     bufferHead = bufferTail = 0;
     bufferSize = 0;
   }
-  decodeGeneration.fetch_add(1, std::memory_order_release);
+  {
+    // Pair seek publication with the EOF wait, just as shutdown does.
+    std::lock_guard<std::mutex> lock(eofMutex);
+    decodeGeneration.fetch_add(1, std::memory_order_release);
+  }
   freeSpace.notify_all();
 
   // Reinitialize timing

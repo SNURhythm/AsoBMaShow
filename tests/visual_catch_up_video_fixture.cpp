@@ -35,6 +35,7 @@ struct State {
   std::size_t failedSeekOrdinal = 0;
   const VideoPlayer *heldWaitPlayer = nullptr;
   bool heldWaitReady = false;
+  bool heldWaitIsEof = false;
   bool heldWaitReached = false;
 } state;
 
@@ -165,7 +166,14 @@ void holdNextOutputWait(const VideoPlayer *player, bool ready) {
   std::lock_guard lock(state.mutex);
   state.heldWaitPlayer = player;
   state.heldWaitReady = ready;
+  state.heldWaitIsEof = false;
   state.heldWaitReached = false;
+}
+
+void holdNextEofWait(const VideoPlayer *player) {
+  holdNextOutputWait(player, false);
+  std::lock_guard lock(state.mutex);
+  state.heldWaitIsEof = true;
 }
 
 void awaitHeldWait() {
@@ -304,7 +312,8 @@ auto observeWait(const VideoPlayer *player, std::unique_lock<std::mutex> &lock,
       state.events.push_back({Boundary::EofWait, player});
       state.changed.notify_all();
     }
-    if (output->second == mutex && state.heldWaitPlayer == player &&
+    if ((output->second != mutex) == state.heldWaitIsEof &&
+        state.heldWaitPlayer == player &&
         state.heldWaitReady == ready && !state.heldWaitReached) {
       state.heldWaitReached = true;
       state.changed.notify_all();

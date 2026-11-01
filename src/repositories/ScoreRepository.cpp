@@ -301,6 +301,12 @@ bool ScoreRepository::ClearImportedIrScoresSnapshot(
 
   deletion.reset();
   verify.reset();
+  // Rebuild this private snapshot so current and previously deleted account
+  // identifiers cannot survive in the exported database's free pages.
+  if (const auto error = executeSqlite(database, "VACUUM")) {
+    errorMessage = "could not scrub deleted imported IR snapshot data: " + *error;
+    return false;
+  }
   int walFrames = 0;
   int checkpointedFrames = 0;
   const int checkpointResult =
