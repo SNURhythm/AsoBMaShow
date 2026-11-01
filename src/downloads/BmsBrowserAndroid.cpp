@@ -33,6 +33,13 @@ void openBrowser() {
 }
 }
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_snurhythm_asobmashow_BmsBrowserActivity_nativeAddressTarget(JNIEnv *env, jclass, jstring input) {
+  try {
+    const auto target = downloads::browserAddressTarget(utf8(env, input));
+    return env->NewStringUTF(target ? target->c_str() : "");
+  } catch (...) { return env->NewStringUTF(""); }
+}
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_snurhythm_asobmashow_BmsBrowserActivity_nativeTableUrl(JNIEnv *env, jclass, jstring url, jstring detected) {
   const auto table = downloads::browserTableUrl(utf8(env, url), utf8(env, detected));
   return env->NewStringUTF(table ? table->c_str() : "");

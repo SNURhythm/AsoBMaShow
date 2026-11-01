@@ -13,7 +13,8 @@ On iOS and Android, **Browse Sites** opens an embedded browser with Manbow and
 GingerRush bookmarks, navigation, an address field, and an external-browser action.
 Manbow appears first and is the default on each app launch. Reopening the browser
 within the same app session resumes the last page; the URL is not saved to disk. Native URL-entry controls provide clear/edit/go
-behavior, navigation icons reflect available history, and loading shows progress
+behavior. HTTP(S) URLs and hostnames navigate directly; other input opens an
+encoded Google search. Navigation icons reflect available history, and loading shows progress
 and a Stop action. Sites, table import and Downloads remain available.
 The standard selector's **Add BMS** menu (plus icon) contains **Add Folder** and
 **Browse Sites**. Android also keeps **Manage Files** in that menu, with direct folder

@@ -24,6 +24,21 @@ static Request request() {
 
 int main() {
   {
+    assert(!browserAddressTarget(" \t\n "));
+    assert(browserAddressTarget("manbow.nothing.sh/event/event.cgi") == "https://manbow.nothing.sh/event/event.cgi");
+    assert(browserAddressTarget(" HTTP://localhost:8788/test ") == "http://localhost:8788/test");
+    assert(browserAddressTarget("127.0.0.1:8080/a") == "https://127.0.0.1:8080/a");
+    assert(browserAddressTarget("[::1]:8080/a") == "https://[::1]:8080/a");
+    assert(browserAddressTarget("https://example.com/a?q=b#c") == "https://example.com/a?q=b#c");
+    assert(browserAddressTarget("https://example.com/🎵") == "https://example.com/%F0%9F%8E%B5");
+    assert(browserAddressTarget("bms") == "https://www.google.com/search?q=bms");
+    assert(browserAddressTarget("BMS music & charts") == "https://www.google.com/search?q=BMS%20music%20%26%20charts");
+    assert(browserAddressTarget("검색") == "https://www.google.com/search?q=%EA%B2%80%EC%83%89");
+    assert(browserAddressTarget("site:manbow.nothing.sh") == "https://www.google.com/search?q=site%3Amanbow.nothing.sh");
+    assert(browserAddressTarget("user@example.com") == "https://www.google.com/search?q=user%40example.com");
+    assert(browserAddressTarget("javascript:alert(1)") == "https://www.google.com/search?q=javascript%3Aalert%281%29");
+  }
+  {
     Request defaults;
     defaults.libraryRoot = "/private/library";
     defaults.skipUnarchiving = true;

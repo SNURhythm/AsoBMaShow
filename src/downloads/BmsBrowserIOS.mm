@@ -14,9 +14,9 @@ NSString *text(const std::string &value) { return [NSString stringWithUTF8String
 bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.UTF8String).has_value(); }
 
 }
-@interface AsoBmsBrowser : UIViewController <WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, UISearchBarDelegate>
+@interface AsoBmsBrowser : UIViewController <WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, UITextFieldDelegate>
 @property(nonatomic, strong) WKWebView *web;
-@property(nonatomic, strong) UISearchBar *address;
+@property(nonatomic, strong) UISearchTextField *address;
 @property(nonatomic, strong) UIBarButtonItem *backItem;
 @property(nonatomic, strong) UIBarButtonItem *forwardItem;
 @property(nonatomic, strong) UIBarButtonItem *reloadItem;
@@ -52,17 +52,19 @@ bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.U
     [self.progress.leadingAnchor constraintEqualToAnchor:self.web.leadingAnchor],
     [self.progress.trailingAnchor constraintEqualToAnchor:self.web.trailingAnchor],
     [self.progress.topAnchor constraintEqualToAnchor:self.web.topAnchor]]];
-  self.address = [UISearchBar new]; self.address.placeholder = @"Enter URL";
-  self.address.searchBarStyle = UISearchBarStyleMinimal;
-  self.address.keyboardType = UIKeyboardTypeURL; self.address.returnKeyType = UIReturnKeyGo;
+  // Put the native field directly in the title slot: UISearchBar adds its own
+  // vertical padding, which shifts its visible field below the bar buttons.
+  self.address = [UISearchTextField new]; self.address.placeholder = @"Search or enter URL";
+  self.address.keyboardType = UIKeyboardTypeWebSearch; self.address.returnKeyType = UIReturnKeyGo;
   self.address.autocapitalizationType = UITextAutocapitalizationTypeNone;
   self.address.autocorrectionType = UITextAutocorrectionTypeNo;
-  self.address.searchTextField.accessibilityLabel = @"Website address";
-  self.address.searchTextField.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
-  self.address.searchTextField.adjustsFontForContentSizeCategory = YES;
-  [self.address setImage:[UIImage systemImageNamed:@"globe"] forSearchBarIcon:UISearchBarIconSearch state:UIControlStateNormal];
+  self.address.accessibilityLabel = @"Search or website address";
+  self.address.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+  self.address.adjustsFontForContentSizeCategory = YES;
+  self.address.clearButtonMode = UITextFieldViewModeWhileEditing;
+  self.address.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
   self.address.delegate = self;
-  self.address.frame = CGRectMake(0, 0, 400, 44);
+  self.address.frame = CGRectMake(0, 0, 400, 36);
   self.navigationItem.titleView = self.address;
   self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemClose target:self action:@selector(close)];
   self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Sites" style:UIBarButtonItemStylePlain target:self action:@selector(sites)];
@@ -109,7 +111,7 @@ bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.U
   self.progress.hidden = !self.web.loading;
   [self.progress setProgress:self.web.estimatedProgress animated:YES];
   // Redirects and background navigation must not replace a URL being edited.
-  if (!self.address.searchTextField.isFirstResponder) self.address.text = self.web.URL.absoluteString;
+  if (!self.address.isFirstResponder) self.address.text = self.web.URL.absoluteString;
 }
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
   if (object != self.web || ![@[@"URL", @"canGoBack", @"canGoForward", @"loading", @"estimatedProgress"] containsObject:keyPath]) {
@@ -156,15 +158,15 @@ bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.U
     [self clearTable]; [self.web loadRequest:[NSURLRequest requestWithURL:url]];
   }
 }
-- (void)searchBarTextDidBeginEditing:(UISearchBar *)bar {
-  dispatch_async(dispatch_get_main_queue(), ^{ if (bar.searchTextField.isFirstResponder) [bar.searchTextField selectAll:nil]; });
+- (void)textFieldDidBeginEditing:(UITextField *)field {
+  dispatch_async(dispatch_get_main_queue(), ^{ if (field.isFirstResponder) [field selectAll:nil]; });
 }
-- (void)searchBarTextDidEndEditing:(UISearchBar *)bar { [self updateControls]; }
-- (void)searchBarSearchButtonClicked:(UISearchBar *)bar {
-  NSString *value = [bar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-  if (!value.length) return;
-  if (![value containsString:@"://"]) value = [@"https://" stringByAppendingString:value];
-  [bar resignFirstResponder]; [self load:value];
+- (void)textFieldDidEndEditing:(UITextField *)field { [self updateControls]; }
+- (BOOL)textFieldShouldReturn:(UITextField *)field {
+  if (const auto target = downloads::browserAddressTarget((field.text ?: @"").UTF8String)) {
+    [field resignFirstResponder]; [self load:text(*target)];
+  }
+  return YES;
 }
 - (void)back { [self.web goBack]; }
 - (void)forward { [self.web goForward]; }

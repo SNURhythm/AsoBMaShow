@@ -249,3 +249,18 @@ identity and validation have new coverage. The full unsigned iOS build, final iO
 browser source check and Android Java compilation pass. A fresh source review
 found no actionable findings. Physical iOS background/lock behavior and importing
 the OneDrive package into the installed player library remain separate checks.
+
+
+## Address alignment and text search
+
+Native simulator frame inspection reproduced an 8-point vertical offset between
+the UISearchBar field and the navigation buttons (centers 56 vs. 48). A native
+UISearchTextField directly in the title slot now centers at 48, matching the
+button container. Both mobile address inputs share URL/search classification:
+HTTP(S), domains, localhost and IP literals navigate; ordinary text opens Google
+with encoded query bytes. Regression cases cover whitespace, Korean, punctuation,
+email/search operators, unsupported schemes and non-BMP URL paths.
+
+The focused download-jobs tests, iOS native browser compile/runtime layout check,
+Android Java compilation and browser JNI source check pass. No app distribution
+or production-device installation was performed for this follow-up.

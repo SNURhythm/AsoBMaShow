@@ -12,6 +12,17 @@ std::string lower(std::string_view value) {
 bool clean(std::string_view value) {
   return std::none_of(value.begin(), value.end(), [](unsigned char c) { return c <= 32 || c == 127 || c == '\\'; });
 }
+std::string addressEncoded(std::string_view value, bool preserveAscii) {
+  std::string result;
+  constexpr char hex[] = "0123456789ABCDEF";
+  for (unsigned char c : value) {
+    if ((preserveAscii && c >= 32 && c < 127) ||
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') result += c;
+    else { result += '%'; result += hex[c >> 4]; result += hex[c & 15]; }
+  }
+  return result;
+}
 }
 std::optional<std::string> httpOrigin(std::string_view url) {
   if (url.empty() || url.size() > 16384 || !clean(url)) return {};
@@ -67,6 +78,26 @@ bool allowedRedirect(std::string_view from, std::string_view to) {
 }
 bool replayableBrowserDownload(std::string_view method, std::string_view url) {
   return method == "GET" && httpOrigin(url).has_value();
+}
+std::optional<std::string> browserAddressTarget(std::string_view input) {
+  const auto start = input.find_first_not_of(" \t\r\n\f\v");
+  if (start == input.npos) return {};
+  input = input.substr(start, input.find_last_not_of(" \t\r\n\f\v") - start + 1);
+  if (input.size() > 16384) return {};
+  if (httpOrigin(input)) {
+    const auto scheme = input.find("://");
+    return lower(input.substr(0, scheme)) + addressEncoded(input.substr(scheme), true);
+  }
+  const auto candidate = "https://" + std::string(input);
+  if (httpOrigin(candidate)) {
+    auto host = input.substr(0, input.find_first_of("/?#"));
+    const bool ipv6 = host.starts_with("[") && host.find(':') != host.npos;
+    if (!ipv6) host = host.substr(0, host.find(':'));
+    if (ipv6 || lower(host) == "localhost" ||
+        (host.find('.') != host.npos && !host.starts_with('.') && !host.ends_with('.'))) return addressEncoded(candidate, true);
+  }
+  std::string search = "https://www.google.com/search?q=" + addressEncoded(input, false);
+  return search.size() <= 16384 ? std::optional(std::move(search)) : std::nullopt;
 }
 std::optional<std::string> gingerTableUrl(std::string_view pageUrl) {
   if (httpOrigin(pageUrl) != "https://gingerrush.com") return {};

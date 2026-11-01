@@ -69,18 +69,17 @@ public final class BmsBrowserActivity extends Activity {
         action(menu, "Downloads", () -> { nativeShowDownloads(); finish(); });
         action(menu, "Open externally", () -> external(page().getUrl()));
         address = new SearchView(this); address.setIconifiedByDefault(false);
-        address.setQueryHint("Enter URL"); address.setContentDescription("Website address");
-        address.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        address.setQueryHint("Search or enter URL"); address.setContentDescription("Search or website address");
+        address.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_WEB_EDIT_TEXT | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         address.setImeOptions(EditorInfo.IME_ACTION_GO); address.setMaxWidth(Integer.MAX_VALUE);
         address.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
             @Override public boolean onQueryTextChange(String value) { return false; }
             @Override public boolean onQueryTextSubmit(String value) {
-                String url = value.trim(); if (url.isEmpty()) return true;
-                if (!url.contains("://")) url = "https://" + url;
+                String url = nativeAddressTarget(value); if (url.isEmpty()) return true;
                 address.clearFocus(); load(url); return true;
             }
         });
-        controls.addView(address, new Toolbar.LayoutParams(-1, -2)); layout.addView(controls);
+        controls.addView(address, new Toolbar.LayoutParams(-1, -2, Gravity.CENTER_VERTICAL)); layout.addView(controls);
         Toolbar navigation = new Toolbar(this);
         backItem = action(navigation.getMenu(), "Back", this::back);
         backItem.setIcon(R.drawable.ic_browser_back).setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
@@ -244,6 +243,7 @@ public final class BmsBrowserActivity extends Activity {
         for (WebView web : pages) { layout.removeView(web); web.destroy(); }
         pages.clear(); super.onDestroy();
     }
+    private static native String nativeAddressTarget(String input);
     private static native String nativeTableUrl(String url, String detected);
     private static native String nativeTableDetectionScript();
     private static native boolean nativeImportTable(String url);
