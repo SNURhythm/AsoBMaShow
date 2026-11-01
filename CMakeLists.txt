@@ -9141,6 +9141,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     include(cmake/JukeboxSchedulerTests.cmake)
     include(cmake/ArchiveStorageTests.cmake)
     include(cmake/FindBmsTaskTests.cmake)
+    include(cmake/DownloadJobsTests.cmake)
 
     add_executable(main_menu_preview_controller_tests
         tests/main_menu_preview_controller_tests.cpp
