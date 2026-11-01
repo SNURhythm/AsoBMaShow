@@ -177,7 +177,7 @@ bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.U
 }
 - (void)sites {
   UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"Browse Sites" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-  [menu addAction:[UIAlertAction actionWithTitle:@"Manbow" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://manbow.nothing.sh/event/event.cgi"]; }]];
+  [menu addAction:[UIAlertAction actionWithTitle:@"Digital Emergency Exit" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://manbow.nothing.sh/event/event.cgi"]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"GingerRush" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://gingerrush.com/"]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"BMS Search" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://bmssearch.net/"]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"horieyuuka.github.io" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://horieyuuka.github.io/"]; }]];

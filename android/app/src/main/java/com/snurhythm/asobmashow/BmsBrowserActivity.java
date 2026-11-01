@@ -62,7 +62,7 @@ public final class BmsBrowserActivity extends Activity {
         controls.setNavigationOnClickListener(view -> finish());
         Menu menu = controls.getMenu();
         SubMenu sites = menu.addSubMenu("Sites");
-        action(sites, "Manbow", () -> load(MANBOW));
+        action(sites, "Digital Emergency Exit", () -> load(MANBOW));
         action(sites, "GingerRush", () -> load(GINGER));
         action(sites, "BMS Search", () -> load("https://bmssearch.net/"));
         action(sites, "horieyuuka.github.io", () -> load("https://horieyuuka.github.io/"));
