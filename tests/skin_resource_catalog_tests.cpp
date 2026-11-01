@@ -5,6 +5,7 @@
 #include "skin/beatoraja/SkinMovieCatalog.h"
 #include "skin/beatoraja/SkinBitmapFontParser.h"
 #include "skin/beatoraja/SkinTextAtlas.h"
+#include "skin/beatoraja/PomyuCharaResource.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
@@ -41,7 +42,16 @@ namespace bitmap_font_allocations {
 thread_local std::size_t *count = nullptr;
 }
 
+namespace pomyu_allocations {
+thread_local std::size_t maximum = std::numeric_limits<std::size_t>::max();
+thread_local std::size_t rejected = 0;
+}
+
 void *operator new(std::size_t size) {
+  if (size > pomyu_allocations::maximum) {
+    ++pomyu_allocations::rejected;
+    throw std::bad_alloc{};
+  }
   if (bitmap_font_allocations::count) ++*bitmap_font_allocations::count;
   if (void *memory = std::malloc(size == 0 ? 1 : size)) return memory;
   throw std::bad_alloc{};
@@ -1203,6 +1213,82 @@ skin::ValidatedBeatorajaSkinModel singleFontModel(std::string virtualPath,
                                        .pointSize = 16},
        .critical = critical});
   return model;
+}
+
+void testPomyuAnimationExpansionIsBounded() {
+  namespace fs = std::filesystem;
+  for (const auto [frameMillis, objects, oversized] : {
+           std::tuple{40, 1, false},
+           std::tuple{100003, 1, true},
+           std::tuple{100000007, 1, true},
+           std::tuple{40009, 2, true}}) {
+    TemporaryDirectory temporary;
+    const fs::path source = temporary.root / "visible" / "Pomyu";
+    fs::create_directories(source / "entry");
+    std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+    std::ofstream(source / "entry/chara.chp")
+        << "#CharBMP\tfixture.png\n#Size\t40\t20\n"
+           "#00\t0\t0\t10\t10\n#01\t10\t0\t10\t10\n"
+           "#Frame\t1\t" << frameMillis << "\n#Pattern\t1\t000001\t00--01\n";
+    fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                      "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                  source / "entry/fixture.png");
+    const auto package = *skin::normalizePackageId("Pomyu").package;
+    const auto entry = *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+    skin::SkinStorageRoots roots{
+        .visiblePackages = temporary.root / "visible",
+        .privateRevisions = temporary.root / "revisions",
+        .privateCatalog = temporary.root / "catalog",
+        .profileOverlays = temporary.root / "overlays",
+        .liveSources = true};
+    auto aliases = skin::createPlatformSkinAliasDetector();
+    skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+    auto snapshot = snapshotter.snapshot(source, package, {}, {});
+    expect(snapshot.prepared.has_value(), "Pomyu animation package snapshots");
+    if (!snapshot.prepared) continue;
+    auto files = skin::LuaSkinFileSystem::create(
+        {.revision = snapshot.prepared->readView(), .entry = entry, .storageRoots = roots});
+    expect(files.fileSystem != nullptr, "Pomyu animation filesystem opens");
+    if (!files.fileSystem) continue;
+    skin::ValidatedBeatorajaSkinModel model;
+    for (int object = 0; object < objects; ++object) {
+      model.model.objects.push_back({.id = static_cast<skin::SkinObjectId>(object + 1),
+          .payload = skin::SkinPmCharaObject{.sourcePath = "chara.chp"}});
+    }
+    skin::PomyuCharaPreparationResult prepared;
+    bool threw = false;
+    pomyu_allocations::rejected = 0;
+    {
+      // Reject the hostile single-animation allocation instead of actually
+      // materializing it. The aggregate case keeps two modest valid animations.
+      pomyu_allocations::maximum = objects == 1 ? 1024 * 1024 : 64 * 1024 * 1024;
+      ScopeExit reset([] {
+        pomyu_allocations::maximum = std::numeric_limits<std::size_t>::max();
+      });
+      try {
+        prepared = skin::preparePomyuCharaResources(
+            *files.fileSystem, model, {}, skin::SkinSafetyPolicy{});
+      } catch (const std::bad_alloc &) {
+        threw = true;
+      }
+    }
+    expect(!threw && pomyu_allocations::rejected == 0,
+           "Pomyu checks interpolation expansion before allocating its payload");
+    if (oversized) {
+      expect(prepared.budgetExceeded,
+             "Pomyu applies one animation-frame budget across the whole session");
+    } else {
+      expect(prepared.resources.size() == 1 &&
+                 prepared.resources.front().animations.size() == 1,
+             "ordinary interpolated Pomyu animation prepares");
+      if (prepared.resources.empty() || prepared.resources.front().animations.empty()) continue;
+      const auto &animation = prepared.resources.front().animations.front();
+      expect(animation.frameMillis == 10 && animation.cycleMillis == 120 &&
+                 animation.frames.size() == 12 && animation.frames[4].x == 2 &&
+                 animation.frames[7].x == 8 && animation.frames[8].x == 10,
+             "Pomyu preserves the earliest divisible interpolation rate and geometry");
+    }
+  }
 }
 
 void testWildcardImagesResolveListedPathsOnlyOnce() {
@@ -3910,6 +3996,10 @@ void testSkinImagesAreCachedAcrossDecodeRuns() {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--pomyu-animation") {
+    testPomyuAnimationExpansionIsBounded();
+    return failures ? 1 : 0;
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--unicode-builtin") {
     try {
       testChartBuiltinReaderOwnsBytesAndAccountingTransaction(true);
@@ -3948,6 +4038,7 @@ int main(int argc, char **argv) {
 #endif
   testScalableFontOutlineWorkIsBounded();
   testSharedSessionAccountingRejectsDistributedAggregateOverages();
+  testPomyuAnimationExpansionIsBounded();
   testWildcardImagesResolveListedPathsOnlyOnce();
   testChartBuiltinReaderOwnsBytesAndAccountingTransaction();
   testChartBuiltinReaderOwnsBytesAndAccountingTransaction(true);
