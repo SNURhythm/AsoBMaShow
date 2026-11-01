@@ -5164,6 +5164,9 @@ bool prepareZipDirectReadTarget(mz_zip_archive *archive,
 }
 
 constexpr std::size_t kZipDirectChunkSize = 64 * 1024;
+// Preserve small-entry allocation behavior, but do not trust a compressed
+// entry's declared expanded size before decoding any of its payload.
+constexpr std::size_t kZipInitialOutputBytes = 256 * 1024;
 
 bool readZipDirectTarget(RandomAccessFile &archiveFile,
                          const ZipDirectReadTarget &target, FileData &file,
@@ -5186,7 +5189,15 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
   }
 
   file.path = target.entryPath;
-  file.bytes.resize(static_cast<std::size_t>(target.size));
+  if (target.method == 0 && target.compressedSize != target.size) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Stored ZIP entry size mismatch.";
+    }
+    return false;
+  }
+  // Stored bytes have already been range-checked against the archive itself.
+  file.bytes.resize(static_cast<std::size_t>(target.method == 0 ? target.size :
+      std::min<std::uint64_t>(target.size, kZipInitialOutputBytes)));
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
@@ -5223,12 +5234,6 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
   };
 
   if (target.method == 0) {
-    if (target.compressedSize != target.size) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Stored ZIP entry size mismatch.";
-      }
-      return false;
-    }
     if (!readChunks(file.bytes)) {
       return false;
     }
@@ -5247,7 +5252,6 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
     std::size_t bufferedSize = 0;
     std::size_t outputOffset = 0;
     unsigned char emptyBuffer = 0;
-    auto *output = file.bytes.empty() ? &emptyBuffer : file.bytes.data();
     const auto *input = compressedScratch.empty() ? &emptyBuffer
                                                  : compressedScratch.data();
     tinfl_status status;
@@ -5275,6 +5279,12 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
       std::size_t inputSize = mappedInput
           ? std::min(kChunkSize, compressedSize - inputOffset)
           : bufferedSize - bufferedOffset;
+      if (outputOffset == file.bytes.size() && outputOffset < target.size) {
+        const auto count = static_cast<std::size_t>(
+            std::min<std::uint64_t>(kChunkSize, target.size - outputOffset));
+        reserveBoundedAppend(file.bytes, count, static_cast<std::size_t>(target.size));
+        file.bytes.resize(outputOffset + count);
+      }
       std::size_t outputSize =
           std::min(kChunkSize, file.bytes.size() - outputOffset);
       const mz_uint32 flags = TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF |
@@ -5283,6 +5293,9 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
       const auto inflateStart = std::chrono::steady_clock::now();
       const auto *nextInput = mappedInput ? mappedInput + inputOffset
                                            : input + bufferedOffset;
+      // Growth can relocate the buffer. tinfl needs the current base and all
+      // previous output intact for non-wrapping backreferences.
+      auto *output = file.bytes.empty() ? &emptyBuffer : file.bytes.data();
       status = tinfl_decompress(&decompressor, nextInput, &inputSize,
                                 output, output + outputOffset, &outputSize,
                                 flags);
@@ -5299,7 +5312,7 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
         break;
       }
     }
-    if (status != TINFL_STATUS_DONE || outputOffset != file.bytes.size()) {
+    if (status != TINFL_STATUS_DONE || outputOffset != target.size) {
       if (errorMessage != nullptr) {
         *errorMessage = "Could not inflate ZIP entry by direct reader.";
       }
@@ -5547,11 +5560,13 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
   }
 
   file.path = entryPath;
-  file.bytes.resize(static_cast<std::size_t>(stat.m_uncomp_size));
+  file.bytes.resize(static_cast<std::size_t>(std::min<mz_uint64>(
+      stat.m_uncomp_size, kZipInitialOutputBytes)));
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
-  if (pauseCallback || maximumBytes != std::numeric_limits<std::size_t>::max()) {
+  if (pauseCallback || maximumBytes != std::numeric_limits<std::size_t>::max() ||
+      stat.m_uncomp_size > kZipInitialOutputBytes) {
     ZipInputCheckpointScope inputCheckpoint(*archive, pauseCallback);
     auto iterator = makeUniqueResource<mz_zip_reader_extract_iter_state,
                                        mz_zip_reader_extract_iter_free>(
@@ -5571,8 +5586,13 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
         return false;
       }
-      const auto remaining = file.bytes.size() - offset;
+      const auto remaining = static_cast<std::size_t>(stat.m_uncomp_size) - offset;
       const auto count = std::min<std::size_t>(64 * 1024, remaining);
+      if (count > file.bytes.size() - offset) {
+        const auto growth = offset + count - file.bytes.size();
+        reserveBoundedAppend(file.bytes, growth, static_cast<std::size_t>(stat.m_uncomp_size));
+        file.bytes.resize(offset + count);
+      }
       const auto produced = mz_zip_reader_extract_iter_read(
           iterator.get(), remaining == 0 ? &extraByte : file.bytes.data() + offset,
           remaining == 0 ? 1 : count);
@@ -5592,10 +5612,10 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
       }
     }
     const bool extracted = mz_zip_reader_extract_iter_free(iterator.release());
-    if (!extracted || !sizeMatches || offset != file.bytes.size()) {
+    if (!extracted || !sizeMatches || offset != stat.m_uncomp_size) {
       if (errorMessage != nullptr) {
         *errorMessage = zipExtractionFailureMessage(
-            archive, !sizeMatches || (extracted && offset != file.bytes.size()));
+            archive, !sizeMatches || (extracted && offset != stat.m_uncomp_size));
       }
       return false;
     }
@@ -6306,10 +6326,19 @@ bool readZipEntriesByIndexConcurrent(
           target.method == MZ_DEFLATED
               ? std::min<std::uint64_t>(target.compressedSize, kZipDirectChunkSize)
               : 0;
-      const std::uint64_t targetBytes =
-          target.size > std::numeric_limits<std::uint64_t>::max() - scratchBytes
-              ? std::numeric_limits<std::uint64_t>::max()
-              : target.size + scratchBytes;
+      std::uint64_t targetBytes = target.size;
+      addSaturated(targetBytes, scratchBytes);
+      if (target.method == MZ_DEFLATED && target.size > kZipInitialOutputBytes) {
+        // reserveBoundedAppend doubles capacity, capped at the declared size.
+        // Its final growth temporarily retains the largest previous allocation.
+        std::uint64_t capacity = kZipInitialOutputBytes;
+        std::uint64_t previousCapacity = 0;
+        while (capacity < target.size) {
+          previousCapacity = capacity;
+          capacity = capacity > target.size / 2 ? target.size : capacity * 2;
+        }
+        addSaturated(targetBytes, previousCapacity);
+      }
       const auto acquireStart = std::chrono::steady_clock::now();
       if (!acquireBytes(targetBytes)) {
         break;
