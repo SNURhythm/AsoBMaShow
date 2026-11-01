@@ -55,15 +55,11 @@ restarts from retained data rather than resuming an arbitrary decompressor posit
 - Final Android native compilation: passed with the pinned NDK and existing Ninja
   build directory, using six workers.
 
-Final mobile packaging, installation, and runtime observations are recorded as
-verification proceeds. The branch is being pushed before Android device testing
-at the user's request, to allow iOS testing in parallel.
-
 Android restricted-file release APK packaging passed. It was installed with
 `adb install -r` on the connected Samsung Android 13 device using its existing
 version code 5 and matching signing certificate. Installation succeeded without
-uninstalling or clearing data. Device interaction tests have not started at this
-intermediate push.
+uninstalling or clearing data. Implementation fixes were pushed after installation
+and before runtime testing so iOS testing could proceed in parallel.
 
 ## Device-driven corrections
 
@@ -94,3 +90,27 @@ After these corrections: desktop, unsigned iOS, and Android release builds pass;
 all 13 download-group tests pass, as does the focused library-operation test.
 The updated Android APK was installed successfully with version code 5 before
 another push and runtime retry.
+
+## Final connected Android observations
+
+On the Samsung Android 13 device with the updated release APK:
+
+- Retrying the retained archive completed extraction and library acknowledgement,
+  with no additional server request. Downloads displayed Complete.
+- The foreground-service download continued with the launcher foreground. A
+  separate throttled transfer was cancelled from its notification; the server
+  observed a closed connection after 720,896 of 4,194,649 bytes, and Downloads
+  displayed Cancelled on return.
+- A user-initiated new-window link displayed the native archive confirmation.
+  Cancelling that prompt and pressing Back returned to the originating page.
+- A POST attachment displayed the explicit external-browser fallback. The server
+  saw only the WebView request, with no download-service replay.
+- The address field was readable, the corrected Manbow bookmark loaded the event
+  list, and the Downloads rows remained within the panel at landscape size.
+
+The fixtures were synthetic and served over an adb loopback mapping. Test archives
+and download history were removed after validation. No distribution upload was
+performed. Physical iOS retesting of the reported crash, Drive navigation, and
+modal wrapping remains pending; unsigned iOS compilation and the ownership
+regression pass. Android 14+ UIDT, locked-device scheduling, and physical process
+recovery were not exercised in this device session.

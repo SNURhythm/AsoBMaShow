@@ -104,11 +104,19 @@
 ## Execution record
 
 - Tasks 1 and 2 implemented and committed as `3fba811e` and `fa52b380`.
-- Tasks 3–5 implemented; Android native compilation and desktop integration pass.
-  Final mobile packaging/runtime checks are still in progress.
+- Tasks 3–5 implemented and committed. Desktop, unsigned iOS, and Android
+  release builds pass. Android installation and foreground-service device checks
+  completed; unavailable physical-device coverage is recorded below.
 - Task 6 fresh whole-branch review completed. Its four Important findings have
   regression tests and fixes; no Critical or Minor findings remain from that review.
 - The user requested a push immediately after Android installation and before
   device testing, so iOS testing can proceed in parallel. This intermediate push
   does not claim completed physical-device verification.
 - Evidence and remaining platform coverage: [verification record](../../testing/mobile-bms-downloads-2026-11-01.md).
+
+- Runtime fixes committed and pushed as `62d55ce1`: owned iOS callback snapshots,
+  direct retained-file import on Android, Manbow URL, table sidebar refresh,
+  embedded iOS link navigation, address contrast, and Downloads width constraints.
+- Final Android checks passed for retained import without redownload, notification
+  cancellation, popup confirmation, POST fallback, and Manbow navigation. Final
+  documentation records the remaining physical iOS and Android 14+ boundaries.
