@@ -11,6 +11,7 @@
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/ModalViewHelpers.h"
+#include "../view/ScrollView.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
 
@@ -214,7 +215,6 @@ void FindBmsModal::resize(int width, int height) {
   const float panelHeight = std::max(0.0f, std::min(560.0f, float(height - safe.top - safe.bottom - 24)));
   const float contentWidth = std::max(0.0f, panelWidth - 46);
   findBmsModalRoot->findViewByName("findBmsPanel")->setWidth(panelWidth)->setHeight(panelHeight);
-  findBmsDetailText->setMinHeight(0);
   findBmsProgressTrack->setWidth(contentWidth);
   auto *footer = findBmsModalRoot->findViewByName("findBmsFooter");
   footer->setFlexWrap(YGWrapWrap)->setHeight(YGUndefined)->setFlexShrink(0);
@@ -314,13 +314,20 @@ void FindBmsModal::build(View *parent) {
   findBmsStatusText->setHeight(58);
   panel->addView(findBmsStatusText);
 
+  findBmsDetailScroll = new ScrollView();
+  findBmsDetailScroll->setName("findBmsDetailScroll");
+  findBmsDetailScroll->setWidthPercent(100)->setFlex(1)->setMinHeight(0);
+  findBmsDetailScroll->setContentPadding(Edge::Right, 8);
+  panel->addView(findBmsDetailScroll);
+
   findBmsDetailText = new TextView(app_theme::font, 18);
   findBmsDetailText->setText("");
   findBmsDetailText->setThemedColor(app_theme::textSecondary);
   findBmsDetailText->setWrap(true);
   findBmsDetailText->setOverflow(TextView::TextOverflow::Hidden);
-  findBmsDetailText->setFlex(1);
-  panel->addView(findBmsDetailText);
+  // Keep natural text height so Yoga measures wrapping even when the viewport
+  // has a fixed height. The scroll view supplies the current content width.
+  findBmsDetailScroll->setContentView(findBmsDetailText);
 
   findBmsProgressTrack = new View();
   findBmsProgressTrack->setWidth(kModalContentWidth)
@@ -671,6 +678,8 @@ void FindBmsModal::refresh() {
         {"storage", i18n::message("library.find_bms.background.message")}});
   if (findBmsDetailText != nullptr) {
     findBmsDetailText->setLocalizedText(detail);
+    findBmsDetailScroll->refreshContentLayout();
+    if (findBmsAwaitingConfirmation) findBmsDetailScroll->setScrollOffset(0);
   }
 
   if (findBmsProgressTrack != nullptr) {

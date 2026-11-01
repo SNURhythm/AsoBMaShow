@@ -11,6 +11,7 @@
 
 class Button;
 class TextView;
+class ScrollView;
 class View;
 
 std::filesystem::path findBmsDownloadRoot(ChartRepository::Session *session);
@@ -65,6 +66,7 @@ private:
   View *findBmsProgressFill = nullptr;
   TextView *findBmsModalTitleText = nullptr;
   TextView *findBmsStatusText = nullptr;
+  ScrollView *findBmsDetailScroll = nullptr;
   TextView *findBmsDetailText = nullptr;
   Button *findBmsCloseButton = nullptr;
   Button *findBmsBackgroundButton = nullptr;
