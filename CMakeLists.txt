@@ -6245,6 +6245,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(music_select_toolbar_view_tests
         tests/music_select_toolbar_view_tests.cpp
+        tests/tasks_modal_mobile_fixture.cpp
+        src/scene/FindBmsProgressPresentation.cpp
+        src/downloads/DownloadCoordinator.cpp
+        src/downloads/DownloadJobs.cpp
+        src/downloads/BrowserPolicy.cpp
+        src/AtomicFile.cpp
+        src/storage/StoragePolicy.cpp
+        src/view/ScrollView.cpp
         src/scene/MusicSelectToolbarView.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp

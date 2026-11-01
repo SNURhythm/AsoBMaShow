@@ -236,5 +236,6 @@ int main() {
   testSceneExtractionProgressPreservesHistoryAcrossLanguages();
   testSceneCancellationKeepsPendingArtifactVisible();
   testSceneCandidateAndPendingArtifactDecisions();
+  testSharedDownloadStaysInFindBms();
   testQueuedDownloadHandoffDoesNotIndexOrCancelOnSceneClose();
 }

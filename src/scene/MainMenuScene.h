@@ -50,7 +50,7 @@
 #include "RecordFileActions.h"
 #include "ReplayRecordTask.h"
 #include "FindBmsModal.h"
-#include "DownloadsModal.h"
+#include "TasksModal.h"
 #include "ChartReadmeModal.h"
 #include "ArchiveUnzipModal.h"
 #include <array>
@@ -283,6 +283,7 @@ private:
   OverlayPortal *overlayPortal = nullptr;
   DecideLoadingOverlay *decideOverlay_ = nullptr;
   std::unique_ptr<ContextMenuView> revealContextMenu;
+  std::unique_ptr<ContextMenuView> addBmsContextMenu_;
   std::unique_ptr<ReplayRecordsModal> recordsModal_;
   ImageView *jacketView = nullptr;
   ChartDetailsView *chartDetailsView_ = nullptr;
@@ -363,14 +364,9 @@ private:
   TextView *musicStopButtonText = nullptr;
   TextView *musicCloseButtonText = nullptr;
   ScrollView *tasksScrollView = nullptr;
-  View *tasksContent = nullptr;
   TextView *tasksText = nullptr;
-  Button *tasksRefreshButton = nullptr;
-  TextView *tasksRefreshButtonText = nullptr;
-  Button *tasksCloseButton = nullptr;
-  TextView *tasksCloseButtonText = nullptr;
   std::unique_ptr<FindBmsModal> findBmsModal_;
-  std::unique_ptr<DownloadsModal> downloadsModal_;
+  std::unique_ptr<TasksModal> tasksDialog_;
   std::unique_ptr<ChartReadmeModal> readmeModal_;
   TextView *readyGaugeText = nullptr;
   TextView *readySpeedText = nullptr;
@@ -633,8 +629,10 @@ private:
 #endif
   void resizeTasksModal();
   void resizeParseLogModal();
+  void toggleAddBmsMenu();
+  void openBmsBrowser();
   void buildTasksModal();
-  void showTasksModal();
+  void showTasksModal(bool downloads = false);
   void hideTasksModal();
   void refreshTasksModal(bool force = false);
   std::string tasksModalTextSnapshot();

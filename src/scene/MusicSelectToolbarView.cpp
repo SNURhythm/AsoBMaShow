@@ -4,6 +4,7 @@
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/IconText.h"
+#include "../view/IconButtonContent.h"
 #include "../view/GoalTargetBubble.h"
 #include "../view/GoalRecommendationBadge.h"
 #include "../view/TextView.h"
@@ -96,6 +97,7 @@ void MusicSelectToolbarView::applyState(MusicSelectToolbarState state) {
 void MusicSelectToolbarView::rebuild() {
   goalBubble_ = nullptr;
   goalRecommendationBadge_ = nullptr;
+  tasksBadge_ = nullptr;
   clearChildren();
   controls_.clear();
   if (state_.mode == MusicSelectToolbarMode::Hidden) {
@@ -173,6 +175,7 @@ void MusicSelectToolbarView::rebuild() {
     }
     const bool retryWarning = control == MusicSelectToolbarControl::PlayOptions && quickRetryEnabled_;
     if (retryWarning) width = std::min(availableWidth, width + 28);
+    if (control == MusicSelectToolbarControl::MoreMenu) width = std::min(availableWidth, width + 22);
     widths.push_back(width);
     controls_.push_back({.control = control,
                          .codepoint = codepoint,
@@ -196,7 +199,18 @@ void MusicSelectToolbarView::rebuild() {
                                   app_theme::accentBorder,
                                   app_theme::accentBorderStrong);
     button->setStyledBorderWidth(1);
-    if (control == MusicSelectToolbarControl::Goal) {
+    if (control == MusicSelectToolbarControl::MoreMenu || control == MusicSelectToolbarControl::Expand) {
+      auto *row = new View();
+      row->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
+      if (label) row->setPadding(Edge::Right, 22);
+      content->setMinWidth(0)->setAutoFitText(true);
+      row->addView(content);
+      tasksBadge_ = icon_button::makeBadge();
+      tasksBadge_->setName("tasksCountBadge");
+      icon_button::setBadgeCount(tasksBadge_, taskCount_);
+      row->addView(tasksBadge_);
+      button->setContentView(row);
+    } else if (control == MusicSelectToolbarControl::Goal) {
       auto *flagContent = new View();
       flagContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
       flagContent->addView(content);
@@ -237,6 +251,13 @@ void MusicSelectToolbarView::rebuild() {
   }
   setWidth(inset * 2 + std::max(widestRow, rowWidth));
   setHeight(inset * 2 + kControlSize * rows + kGap * (rows - 1));
+}
+
+void MusicSelectToolbarView::setTaskCount(int count) {
+  count = std::max(0, count);
+  if (taskCount_ == count) return;
+  taskCount_ = count;
+  icon_button::setBadgeCount(tasksBadge_, count);
 }
 
 void MusicSelectToolbarView::onLanguageChanged() {

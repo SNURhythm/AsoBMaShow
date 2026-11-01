@@ -45,6 +45,8 @@ Request transferRequest(const Job &job);
 std::optional<std::filesystem::path> importedLibraryPath(const Job &job);
 bool validRequest(const Request &request);
 bool terminal(State state);
+// Outstanding download work or an error/decision that still needs attention.
+bool needsNotification(const Job &job);
 const char *stateName(State state);
 
 // One store per process. All operations are serialized; updates use revisions

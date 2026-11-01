@@ -1,3 +1,4 @@
+#include "REPOSITORY_ROOT/src/downloads/DownloadJobs.h"
 #include "REPOSITORY_ROOT/src/music_select/MusicSelectTypes.h"
 #include "REPOSITORY_ROOT/src/BmsSearchService.h"
 #include "REPOSITORY_ROOT/src/library/ChartLibraryTaskTypes.h"

@@ -82,7 +82,7 @@ require(
     "Find BMS mismatch actions must use the approved visible labels",
 )
 require(
-    "findBmsDialogPolicy(findBmsTask.running(), findBmsResult)"
+    "findBmsDialogPolicy(inProgress(), findBmsResult)"
     in modal_source,
     "Find BMS dismissal must use the tested dialog policy",
 )

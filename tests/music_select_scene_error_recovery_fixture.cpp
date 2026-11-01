@@ -94,7 +94,7 @@ struct MusicSelectScene : Scene {
     void cancelAndWait() { cancelled = true; }
   } unzipModal;
   UnzipModal *archiveUnzipModal_ = &unzipModal;
-  UnzipModal *findBmsModal_ = nullptr, *readmeModal_ = nullptr, *downloadsModal_ = nullptr;
+  UnzipModal *findBmsModal_ = nullptr, *readmeModal_ = nullptr, *tasksDialog_ = nullptr;
   SceneManager manager;
   struct { SceneManager *sceneManager; } context{&manager};
   bool failed_ = false;

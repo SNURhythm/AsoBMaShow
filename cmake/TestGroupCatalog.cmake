@@ -331,6 +331,7 @@ asobmashow_label_tests(area_archives
 )
 
 asobmashow_label_tests(area_downloads
+    music_select_toolbar_view_tests
     download_jobs_tests
     browser_table_detection_tests
     download_coordinator_tests

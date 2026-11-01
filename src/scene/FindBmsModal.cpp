@@ -1,5 +1,6 @@
 #include "FindBmsModal.h"
 #include "FindBmsDialogPolicy.h"
+#include "../downloads/DownloadService.h"
 #include "FindBmsProgressPresentation.h"
 #include "../PlatformOpen.h"
 #include "../Utils.h"
@@ -247,7 +248,20 @@ std::unique_ptr<FindBmsModal> FindBmsModal::Create(
 }
 
 FindBmsModal::FindBmsModal(FindBmsModalCallbacks callbacks)
-    : callbacks_(std::move(callbacks)) {}
+    : callbacks_(std::move(callbacks)) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  callbacks_.readDownload = [](const std::string &id) -> std::optional<downloads::Job> {
+    // jobs() includes transient import progress as well as the durable state.
+    for (auto &job : downloads::service()->jobs()) if (job.id == id) return std::move(job);
+    return {};
+  };
+  callbacks_.cancelDownload = [](const std::string &id) { return downloads::service()->cancel(id); };
+  callbacks_.retryDownload = [](const std::string &id) { return downloads::service()->retry(id); };
+  callbacks_.decideDownload = [](const std::string &id, BmsSearchPendingArtifactDecision decision) {
+    return downloads::service()->decide(id, decision);
+  };
+#endif
+}
 
 FindBmsModal::~FindBmsModal() {
   cancelAndWait();
@@ -262,7 +276,7 @@ FindBmsModal::~FindBmsModal() {
   }
 }
 
-bool FindBmsModal::inProgress() const { return findBmsTask.running(); }
+bool FindBmsModal::inProgress() const { return findBmsTask.running() || queuedDownloadRunning_; }
 
 bool FindBmsModal::isVisible() const {
   return findBmsModalRoot != nullptr && findBmsModalRoot->getVisible();
@@ -315,14 +329,17 @@ bool FindBmsModal::handleEvents(SDL_Event &event) {
 }
 
 void FindBmsModal::cancelOrClose() {
-  const bool wasRunning = findBmsTask.running();
+  const bool wasRunning = inProgress();
   update();
-  const bool running = wasRunning || findBmsTask.running();
+  const bool running = wasRunning || inProgress();
   if (!findBmsDialogPolicy(running, findBmsResult).showCloseOrCancel) {
     return;
   }
   if (running) {
-    findBmsTask.requestCancel();
+    if (!findBmsResult.queuedDownloadId.empty() && callbacks_.cancelDownload) {
+      try { callbacks_.cancelDownload(findBmsResult.queuedDownloadId); } catch (...) {}
+      updateQueuedDownload(true);
+    } else findBmsTask.requestCancel();
     refresh();
     return;
   }
@@ -468,7 +485,10 @@ void FindBmsModal::build(View *parent) {
   findBmsBackgroundButton->setOnClickListener([this]() { hide(); });
   findBmsConfirmButton->setOnClickListener([this]() { startLookup(); });
   findBmsRetryButton->setOnClickListener([this]() {
-    findBmsTask.retryDownload();
+    if (!findBmsResult.queuedDownloadId.empty() && callbacks_.retryDownload) {
+      try { callbacks_.retryDownload(findBmsResult.queuedDownloadId); } catch (...) {}
+      updateQueuedDownload(true);
+    } else findBmsTask.retryDownload();
     refresh(false);
   });
   findBmsKeepFilesButton->setOnClickListener([this]() {
@@ -488,6 +508,12 @@ void FindBmsModal::build(View *parent) {
         findBmsTitleSearchQuery(findBmsModalChart)));
   });
   findBmsRefreshButton->setOnClickListener([this]() {
+    if (!findBmsResult.queuedDownloadId.empty() && callbacks_.openDownloads) {
+      // The shared queue owns pending decisions, so it is safe to leave this view.
+      findBmsModalRoot->setVisible(false);
+      callbacks_.openDownloads(findBmsResult.queuedDownloadId);
+      return;
+    }
     if (callbacks_.refreshLibrary) callbacks_.refreshLibrary();
     hide();
   });
@@ -513,7 +539,7 @@ void FindBmsModal::show(const ChartMetaRecord &record, bool requireConfirmation)
   requireConfirmation = true;
 #endif
   if (findBmsModalRoot == nullptr) return;
-  if (findBmsTask.running() || findBmsResult.pendingArtifact) {
+  if (inProgress() || findBmsResult.pendingArtifact) {
     // A retained scene may hide the dialog while a keep/delete decision is
     // pending. Reopen that decision without replacing its staged download.
     findBmsModalRoot->setVisible(true);
@@ -523,6 +549,8 @@ void FindBmsModal::show(const ChartMetaRecord &record, bool requireConfirmation)
 
   findBmsModalChart = record;
   findBmsResult = {};
+  queuedDownloadRunning_ = false; queuedDownloadRetry_ = false;
+  queuedDownloadSnapshot_.clear(); queuedDownloadUpdateAt_ = {};
   findBmsPendingDecision.reset();
   findBmsAwaitingConfirmation = true;
   findBmsProgressMessage.clear();
@@ -541,7 +569,7 @@ void FindBmsModal::show(const ChartMetaRecord &record, bool requireConfirmation)
 
 void FindBmsModal::startLookup() {
   if (callbacks_.admit && !callbacks_.admit()) return;
-  if (!findBmsAwaitingConfirmation || findBmsTask.running() ||
+  if (!findBmsAwaitingConfirmation || inProgress() ||
       findBmsResult.pendingArtifact) {
     return;
   }
@@ -585,7 +613,7 @@ void FindBmsModal::startLookup() {
 
 void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
   if (callbacks_.admit && !callbacks_.admit()) return;
-  if (findBmsTask.running() ||
+  if (inProgress() ||
       candidateIndex >= findBmsResult.candidates.size()) {
     return;
   }
@@ -623,7 +651,13 @@ void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
 void FindBmsModal::startPendingArtifactResolution(
     BmsSearchPendingArtifactDecision decision) {
   if (callbacks_.admit && !callbacks_.admit()) return;
-  if (findBmsTask.running() || !findBmsResult.pendingArtifact) {
+  if (inProgress() || !findBmsResult.pendingArtifact) {
+    return;
+  }
+  if (!findBmsResult.queuedDownloadId.empty() && callbacks_.decideDownload) {
+    try { callbacks_.decideDownload(findBmsResult.queuedDownloadId, decision); } catch (...) {}
+    updateQueuedDownload(true);
+    refresh();
     return;
   }
   BmsSearchResult result = findBmsResult;
@@ -646,12 +680,11 @@ void FindBmsModal::startPendingArtifactResolution(
 void FindBmsModal::hide() {
   if (findBmsModalRoot == nullptr) return;
   const bool wasVisible = findBmsModalRoot->getVisible();
-  // Mark the explicit dismissal before consuming a queued-download handoff,
-  // so completion cannot immediately reopen Downloads over the user's work.
+  // Consume any pending result without changing the user's choice to hide it.
   findBmsModalRoot->setVisible(false);
-  const bool wasRunning = findBmsTask.running();
+  const bool wasRunning = inProgress();
   update();
-  const bool running = wasRunning || findBmsTask.running();
+  const bool running = wasRunning || inProgress();
   if (!findBmsDialogPolicy(running, findBmsResult).canDismiss) {
     findBmsModalRoot->setVisible(wasVisible);
     return;
@@ -665,10 +698,11 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     return;
   }
 
-  const bool running = findBmsTask.running();
+  const bool running = inProgress();
   const auto retryRequest = findBmsTask.retryRequest();
+  const bool canRetry = retryRequest.has_value() || queuedDownloadRetry_;
   const auto policy =
-      findBmsDialogPolicy(findBmsTask.running(), findBmsResult);
+      findBmsDialogPolicy(inProgress(), findBmsResult);
   if (findBmsModalTitleText != nullptr) {
     findBmsModalTitleText->setLocalizedText(i18n::message("library.find_bms.find_bms.label"));
   }
@@ -844,9 +878,11 @@ void FindBmsModal::refresh(bool refreshCandidates) {
        !findBmsModalChart.meta.MD5.empty() ||
        !findBmsModalChart.meta.Title.empty() ||
        !findBmsModalChart.meta.Artist.empty());
-  const bool hasRefreshAction =
-      !findBmsAwaitingConfirmation && policy.showNormalResultActions &&
-      !running && !downloaded;
+  const bool hasSharedDownload = !findBmsResult.queuedDownloadId.empty();
+  const bool hasRefreshAction = hasSharedDownload ||
+      (!findBmsAwaitingConfirmation && policy.showNormalResultActions && !running && !downloaded);
+  if (findBmsRefreshButtonText) findBmsRefreshButtonText->setLocalizedText(i18n::message(
+      hasSharedDownload ? "downloads.ui.view" : "library.find_bms.refresh.label"));
   if (findBmsCloseButtonText != nullptr) {
     findBmsCloseButtonText->setLocalizedText(
         (running || findBmsAwaitingConfirmation)
@@ -871,8 +907,8 @@ void FindBmsModal::refresh(bool refreshCandidates) {
                                                : "library.find_bms.retry.label"));
   }
   if (findBmsRetryButton != nullptr) {
-    findBmsRetryButton->setVisible(retryRequest.has_value());
-    findBmsRetryButton->setWidth(retryRequest ? 150.0f : 0.0f);
+    findBmsRetryButton->setVisible(canRetry);
+    findBmsRetryButton->setWidth(canRetry ? 150.0f : 0.0f);
   }
   if (findBmsKeepFilesButton != nullptr) {
     findBmsKeepFilesButton->setVisible(policy.showPendingActions);
@@ -929,7 +965,7 @@ void FindBmsModal::refresh(bool refreshCandidates) {
                           app_theme::successActionHover,
                           app_theme::successActionPressed, app_theme::accentBorder);
   styleThemedActionButton(findBmsRetryButton, findBmsRetryButtonText,
-                          retryRequest.has_value(), app_theme::successAction,
+                          canRetry, app_theme::successAction,
                           app_theme::successActionHover,
                           app_theme::successActionPressed, app_theme::accentBorder);
   styleThemedActionButton(
@@ -995,9 +1031,13 @@ void FindBmsModal::update() {
     findBmsResult = std::move(*result);
     findBmsPendingDecision.reset();
     if (!findBmsResult.queuedDownloadId.empty()) {
-      const bool showDownloads = findBmsModalRoot != nullptr && findBmsModalRoot->getVisible();
-      if (findBmsModalRoot != nullptr) findBmsModalRoot->setVisible(false);
-      if (showDownloads && callbacks_.downloadQueued) callbacks_.downloadQueued(findBmsResult.queuedDownloadId);
+      queuedDownloadRunning_ = true;
+      queuedDownloadRetry_ = false;
+      queuedDownloadSnapshot_.clear();
+      findBmsProgressMessage = i18n::tr("downloads.ui.queued");
+      findBmsProgressFraction = 0.0;
+      updateQueuedDownload(true);
+      refresh();
       return;
     }
     const bool keptMismatchedFiles =
@@ -1021,8 +1061,69 @@ void FindBmsModal::update() {
     }
     shouldRefresh = true;
   }
+  if (updateQueuedDownload()) shouldRefresh = true;
   if (shouldRefresh) {
     refresh();
+  }
+}
+
+bool FindBmsModal::updateQueuedDownload(bool force) {
+  const auto id = findBmsResult.queuedDownloadId;
+  if (id.empty() || !callbacks_.readDownload) return false;
+  const auto now = std::chrono::steady_clock::now();
+  if (!force && now < queuedDownloadUpdateAt_) return false;
+  queuedDownloadUpdateAt_ = now + std::chrono::milliseconds(300);
+  try {
+    const auto job = callbacks_.readDownload(id);
+    if (!job) {
+      queuedDownloadRunning_ = queuedDownloadRetry_ = false;
+      findBmsResult.status = BmsSearchResult::Status::DownloadFailed;
+      findBmsResult.pendingArtifact.reset();
+      findBmsResult.presentationMessage = {};
+      findBmsResult.message = i18n::tr("downloads.ui.unavailable");
+      return true;
+    }
+    const auto snapshot = std::to_string(job->revision) + ":" + std::to_string(int(job->state)) + ":" +
+        std::to_string(job->downloadedBytes) + ":" + std::to_string(job->totalBytes) + ":" + job->message +
+        ":" + job->libraryError + ":" + std::to_string(job->libraryAcknowledged);
+    if (!force && snapshot == queuedDownloadSnapshot_) return false;
+    queuedDownloadSnapshot_ = snapshot;
+    using downloads::State;
+    queuedDownloadRunning_ = job->state == State::Queued || job->state == State::Transferring ||
+        job->state == State::Downloaded || job->state == State::Importing;
+    queuedDownloadRetry_ = job->state == State::Failed || !job->libraryError.empty() ||
+        (job->state == State::NeedsAttention && (!job->result || !job->result->pendingArtifact));
+    findBmsPendingDecision.reset();
+    if (job->result) findBmsResult = *job->result;
+    else findBmsResult = {};
+    findBmsResult.queuedDownloadId = id;
+    findBmsResult.downloadUrl = job->request.displayUrl.empty() ? job->request.url : job->request.displayUrl;
+    findBmsProgressCurrent = job->downloadedBytes; findBmsProgressTotal = job->totalBytes;
+    findBmsProgressMessage = job->message;
+    if (job->state == State::Queued) findBmsProgressMessage = i18n::tr("downloads.ui.queued");
+    else if (job->state == State::Transferring) findBmsProgressMessage = "Downloading archive";
+    else if (job->state == State::Downloaded) findBmsProgressMessage = i18n::tr("downloads.ui.downloaded");
+    else if (job->state == State::Importing && findBmsProgressMessage.empty()) findBmsProgressMessage = i18n::tr("downloads.ui.importing");
+    if (job->state == State::Transferring)
+      findBmsProgressFraction = job->totalBytes ? 0.1 + 0.75 * double(job->downloadedBytes) / job->totalBytes : 0.1;
+    else if (job->state == State::Queued) findBmsProgressFraction = 0.0;
+    else if (queuedDownloadRunning_) findBmsProgressFraction = 0.9;
+    else if (job->state == State::Complete) findBmsProgressFraction = 1.0;
+    if (job->state == State::Failed || job->state == State::Cancelled || !job->libraryError.empty() ||
+        (job->state == State::NeedsAttention && !findBmsResult.pendingArtifact)) {
+      findBmsResult.status = BmsSearchResult::Status::DownloadFailed;
+      findBmsResult.presentationMessage = {};
+      findBmsResult.message = job->state == State::Cancelled ? i18n::tr("downloads.ui.cancelled") :
+          (!job->libraryError.empty() ? job->libraryError : job->message);
+    }
+    return true;
+  } catch (...) {
+    queuedDownloadRunning_ = queuedDownloadRetry_ = false;
+    findBmsResult.status = BmsSearchResult::Status::DownloadFailed;
+    findBmsResult.pendingArtifact.reset();
+    findBmsResult.presentationMessage = {};
+    findBmsResult.message = i18n::tr("downloads.ui.storage_error");
+    return true;
   }
 }
 

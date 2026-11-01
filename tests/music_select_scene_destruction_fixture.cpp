@@ -136,7 +136,7 @@ public:
   View *skinLoadingView_ = nullptr;
   std::optional<int> activeSkinStringWriter_, chartSession_;
   std::map<int, View *> skinTextInputs_;
-  std::unique_ptr<Resource> playOptionsModal_, recordsModal_;
+  std::unique_ptr<Resource> playOptionsModal_, recordsModal_, tasksDialog_;
   View *toolbar_ = nullptr, *searchOverlay_ = nullptr, *modalLayer_ = nullptr;
   replay::ReplayExportJob recordsExportJob_;
   View *tasksModal_ = nullptr, *tasksModalText_ = nullptr, *errorView_ = nullptr, *directoryStatus_ = nullptr;

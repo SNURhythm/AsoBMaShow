@@ -133,3 +133,19 @@ After both additions, desktop main, unsigned iOS, and Android release builds pas
 all 13 download tests and the localization catalog check pass. The Android APK
 was installed with the existing version code and the implementation pushed before
 device testing. Physical iOS interaction testing remains separate.
+
+## Consolidated library actions and Tasks tabs
+
+The standard selector now groups folder and browser actions under Add BMS with a
+plus icon. Tasks contains Library and Downloads tabs, with their combined count
+on the selector and separate counts on the tabs. The skin toolbar retains that
+count when collapsed. Find BMS remains open after submitting a shared download;
+View Downloads is the explicit navigation action.
+
+The desktop application build and all 15 `area_downloads` tests pass. Coverage
+includes real-view tab switching, combined counts, cancellation, compact portrait
+and landscape layouts, toolbar rebuilds, and shared-job progress without automatic
+navigation or duplicate indexing. Selector lifecycle, main-menu tab, localization,
+and archive-flow contract checks also pass. The changed native sources pass Android
+compile checks; TasksModal and FindBmsModal pass iOS compile checks. These latest
+UI changes have not been installed or tested interactively on a physical device.

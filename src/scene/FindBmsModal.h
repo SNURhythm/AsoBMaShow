@@ -1,6 +1,8 @@
 #pragma once
 
 #include "FindBmsTask.h"
+#include "../downloads/DownloadJobs.h"
+#include <chrono>
 #include "../repositories/ChartRepository.h"
 
 #include <SDL3/SDL.h>
@@ -22,7 +24,10 @@ struct FindBmsModalCallbacks {
   std::function<void(const ChartMetaRecord &, const BmsSearchResult &,
                      bool matched)> filesReady;
   std::function<void()> refreshLibrary;
-  std::function<void(const std::string &)> downloadQueued;
+  std::function<void(const std::string &)> openDownloads;
+  std::function<std::optional<downloads::Job>(const std::string &)> readDownload;
+  std::function<bool(const std::string &)> cancelDownload, retryDownload;
+  std::function<bool(const std::string &, BmsSearchPendingArtifactDecision)> decideDownload;
 };
 
 // The parent owns the views. Destroy this controller before its parent view.
@@ -48,6 +53,7 @@ public:
 private:
   explicit FindBmsModal(FindBmsModalCallbacks callbacks);
   void build(View *parent);
+  bool updateQueuedDownload(bool force = false);
   void startLookup();
   void startCandidateDownload(size_t candidateIndex);
   void startPendingArtifactResolution(BmsSearchPendingArtifactDecision decision);
@@ -81,6 +87,9 @@ private:
   TextView *findBmsOpenButtonText = nullptr;
   TextView *findBmsGoogleButtonText = nullptr;
   TextView *findBmsRefreshButtonText = nullptr;
+  bool queuedDownloadRunning_ = false, queuedDownloadRetry_ = false;
+  std::chrono::steady_clock::time_point queuedDownloadUpdateAt_{};
+  std::string queuedDownloadSnapshot_;
   bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;

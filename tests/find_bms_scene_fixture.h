@@ -3,6 +3,7 @@
 // Service definitions below replace network/filesystem effects with controlled
 // calls. View and indexing doubles check the application-thread handoff.
 #include "scene/FindBmsDialogPolicy.h"
+#include "downloads/DownloadJobs.h"
 #include "targets.h"
 #include "scene/FindBmsProgressPresentation.h"
 #include <algorithm>
@@ -96,7 +97,10 @@ struct FindBmsModalCallbacks {
   std::function<void()> downloadStarted;
   std::function<void(const ChartMetaRecord &, const BmsSearchResult &, bool)> filesReady;
   std::function<void()> refreshLibrary;
-  std::function<void(const std::string &)> downloadQueued;
+  std::function<void(const std::string &)> openDownloads;
+  std::function<std::optional<downloads::Job>(const std::string &)> readDownload;
+  std::function<bool(const std::string &)> cancelDownload, retryDownload;
+  std::function<bool(const std::string &, BmsSearchPendingArtifactDecision)> decideDownload;
 };
 class MainMenuScene {
 public:
@@ -110,6 +114,9 @@ public:
   FindBmsModal *findBmsModalRoot = &modal;
   struct { std::atomic_bool storageMaintenanceActive = false, backgroundTasksPausedForForegroundScene = false, appInBackground = false;
     struct { bool findBmsSkipUnarchivingForNonSolidArchives = true; storage_management::StoragePreferences storagePreferences; } settings; } context;
+  bool queuedDownloadRunning_ = false, queuedDownloadRetry_ = false;
+  std::chrono::steady_clock::time_point queuedDownloadUpdateAt_{};
+  std::string queuedDownloadSnapshot_;
   bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
@@ -139,6 +146,8 @@ public:
     indexed.push_back({path, identity, generation, removed});
   }
   void showFindBmsModal(const ChartMetaRecord &record, bool requireConfirmation = false);
+  bool inProgress() const;
+  bool updateQueuedDownload(bool force = false);
   void startLookup();
   void cancelAndWait();
   void startFindBmsCandidateDownload(size_t index);
@@ -434,6 +443,41 @@ void testSceneCandidateAndPendingArtifactDecisions() {
   assert(scene.indexed[0].removed == std::vector<std::filesystem::path>{"obsolete.bms"});
 }
 
+void testSharedDownloadStaysInFindBms() {
+  MainMenuScene scene;
+  downloads::Job job;
+  job.id = "retained"; job.state = downloads::State::Transferring;
+  job.downloadedBytes = 50; job.totalBytes = 100;
+  scene.findBmsResult.queuedDownloadId = job.id;
+  scene.modal.visible = true;
+  scene.callbacks_.readDownload = [&](const std::string &id) { assert(id == job.id); return std::optional(job); };
+  int cancellations = 0, decisions = 0, navigations = 0;
+  scene.callbacks_.cancelDownload = [&](const auto &) { ++cancellations; job.state = downloads::State::Cancelled; return true; };
+  scene.callbacks_.decideDownload = [&](const auto &, auto decision) {
+    assert(decision == BmsSearchPendingArtifactDecision::Keep);
+    ++decisions; job.state = downloads::State::Importing; return true;
+  };
+  scene.callbacks_.openDownloads = [&](const auto &) { ++navigations; };
+  assert(scene.updateQueuedDownload(true));
+  assert(scene.inProgress() && scene.modal.visible && scene.findBmsProgressCurrent == 50);
+  scene.cancelFindBms();
+  assert(cancellations == 1 && !scene.inProgress() && scene.modal.visible);
+  job.state = downloads::State::Failed;
+  scene.updateQueuedDownload(true);
+  assert(scene.queuedDownloadRetry_);
+  job.state = downloads::State::NeedsAttention;
+  job.result = BmsSearchResult{.status = BmsSearchResult::Status::HashMismatch};
+  job.result->pendingArtifact.emplace();
+  scene.updateQueuedDownload(true);
+  scene.startFindBmsPendingArtifactResolution(BmsSearchPendingArtifactDecision::Keep);
+  assert(decisions == 1 && scene.inProgress());
+  job.state = downloads::State::Complete;
+  job.result->pendingArtifact.reset(); job.result->outputPath = "library/chart";
+  scene.updateQueuedDownload(true);
+  assert(!scene.inProgress() && scene.modal.visible && scene.indexed.empty());
+  assert(navigations == 0); // Completion never opens Tasks or indexes the shared job twice.
+}
+
 void testQueuedDownloadHandoffDoesNotIndexOrCancelOnSceneClose() {
   for (const bool closeWhileRunning : {false, true}) {
     ServiceCalls calls;
@@ -444,7 +488,7 @@ void testQueuedDownloadHandoffDoesNotIndexOrCancelOnSceneClose() {
                     .queuedDownloadId = "background-job"};
     MainMenuScene scene;
     int deliveries = 0;
-    scene.callbacks_.downloadQueued = [&](const std::string &id) {
+    scene.callbacks_.openDownloads = [&](const std::string &id) {
       assert(id == "background-job");
       ++deliveries;
     };
@@ -453,12 +497,12 @@ void testQueuedDownloadHandoffDoesNotIndexOrCancelOnSceneClose() {
     if (closeWhileRunning) scene.hideFindBmsModal();
     gate.release.set_value();
     applyUntilIdle(scene);
-    assert(deliveries == (closeWhileRunning ? 0 : 1));
-    assert(!calls.cancellationObserved && !scene.modal.visible);
+    assert(deliveries == 0);
+    assert(!calls.cancellationObserved && scene.modal.visible == !closeWhileRunning);
     assert(scene.indexed.empty());
     scene.applyFindBmsUpdates();
     scene.cancelAndWait();
-    assert(deliveries == (closeWhileRunning ? 0 : 1) && scene.indexed.empty());
+    assert(deliveries == 0 && scene.indexed.empty());
   }
 }
 } // namespace

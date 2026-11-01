@@ -11,8 +11,9 @@ chart folder.
 
 On iOS and Android, **Browse BMS** opens an embedded browser with GingerRush and
 Manbow bookmarks, navigation, an address field, and an external-browser action.
-The standard selector has sidebar entries; the skin selector exposes them in its
-More menu. **Import table** is enabled for the active page when it declares a
+The standard selector's **Add BMS** menu (plus icon) contains **Add Folder** and
+**Browse BMS**. Android also keeps **Manage Files** in that menu, with direct folder
+linking only in all-files builds. The skin selector exposes browsing in its More menu. **Import table** is enabled for the active page when it declares a
 `bmstable` header link or displays difficulty-table header JSON (`name`, `symbol`,
 and `data_url`). GingerRush table URLs also retain their direct recognition.
 Navigation and popup changes clear the previous page's detection. Import uses the
@@ -20,7 +21,13 @@ existing table importer and duplicate handling. Importing a table does not fetch
 its chart packages. Event tables may have an empty symbol.
 
 Accepted browser archives and Find BMS selections enter the same **Downloads**
-queue. Closing a dialog, closing the browser, or changing scenes leaves accepted
+queue in **Tasks → Downloads**. The Tasks modal has **Library** and **Downloads**
+tabs. Its notification badge adds active library tasks to outstanding downloads,
+including pending indexing, errors and keep/delete decisions. Completed, indexed
+and cancelled downloads do not contribute. Each tab shows its own count; the skin
+selector carries the combined badge on More (or Expand when collapsed).
+
+Closing a dialog, closing the browser, or changing scenes leaves accepted
 work running. Downloads shows transfer/import/indexing phases, explicit Cancel
 and Retry, and keep/delete decisions for unmatched content. Once library indexing
 finishes, **Locate** closes Downloads and opens the imported folder or packed
@@ -28,6 +35,11 @@ archive in the current selector, clearing filters that could hide its charts.
 Missing files leave Downloads open with a refresh-library message. Remove discards the
 job's private retained files and history after completion; it does not remove an
 installed chart from the library.
+
+Find BMS stays open after queuing a mobile download and follows that shared job's
+progress, cancellation, retry and keep/delete decisions. **View Downloads** opens
+the Downloads tab explicitly; starting or finishing the job does not navigate there.
+Browser and notification requests open Tasks directly on the Downloads tab.
 
 While Find BMS is working, **Hide (keep running)** dismisses its dialog without
 cancelling the task. **Cancel** stops it. Hidden lookup completion does not reopen

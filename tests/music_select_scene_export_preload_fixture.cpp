@@ -429,6 +429,7 @@ struct MusicSelectScene {
   int songBarChangeMicros_ = 0;
   int elapsedMicros() { return 1000; }
   void refreshTasksModal() {}
+  void refreshTaskNotifications() {}
   void applyRecordsExportProgress() {}
   void consumeLogicalInput() { ++inputConsumptions; if (logicalHandoff) logicalHandoff(); }
   void consumeActions() { ++inputConsumptions; if (actionHandoff) actionHandoff(); }

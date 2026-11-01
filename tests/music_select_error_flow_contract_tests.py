@@ -872,6 +872,8 @@ struct MusicSelectScene {
   std::optional<int> chartSession_ = 0;
   std::unique_ptr<ContextMenuView> revealContextMenu_;
   int folders = 0, resets = 0;
+  struct TasksDialog { int notificationCount() const { return 0; } };
+  TasksDialog *tasksDialog_ = nullptr;
   bool selectorInputBlocked() const { return blocked || (revealContextMenu_ && revealContextMenu_->isOpen()); }
   bool openSameFolder(bool notify) { assert(notify && !selectorInputBlocked()); ++folders; return true; }
   void resetLogicalInput() { ++resets; }

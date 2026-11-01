@@ -1,10 +1,12 @@
-#include "DownloadsModal.h"
+#include "TasksModal.h"
 #include "../downloads/DownloadService.h"
 #include "../PlatformOpen.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/ScrollView.h"
+#include "../view/IconButtonContent.h"
 #include "../view/ModalViewHelpers.h"
 #include "../rendering/common.h"
+#include "../rendering/UiSafeArea.h"
 #include "../targets.h"
 #include "FindBmsProgressPresentation.h"
 #include <algorithm>
@@ -41,55 +43,149 @@ i18n::Text stateLabel(downloads::State state) {
   return {};
 }
 }
-DownloadsModal::DownloadsModal(View *parent,
+TasksModal::TasksModal(View *parent, std::function<void()> refreshLibrary,
     std::function<bool(const std::filesystem::path &)> locate)
     : locate_(std::move(locate)) {
   root_ = new BlockingOverlayView(0, 0, rendering::window_width, rendering::window_height);
-  root_->setName("downloadsModal"); root_->setPositionType(YGPositionTypeAbsolute);
+  root_->setName("tasksModal"); root_->setPositionType(YGPositionTypeAbsolute);
   root_->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)->setZIndex(1200);
   root_->setVisible(false);
   root_->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
   root_->setThemedBackgroundColor(app_theme::scrim);
   panel_ = new View(); panel_->setFlexDirection(FlexDirection::Column)->setGap(14)->setPadding(Edge::All, 20);
   panel_->setThemedBackgroundColor(app_theme::panelStrong)->setCornerRadius(app_theme::panelRadius());
-  label(panel_, i18n::message("downloads.ui.title"), 28);
-#if TARGET_OS_IPHONE
-  label(panel_, i18n::message("downloads.ui.ios_notice"), 16)->setThemedColor(app_theme::textSecondary);
-#else
-  label(panel_, i18n::message("downloads.ui.background_notice"), 16)->setThemedColor(app_theme::textSecondary);
+  panel_->setName("mainMenuTasksPanel");
+  label(panel_, i18n::message("menu.tasks.label"), 28);
+  auto *tabs = new View();
+  tabs->setFlexDirection(FlexDirection::Row)->setGap(8)->setHeight(48)->setFlexShrink(0);
+  const auto tabButton = [&](const char *key, Tab tab, TextView **text, TextView **badge) {
+    auto *button = new Button();
+    button->setName(tab == Tab::Library ? "tasksLibraryTab" : "tasksDownloadsTab");
+    button->setWidth(0)->setFlex(1)->setMinWidth(0)->setHeight(48);
+    button->setStyledBorderWidth(1)->setCornerRadius(app_theme::controlRadius());
+    auto *content = new View();
+    content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setPadding(Edge::Right, 30);
+    *text = new TextView(app_theme::font, 18);
+    (*text)->setLocalizedText(i18n::message(key));
+    (*text)->setAlign(TextView::CENTER); (*text)->setVAlign(TextView::MIDDLE);
+    (*text)->setAutoFitText(true); (*text)->setFlex(1)->setMinWidth(0)->setHeight(46);
+    content->addView(*text);
+    *badge = icon_button::makeBadge();
+    content->addView(*badge);
+    button->setContentView(content);
+    button->setOnClickListener([this, tab] { selectTab(tab); });
+    tabs->addView(button);
+    return button;
+  };
+  libraryTab_ = tabButton("menu.tasks.library.label", Tab::Library, &libraryTabText_, &libraryBadge_);
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+  downloadsTab_ = tabButton("downloads.ui.title", Tab::Downloads, &downloadsTabText_, &downloadsBadge_);
 #endif
-  error_ = label(panel_, "", 16);
+  panel_->addView(tabs);
+  libraryScroll_ = new ScrollView(); libraryScroll_->setName("tasksLibraryContent");
+  libraryScroll_->setFlex(1)->setMinHeight(0)->setWidthPercent(100);
+  libraryScroll_->setThemedBackgroundColor(app_theme::insetSurface)->setCornerRadius(app_theme::controlRadius());
+  libraryScroll_->setContentPadding(Edge::All, 12);
+  auto *libraryContent = new View();
+  libraryContent->setFlexDirection(FlexDirection::Column)->setWidthPercent(100);
+  libraryText_ = label(libraryContent, "");
+  libraryText_->setThemedColor(app_theme::textSecondary);
+  libraryScroll_->setContentView(libraryContent);
+  panel_->addView(libraryScroll_);
+  downloadsContent_ = new View(); downloadsContent_->setName("tasksDownloadsContent");
+  downloadsContent_->setFlexDirection(FlexDirection::Column)->setGap(12)->setFlex(1)->setMinHeight(0)->setWidthPercent(100);
+#if TARGET_OS_IPHONE
+  label(downloadsContent_, i18n::message("downloads.ui.ios_notice"), 16)->setThemedColor(app_theme::textSecondary);
+#else
+  label(downloadsContent_, i18n::message("downloads.ui.background_notice"), 16)->setThemedColor(app_theme::textSecondary);
+#endif
+  error_ = label(downloadsContent_, "", 16);
   scroll_ = new ScrollView(); scroll_->setFlex(1)->setMinHeight(0)->setWidthPercent(100);
-  panel_->addView(scroll_);
+  downloadsContent_->addView(scroll_);
+  panel_->addView(downloadsContent_);
   auto *footer = new View(); footer->setFlexDirection(FlexDirection::Row)->setJustifyContent(YGJustifyFlexEnd);
-  action(footer, i18n::message("menu.tasks.close.label"), [this] { hide(); });
+  footer->setGap(12)->setHeight(48)->setFlexShrink(0);
+  refreshLibrary_ = action(footer, i18n::message("menu.refresh_list.label"), [this, refreshLibrary = std::move(refreshLibrary)] {
+    if (refreshLibrary) refreshLibrary();
+    hide();
+  });
+  auto *close = action(footer, i18n::message("menu.tasks.close.label"), [this] { hide(); });
+  for (auto *button : {refreshLibrary_, close}) button->setWidth(0)->setFlex(1)->setMinWidth(0);
   panel_->addView(footer); root_->addView(panel_); parent->addView(root_);
+  selectTab(Tab::Library);
   resize(rendering::window_width, rendering::window_height);
 }
-void DownloadsModal::show() { root_->setVisible(true); locateFailed_ = false; snapshot_.clear(); nextRefresh_ = 0; update(); }
-bool DownloadsModal::isVisible() const { return root_->getVisible(); }
-void DownloadsModal::hide() { root_->setVisible(false); }
-void DownloadsModal::resize(int width, int height) {
+void TasksModal::show(Tab tab) {
+  root_->setVisible(true); locateFailed_ = false; snapshot_.clear(); nextRefresh_ = 0;
+  selectTab(tab); update(); root_->applyYogaLayout();
+}
+void TasksModal::setLibraryCount(int count) {
+  if (libraryCount_ == count) return;
+  libraryCount_ = std::max(0, count); refreshBadges();
+}
+void TasksModal::refreshBadges() {
+  icon_button::setBadgeCount(libraryBadge_, libraryCount_);
+  icon_button::setBadgeCount(downloadsBadge_, downloadCount_);
+}
+void TasksModal::selectTab(Tab tab) {
+  if (!downloadsTab_) tab = Tab::Library;
+  selectedTab_ = tab;
+  const bool library = tab == Tab::Library;
+  libraryScroll_->setVisible(library); libraryScroll_->setDisplay(library ? YGDisplayFlex : YGDisplayNone);
+  downloadsContent_->setVisible(!library); downloadsContent_->setDisplay(library ? YGDisplayNone : YGDisplayFlex);
+  refreshLibrary_->setVisible(library); refreshLibrary_->setDisplay(library ? YGDisplayFlex : YGDisplayNone);
+  const auto style = [](Button *button, TextView *text, bool selected) {
+    if (!button) return;
+    button->setSelected(selected);
+    modal_view::styleThemedActionButton(button, text, true,
+        selected ? app_theme::infoAction : app_theme::control,
+        selected ? app_theme::infoActionHover : app_theme::controlHover,
+        selected ? app_theme::infoActionPressed : app_theme::controlPressed,
+        selected ? app_theme::accentBorder : app_theme::hairlineStrong);
+  };
+  style(libraryTab_, libraryTabText_, library);
+  style(downloadsTab_, downloadsTabText_, !library);
+  nextRefresh_ = 0;
+  update();
+  libraryScroll_->refreshContentLayout(); scroll_->refreshContentLayout();
+}
+bool TasksModal::isVisible() const { return root_->getVisible(); }
+void TasksModal::hide() { root_->setVisible(false); }
+void TasksModal::resize(int width, int height) {
+  const auto safe = rendering::uiSafeAreaInsets();
+  const std::array layout{width, height, safe.top, safe.right, safe.bottom, safe.left};
+  if (layout == lastLayout_) return;
+  lastLayout_ = layout;
   root_->setWidth(width)->setHeight(height);
-  panel_->setWidth(std::min(820, std::max(240, width - 32)))->setHeight(std::max(180, height - 48));
+  root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  panel_->setWidth(std::min(760, std::max(0, width - safe.left - safe.right - 32)))
+      ->setHeight(std::min(660, std::max(0, height - safe.top - safe.bottom - 48)));
+  libraryScroll_->refreshContentLayout();
   scroll_->refreshContentLayout();
 }
-bool DownloadsModal::handleEvents(SDL_Event &event) {
+bool TasksModal::handleEvents(SDL_Event &event) {
   if (!root_->getVisible()) return true;
-  if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) { hide(); return false; }
+  if (event.type == SDL_EVENT_KEY_DOWN && (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_AC_BACK)) { hide(); return false; }
   root_->handleEvents(event); return false;
 }
-void DownloadsModal::update() {
-  if (!root_->getVisible() || SDL_GetTicks() < nextRefresh_) return;
+void TasksModal::update() {
+  if (SDL_GetTicks() < nextRefresh_) return;
   nextRefresh_ = SDL_GetTicks() + 300;
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
   try {
     if (!owner_) owner_ = downloads::service();
+    const auto jobs = owner_->jobs();
+    downloadCount_ = static_cast<int>(std::count_if(jobs.begin(), jobs.end(), downloads::needsNotification));
+    refreshBadges();
+    if (!root_->getVisible() || selectedTab_ != Tab::Downloads) return;
     if (locateFailed_) error_->setLocalizedText(i18n::message("downloads.ui.locate_failed"));
     else error_->setText(owner_->error());
     refresh();
   } catch (...) { error_->setLocalizedText(i18n::message("downloads.ui.storage_error")); }
+#endif
 }
-void DownloadsModal::refresh() {
+void TasksModal::refresh() {
   auto jobs = owner_->jobs();
   std::reverse(jobs.begin(), jobs.end());
   std::ostringstream snapshot;

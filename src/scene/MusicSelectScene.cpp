@@ -554,8 +554,11 @@ void MusicSelectScene::init() {
         preloadedPreviewCache_ = std::move(previewCache);
         preloadedChart_ = std::move(chart);
       });
-#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  downloadsModal_ = std::make_unique<DownloadsModal>(modalLayer_,
+  tasksDialog_ = std::make_unique<TasksModal>(modalLayer_, [this] {
+        if (context.chartLibraryTasks && context.chartLibraryTasks->snapshot().activeCount > 0)
+          context.chartLibraryScanFlushRequested.fetch_add(1, std::memory_order_release);
+        reloadLibrary(); selectedBarMoved();
+      },
       [this](const std::filesystem::path &path) {
         if (!chartSession_ || !repositoryMetadata_ || !sceneActive_ || failed_ ||
             launching_ || context.storageMaintenanceActive) return false;
@@ -566,7 +569,8 @@ void MusicSelectScene::init() {
             long_note_mode::valueFromId(context.settings.selectedLnMode));
         return true;
       });
-#endif
+  tasksModal_ = tasksDialog_->root();
+  tasksModalText_ = tasksDialog_->libraryText();
   addView(modalLayer_);
   startInputListening();
 }
@@ -1452,7 +1456,7 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
   refreshToolbarAvailability();
-  if (downloadsModal_ && !downloadsModal_->handleEvents(event)) return {};
+  if (tasksDialog_ && !tasksDialog_->handleEvents(event)) return {};
   if (readmeModal_ && !readmeModal_->handleEvents(event)) return {};
   if (selectorInputBlocked()) resetLogicalInput();
   if (rankingsModal_ && rankingsModal_->isOpen()) {
@@ -2984,7 +2988,7 @@ bool MusicSelectScene::selectorInputBlocked() const {
   return launching_ || (revealContextMenu_ && revealContextMenu_->isOpen()) ||
          (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
          (findBmsModal_ && findBmsModal_->isVisible()) ||
-         (downloadsModal_ && downloadsModal_->isVisible()) ||
+         (tasksDialog_ && tasksDialog_->isVisible()) ||
          (readmeModal_ && readmeModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
          (rankingsModal_ && rankingsModal_->isOpen()) ||
@@ -3403,13 +3407,7 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
-#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  if (downloadsModal_) {
-    if (downloads::takeDownloadsPresentation()) downloadsModal_->show();
-    downloadsModal_->resize(rendering::window_width, rendering::window_height);
-    downloadsModal_->update();
-  }
-#endif
+  refreshTaskNotifications();
   context.refreshAudioTimingProfile();
   if (!context.pendingKomboNotificationProfile.empty() &&
       toolbarControlAvailable(MusicSelectToolbarControl::Kombo)) {
@@ -3895,8 +3893,6 @@ void MusicSelectScene::ensureToolbarContextMenu() {
             } else if (actionId == "ir-uploads") {
               if (toolbarControlAvailable(Control::IrUploads)) openIrUploads();
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-            } else if (actionId == "downloads") {
-              if (downloadsModal_) downloadsModal_->show();
             } else if (actionId == "browse-bms") {
               downloads::Request defaults;
               defaults.libraryRoot = findBmsDownloadRoot(chartSession_ ? &*chartSession_ : nullptr);
@@ -3942,13 +3938,14 @@ void MusicSelectScene::openToolbarMenu(MusicSelectToolbarControl control) {
     actions = {
         {.id = "music-player", .label = i18n::message("menu.music_player.label"),
          .enabled = toolbarControlAvailable(Control::MusicPlayer)},
-        {.id = "tasks", .label = i18n::message("menu.tasks.label"),
+        {.id = "tasks", .label = tasksDialog_ && tasksDialog_->notificationCount() > 0
+             ? i18n::message("menu.tasks.count.label", {{"count", std::to_string(tasksDialog_->notificationCount())}})
+             : i18n::message("menu.tasks.label"),
          .enabled = toolbarControlAvailable(Control::Tasks)},
         {.id = "ir-uploads", .label = i18n::message("menu.ir_uploads.label"),
          .enabled = toolbarControlAvailable(Control::IrUploads)},
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
         {.id = "browse-bms", .label = i18n::message("downloads.ui.browse"), .enabled = !context.storageMaintenanceActive.load()},
-        {.id = "downloads", .label = i18n::message("downloads.ui.title"), .enabled = true},
 #endif
         {.id = "settings", .label = i18n::message("menu.settings.label"),
          .enabled = toolbarControlAvailable(Control::Settings)},
@@ -4255,7 +4252,7 @@ void MusicSelectScene::openDownload() {
             });
           }
         },
-        .downloadQueued = [](const std::string &id) {
+        .openDownloads = [](const std::string &id) {
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
           downloads::requestDownloadsPresentation(id);
 #endif
@@ -4266,6 +4263,18 @@ void MusicSelectScene::openDownload() {
   findBmsModal_->show(record, true);
   resetLogicalInput();
   refreshToolbarAvailability();
+}
+
+void MusicSelectScene::refreshTaskNotifications() {
+  if (tasksDialog_) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+    if (downloads::takeDownloadsPresentation()) showTasksModal(true);
+#endif
+    tasksDialog_->setLibraryCount(context.chartLibraryTasks ? context.chartLibraryTasks->snapshot().activeCount : 0);
+    tasksDialog_->resize(rendering::window_width, rendering::window_height);
+    tasksDialog_->update();
+    if (toolbar_) toolbar_->setTaskCount(tasksDialog_->notificationCount());
+  }
 }
 
 void MusicSelectScene::openTasks() {
@@ -4342,88 +4351,15 @@ std::string MusicSelectScene::tasksModalTextSnapshot() const {
   return text.str();
 }
 
-void MusicSelectScene::showTasksModal() {
-  if (modalLayer_ == nullptr) return;
-  if (tasksModal_ == nullptr) {
-    tasksModal_ = new BlockingOverlayView(
-        0, 0, rendering::window_width, rendering::window_height);
-    tasksModal_->setPositionType(YGPositionTypeAbsolute);
-    tasksModal_->setPosition(Edge::Left, 0);
-    tasksModal_->setPosition(Edge::Top, 0);
-    tasksModal_->setZIndex(1000);
-    tasksModal_->setVisible(false);
-    tasksModal_->setFlexDirection(FlexDirection::Column);
-    tasksModal_->setAlignItems(YGAlignCenter);
-    tasksModal_->setJustifyContent(YGJustifyCenter);
-    tasksModal_->setThemedBackgroundColor(app_theme::scrim);
-
-    auto *panel = new View();
-    panel->setWidth(760)
-        ->setHeight(460)
-        ->setFlexDirection(FlexDirection::Column)
-        ->setAlignItems(YGAlignStretch)
-        ->setGap(14)
-        ->setPadding(Edge::All, 22)
-        ->setThemedBackgroundColor(app_theme::panelStrong)
-        ->setCornerRadius(app_theme::panelRadius())
-        ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
-        ->setThemedBorderColor(app_theme::hairlineStrong)
-        ->setBorderWidth(1);
-    auto *title = makeText(i18n::message("music_select.tasks.label"), 30, app_theme::textPrimary);
-    title->setHeight(42);
-    panel->addView(title);
-
-    auto *scroll = new ScrollView(0, 0, 716, 400);
-    scroll->setWidth(716)
-        ->setFlex(1)
-        ->setThemedBackgroundColor(app_theme::insetSurface)
-        ->setCornerRadius(app_theme::controlRadius())
-        ->setThemedBorderColor(app_theme::hairline)
-        ->setBorderWidth(1);
-    scroll->setContentPadding(Edge::All, 12);
-    auto *content = new View();
-    content->setFlexDirection(FlexDirection::Column)
-        ->setAlignItems(YGAlignStretch);
-    tasksModalText_ = makeText({}, 18, app_theme::textSecondary);
-    tasksModalText_->setWrap(true);
-    tasksModalText_->setOverflow(TextView::TextOverflow::Visible);
-    content->addView(tasksModalText_);
-    scroll->setContentView(content);
-    panel->addView(scroll);
-
-    auto *footer = new View();
-    footer->setFlexDirection(FlexDirection::Row)
-        ->setJustifyContent(YGJustifyFlexEnd)
-        ->setGap(12)
-        ->setHeight(56);
-    auto *refresh = makeButton(i18n::message("music_select.refresh_list.label"));
-    refresh->setOnClickListener([this] {
-      if (context.chartLibraryTasks &&
-          context.chartLibraryTasks->snapshot().activeCount > 0) {
-        context.chartLibraryScanFlushRequested.fetch_add(1,
-                                                          std::memory_order_release);
-      }
-      reloadLibrary();
-      selectedBarMoved();
-      if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
-    });
-    auto *close = makeButton(i18n::message("music_select.close.label"));
-    close->setOnClickListener([this] {
-      if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
-    });
-    footer->addView(refresh);
-    footer->addView(close);
-    panel->addView(footer);
-    tasksModal_->addView(panel);
-    modalLayer_->addView(tasksModal_);
-  }
-  if (playOptionsModal_ != nullptr) playOptionsModal_->hide();
-  if (recordsModal_ != nullptr) recordsModal_->hide();
-  tasksModal_->setSize(rendering::window_width, rendering::window_height);
-  tasksModal_->setVisible(true);
+void MusicSelectScene::showTasksModal(bool downloads) {
+  if (!tasksDialog_) return;
+  if (playOptionsModal_) playOptionsModal_->hide();
+  if (recordsModal_) recordsModal_->hide();
+  tasksDialog_->resize(rendering::window_width, rendering::window_height);
+  tasksDialog_->show(downloads ? TasksModal::Tab::Downloads : TasksModal::Tab::Library);
   displayedTasksRevision_ = 0;
   displayedTaskProgressRevision_ = 0;
-  refreshTasksModal();
+  refreshTasksModal(true);
   tasksModal_->applyYogaLayout();
 }
 
@@ -4979,6 +4915,7 @@ void MusicSelectScene::cleanupScene() {
     recordsExportJob_.cancelAndWait();
   }
   recordsModal_.reset();
+  tasksDialog_.reset();
   tasksModal_ = nullptr;
   tasksModalText_ = nullptr;
   errorView_ = nullptr;

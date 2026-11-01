@@ -205,6 +205,10 @@ bool validRequest(const Request &r) {
   }
   return true;
 }
+bool needsNotification(const Job &job) {
+  return job.state != State::Cancelled &&
+      (job.state != State::Complete || !job.libraryAcknowledged);
+}
 bool terminal(State state) { return state == State::Complete || state == State::Cancelled || state == State::Failed; }
 const char *stateName(State state) {
   switch (state) {

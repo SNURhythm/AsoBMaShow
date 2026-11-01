@@ -10,7 +10,6 @@ target_sources(main PRIVATE
     CourseGameplaySessionBuilder.cpp
     DecideLoadingOverlay.cpp
     FindBmsDialogPolicy.cpp
-    DownloadsModal.cpp
     FindBmsModal.cpp
     FindBmsProgressPresentation.cpp
     FindBmsTask.cpp
@@ -59,6 +58,7 @@ target_sources(main PRIVATE
     SettingsScenePreview.cpp
     SettingsSceneProfiles.cpp
     SettingsSceneTables.cpp
+    TasksModal.cpp
 )
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
   target_sources(main PRIVATE

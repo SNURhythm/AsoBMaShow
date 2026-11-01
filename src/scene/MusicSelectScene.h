@@ -10,7 +10,7 @@
 #include "RecordFileActions.h"
 #include "ArchiveUnzipModal.h"
 #include "FindBmsModal.h"
-#include "DownloadsModal.h"
+#include "TasksModal.h"
 #include "ChartReadmeModal.h"
 #include "../ReplayVideoExportTypes.h"
 #include "../replay/ReplayExportJob.h"
@@ -180,6 +180,7 @@ private:
   void openSelectedReadme();
   [[nodiscard]] OverlayAnchor revealChartAnchor() const;
   void openMusicPlayer();
+  void refreshTaskNotifications();
   void openTasks();
   void openDownload();
   bool canDownloadSelectedChart() const;
@@ -222,7 +223,7 @@ private:
   void applyRecordsExportProgress();
   void updateReplayExportProgress() override { applyRecordsExportProgress(); }
   void applyRecordsExportResult();
-  void showTasksModal();
+  void showTasksModal(bool downloads = false);
   void refreshTasksModal(bool force = false);
   [[nodiscard]] std::string tasksModalTextSnapshot() const;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -370,7 +371,7 @@ private:
 
   std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
   std::unique_ptr<FindBmsModal> findBmsModal_;
-  std::unique_ptr<DownloadsModal> downloadsModal_;
+  std::unique_ptr<TasksModal> tasksDialog_;
   std::unique_ptr<ChartReadmeModal> readmeModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;

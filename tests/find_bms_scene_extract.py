@@ -19,6 +19,8 @@ def main():
         "std::string\nfindBmsProgressEventDisplayText(",
         "bool shouldReplaceFindBmsLogLine(",
         "double findBmsProgressFractionFor(",
+        "bool FindBmsModal::inProgress() const",
+        "bool FindBmsModal::updateQueuedDownload(",
         "void FindBmsModal::show(",
         "void FindBmsModal::startLookup()",
         "void FindBmsModal::cancelAndWait()",

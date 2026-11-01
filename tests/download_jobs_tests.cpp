@@ -38,6 +38,21 @@ int main() {
     assert(!makeBrowserRequest(defaults, "GET", "https://files.example/song.zip", "song.zip", "", "bad\r\nHeader: injection", ""));
   }
 
+  {
+    Job job;
+    for (const auto state : {State::Queued, State::Transferring, State::Downloaded,
+                            State::Importing, State::NeedsAttention, State::Failed}) {
+      job.state = state;
+      assert(needsNotification(job));
+    }
+    job.state = State::Complete;
+    assert(needsNotification(job)); // Library indexing is still pending.
+    job.libraryAcknowledged = true;
+    assert(!needsNotification(job));
+    job.state = State::Cancelled;
+    assert(!needsNotification(job));
+  }
+
   const auto root = std::filesystem::temp_directory_path() /
       ("asobms-download-jobs-" + std::to_string(std::random_device{}()));
   {

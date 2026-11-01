@@ -237,7 +237,7 @@ struct MainMenuScene : Scene {
   void requestLibraryReload(bool includeFolders);
   View root;
   TextInputBox search;
-  View *rootLayout=&root, *searchBox=&search, *revealContextMenu=nullptr, *readmeModal_=nullptr, *downloadsModal_=nullptr;
+  View *rootLayout=&root, *searchBox=&search, *revealContextMenu=nullptr, *addBmsContextMenu_=nullptr, *readmeModal_=nullptr, *tasksDialog_=nullptr;
   std::vector<View*> views;
   Preview *previewWorker_=nullptr;
   Recycler<ChartMetaRecord> songs;
@@ -864,10 +864,10 @@ constexpr int kRootPadding=8;
 struct MainMenuScene {
   View root, records, finder, archive, utility;
   View *rootLayout=&root, *recordsModal_=&records,
-       *findBmsModal_=&finder, *archiveUnzipModal_=&archive, *downloadsModal_=nullptr;
+       *findBmsModal_=&finder, *archiveUnzipModal_=&archive, *tasksDialog_=nullptr;
   View *tabLoadingOverlay_=nullptr, *playOptionsModal=nullptr,
        *overlayPortal=nullptr, *decideOverlay_=nullptr,
-       *revealContextMenu=nullptr, *parseLogModalRoot=nullptr,
+       *revealContextMenu=nullptr, *addBmsContextMenu_=nullptr, *parseLogModalRoot=nullptr,
        *musicModalRoot=nullptr, *tasksModalRoot=nullptr, *tutorial_=nullptr;
   int lastLayoutWidth=-1,lastLayoutHeight=-1,lastSafeTop=-1,lastSafeLeft=-1,
       lastSafeBottom=-1,lastSafeRight=-1;
