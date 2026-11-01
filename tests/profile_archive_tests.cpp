@@ -1381,6 +1381,44 @@ void testIrOperationalStateIsNotProfilePortable() {
       R"({"schemaVersion":1,"origins":[{"serverOrigin":"https://boku.tachi.ac","userID":42,"charts":[{"game":"bms-7k","sha256":"abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd","chartID":"sentinel-bokutachi-cache-chart"}]}]})");
   seedIrOperationalState(source.replaysDb, "archive source");
   seedImportedIrScore(source.scoresDb, "archive source");
+  constexpr std::string_view deletedReplayMarker = "deleted-private-IR-replay-marker";
+  constexpr std::string_view deletedScoreMarker = "deleted-private-IR-score-marker";
+  constexpr std::string_view liveReplayMarker = "live-private-IR-replay-marker";
+  constexpr std::string_view liveScoreMarker = "live-private-IR-score-marker";
+  {
+    Database database = openDatabase(source.replaysDb);
+    expect(execute(database.get(),
+        "PRAGMA secure_delete=OFF; UPDATE ir_outbox SET payload_json="
+        "'{\"private\":\"" + std::string(deletedReplayMarker) +
+        "' || hex(zeroblob(8192)) || '\"}'; DELETE FROM ir_outbox;"
+        "DELETE FROM ir_submission_receipts; DELETE FROM ir_remote_scores;"),
+        "historical account data leaves recoverable bytes in replay free pages");
+  }
+  {
+    Database database = openDatabase(source.scoresDb);
+    expect(execute(database.get(),
+        "PRAGMA secure_delete=OFF; UPDATE scores SET source_remote_score_id='" +
+        std::string(deletedScoreMarker) +
+        "' || hex(zeroblob(8192)) WHERE score_source=1;"
+        "DELETE FROM scores WHERE score_source=1;"),
+        "historical imported scores leave recoverable bytes in score free pages");
+  }
+  seedIrOperationalState(source.replaysDb, "archive source after deletion");
+  seedImportedIrScore(source.scoresDb, "archive source after deletion");
+  {
+    Database database = openDatabase(source.replaysDb);
+    expect(execute(database.get(), "UPDATE ir_outbox SET last_error_message='" +
+        std::string(liveReplayMarker) + "'"), "live replay marker seeds");
+  }
+  {
+    Database database = openDatabase(source.scoresDb);
+    expect(execute(database.get(), "UPDATE scores SET source_remote_score_id='" +
+        std::string(liveScoreMarker) + "' WHERE score_source=1"),
+        "live imported score marker seeds");
+  }
+  expect(readFile(source.replaysDb).find(deletedReplayMarker) != std::string::npos &&
+             readFile(source.scoresDb).find(deletedScoreMarker) != std::string::npos,
+         "fixture retains deleted account bytes before portable sanitization");
 
   const auto exported =
       exportFixture(fixture, "ir-operational-state.asobprofile");
@@ -1399,6 +1437,16 @@ void testIrOperationalStateIsNotProfilePortable() {
   std::string error;
   auto members = readArchive(exported, error);
   expect(error.empty(), "IR-safe export reads: " + error);
+  for (const auto marker : {deletedReplayMarker, deletedScoreMarker,
+                            liveReplayMarker, liveScoreMarker}) {
+    expect(std::ranges::none_of(members, [&](const ArchiveMember &member) {
+      return member.contents.find(marker) != std::string::npos;
+    }), "portable database bytes exclude current and historical account data: " +
+            std::string(marker));
+  }
+  expect(readFile(source.replaysDb).find(deletedReplayMarker) != std::string::npos &&
+             readFile(source.scoresDb).find(deletedScoreMarker) != std::string::npos,
+         "export sanitizes snapshots without compacting source databases");
   expect(std::ranges::none_of(members,
                               [](const ArchiveMember &member) {
                                 return member.name == "ir-credentials.json";

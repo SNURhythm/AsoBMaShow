@@ -1642,6 +1642,12 @@ bool ReplayRepository::ClearIrAccountDataSnapshot(
     return false;
   }
   verify.reset();
+  // DELETE leaves account data in free pages, including rows removed before
+  // this snapshot was made. Rebuild the portable copy before publishing bytes.
+  if (const auto error = executeSqlite(snapshot.impl_->sessionDatabase, "VACUUM")) {
+    errorMessage = "could not scrub deleted IR account snapshot data: " + *error;
+    return false;
+  }
   int walFrames = 0;
   int checkpointedFrames = 0;
   const int checkpointResult = sqlite3_wal_checkpoint_v2(
