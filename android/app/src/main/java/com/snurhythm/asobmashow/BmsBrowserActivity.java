@@ -115,6 +115,10 @@ public final class BmsBrowserActivity extends Activity {
     private WebView newPage() {
         WebView web = new WebView(this);
         WebSettings settings = web.getSettings();
+        // Keep the installed Chromium/device versions, without legacy WebView
+        // markers that make sites fall back to an older or embedded-client UI.
+        settings.setUserAgentString(settings.getUserAgentString()
+                .replace("; wv)", ")").replace(" Version/4.0 Chrome/", " Chrome/"));
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
