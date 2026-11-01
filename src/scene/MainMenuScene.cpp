@@ -708,6 +708,10 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
 }
 
 EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
+  if (downloads::browserHasInputFocus()) {
+    for (auto *view : views) view->cancelPointerInput();
+    return {};
+  }
   if (pendingTab_) return {};
   if (tutorial_ != nullptr && tutorial_->getVisible()) {
     (void)tutorial_->handleEvents(event);

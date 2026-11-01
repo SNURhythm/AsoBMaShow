@@ -16,6 +16,9 @@ The standard selector's **Add BMS** menu (plus icon) contains **Add Folder** and
 linking only in all-files builds. The skin selector exposes browsing in its More menu. **Import table** is enabled for the active page when it declares a
 `bmstable` header link or displays difficulty-table header JSON (`name`, `symbol`,
 and `data_url`). GingerRush table URLs also retain their direct recognition.
+While the native browser is in the foreground, both selectors block pointer,
+scrolling, keyboard, and controller input behind it. Input resumes after closing
+the browser; queued custom-skin actions are discarded while it owns focus.
 Navigation and popup changes clear the previous page's detection. Import uses the
 existing table importer and duplicate handling. Importing a table does not fetch
 its chart packages. Event tables may have an empty symbol.

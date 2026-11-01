@@ -42,6 +42,7 @@ class MainMenuTabsTests(unittest.TestCase):
         source = r'''
 #include <algorithm>
 namespace folder_goals { struct Source {}; }
+namespace downloads { bool browserFocused = false; bool browserHasInputFocus() { return browserFocused; } }
 #define TARGET_OS_ANDROID 0
 #include <array>
 #include <atomic>
@@ -100,7 +101,7 @@ namespace rendering { int window_width=1920; }
 struct Insets { int top=0; };
 Insets getSafeAreaInsetsUi() { return {}; }
 using EventHandleResult = int;
-constexpr int SDL_EVENT_KEY_DOWN=1, SDL_EVENT_KEY_UP=2;
+constexpr int SDL_EVENT_KEY_DOWN=1, SDL_EVENT_KEY_UP=2, SDL_EVENT_MOUSE_WHEEL=3;
 constexpr int SDL_KMOD_CTRL=1, SDL_KMOD_GUI=2, SDLK_1=49, SDLK_5=53;
 struct SDL_Event { int type=0; struct { int mod=0,key=0,repeat=0; } key; };
 struct View {
@@ -125,8 +126,8 @@ struct TextInputBox: View {
   void endEditing() { editingActive=false; }
 };
 struct Scene {
-  int initializations=0, resumes=0, digitEvents=0;
-  EventHandleResult handleEvents(SDL_Event &event) { if(event.type==SDL_EVENT_KEY_DOWN) ++digitEvents; return {}; }
+  int initializations=0, resumes=0, digitEvents=0, inputEvents=0;
+  EventHandleResult handleEvents(SDL_Event &event) { ++inputEvents; if(event.type==SDL_EVENT_KEY_DOWN) ++digitEvents; return {}; }
   bool coversTabHeader() const { return false; }
   void onPause() {} void onResume() { ++resumes; } void refreshLanguageIfNeeded() {}
   void prepareForUse() {} void init() { ++initializations; }
@@ -529,6 +530,16 @@ int main(int argc,char **argv) {
       assert(scene.previewRequests==requests+1 && "restored selection must restart its preview exactly once");
       assert(!scene.musicPlaying);
     }
+  } else if(scenario=="browser-input") {
+    SDL_Event wheel{.type=SDL_EVENT_MOUSE_WHEEL};
+    downloads::browserFocused=true;
+    scene.handleEvents(wheel);
+    SDL_Event shortcut{.type=SDL_EVENT_KEY_DOWN,.key={.mod=SDL_KMOD_GUI,.key=SDLK_5}};
+    scene.handleEvents(shortcut);
+    assert(scene.inputEvents==0 && scene.activeTab_==Tab::Play && !scene.pendingTab_);
+    downloads::browserFocused=false;
+    scene.handleEvents(wheel);
+    assert(scene.inputEvents==1);
   } else if(scenario=="shell-shortcuts") {
     for (int key=SDLK_1;key<=SDLK_5;++key) {
       scene.switchTabAndWait(Tab::Music);
@@ -736,6 +747,9 @@ int main(int argc,char **argv) {
         cls.binary = Path(cls.temp.name) / "test"
         path.write_text(source)
         FixtureCompiler.from_environment(shared_headers=True).build([path], cls.binary, path.parent)
+
+    def test_browser_blocks_wheel_and_shortcuts_until_closed(self):
+        subprocess.run([str(self.binary), "browser-input"], check=True, timeout=5)
 
     def test_score_reorder_preserves_chart_after_page_release(self):
         root = Path(__file__).resolve().parents[1]

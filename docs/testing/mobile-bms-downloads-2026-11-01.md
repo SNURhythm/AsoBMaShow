@@ -149,3 +149,17 @@ navigation or duplicate indexing. Selector lifecycle, main-menu tab, localizatio
 and archive-flow contract checks also pass. The changed native sources pass Android
 compile checks; TasksModal and FindBmsModal pass iOS compile checks. These latest
 UI changes have not been installed or tested interactively on a physical device.
+
+## Browser input isolation
+
+Both selectors now honor native browser focus independently of SDL app/window
+focus. Regressions reproduced the built-in selector forwarding browser events
+and tab shortcuts, and the custom selector accepting input and queued skin
+actions. They now verify blocking during browsing and fresh input after closing.
+The custom-selector tests run with Lua skins enabled and disabled. Queued skin
+actions are discarded rather than applied or replayed later.
+
+The selector error/lifecycle, export/action, and built-in tab suites pass, as does
+the desktop application build. iOS compile checks cover the browser lifecycle,
+shared focus state, and both selectors. Android compile checks cover the shared
+focus state and both selectors. Physical-device input retesting remains pending.

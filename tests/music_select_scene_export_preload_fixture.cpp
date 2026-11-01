@@ -1,3 +1,7 @@
+namespace downloads {
+inline bool browserFocused = false;
+inline bool browserHasInputFocus() { return browserFocused; }
+}
 #include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
 #include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
 #include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"

@@ -236,11 +236,15 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_healthy_settings_still_retains_selector(self):
         self.run_error_recovery_fixture("testHealthySettingsRetainsSelector")
 
+    def test_native_browser_blocks_selector_input_until_closed(self):
+        self.run_error_recovery_fixture("testBrowserInputIsolation")
+
     def run_error_recovery_fixture(self, test_name):
         source = read_music_select_scene()
         events = function_body(source, "EventHandleResult MusicSelectScene::handleEvents(")
         prefix = events[1:events.index("if (selectorInputBlocked())")]
         signatures = [
+            "bool MusicSelectScene::selectorInputBlocked() const",
             "void MusicSelectScene::enterError(std::vector<skin::SkinDiagnostic> diagnostics)",
             "void MusicSelectScene::openSettings()",
         ]

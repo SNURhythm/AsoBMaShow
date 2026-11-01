@@ -3,6 +3,7 @@
 #include "DownloadImport.h"
 #include "../bms_search/GoogleDriveDriver.h"
 #include <exception>
+#include <atomic>
 
 namespace downloads {
 std::shared_ptr<DownloadCoordinator> service() {
@@ -40,7 +41,8 @@ std::shared_ptr<DownloadCoordinator> service() {
 }
 namespace {
 std::mutex foregroundMutex;
-bool gameForeground = false, browserForeground = false;
+bool gameForeground = false;
+std::atomic_bool browserForeground{false};
 std::mutex presentationMutex;
 std::optional<std::string> requestedPresentation;
 }
@@ -51,8 +53,11 @@ void setGameForeground(bool foreground) {
 }
 void setBrowserForeground(bool foreground) {
   std::lock_guard lock(foregroundMutex);
-  browserForeground = foreground;
+  browserForeground.store(foreground, std::memory_order_release);
   service()->setForeground(gameForeground || browserForeground);
+}
+bool browserHasInputFocus() {
+  return browserForeground.load(std::memory_order_acquire);
 }
 void requestDownloadsPresentation(const std::string &id) {
   std::lock_guard lock(presentationMutex);

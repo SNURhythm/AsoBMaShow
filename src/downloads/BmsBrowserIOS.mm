@@ -92,6 +92,11 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   [self load:url];
 }
 - (void)dealloc { [self.web removeObserver:self forKeyPath:@"URL"]; [NSNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)viewWillAppear:(BOOL)animated {
+  [super viewWillAppear:animated];
+  // Block SDL input throughout presentation, before the browser is interactive.
+  try { downloads::setBrowserForeground(true); } catch (...) {}
+}
 - (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [self foreground]; }
 - (void)viewDidDisappear:(BOOL)animated { [super viewDidDisappear:animated]; [self background]; }
 - (void)foreground { if (self.view.window) { try { downloads::setBrowserForeground(true); } catch (...) {} } }

@@ -1400,6 +1400,14 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
 #endif
 
 EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
+  if (downloads::browserHasInputFocus()) {
+    resetLogicalInput();
+    for (auto *view : views) view->cancelPointerInput();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    skinTouchGesture_.cancel();
+#endif
+    return {};
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::optional<UiLogicalPoint> observedPointer;
   UiLogicalPoint point;
@@ -2929,6 +2937,7 @@ void MusicSelectScene::consumeActions() {
   for (const auto &action : skinSession_->takePublishedActions()) {
     if (!sceneActive_ || failed_ ||
         context.appInBackground.load(std::memory_order_acquire)) return;
+    if (downloads::browserHasInputFocus()) break;
     if (readmeModal_ && readmeModal_->isVisible()) break;
     if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) break;
     if (recordsExportJob_.inProgress() || recordsTask_.active() ||
@@ -2985,7 +2994,7 @@ void MusicSelectScene::consumeActions() {
 }
 
 bool MusicSelectScene::selectorInputBlocked() const {
-  return launching_ || (revealContextMenu_ && revealContextMenu_->isOpen()) ||
+  return downloads::browserHasInputFocus() || launching_ || (revealContextMenu_ && revealContextMenu_->isOpen()) ||
          (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
          (findBmsModal_ && findBmsModal_->isVisible()) ||
          (tasksDialog_ && tasksDialog_->isVisible()) ||
