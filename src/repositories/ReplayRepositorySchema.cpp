@@ -1968,6 +1968,27 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (*version > kReplayDatabaseSchemaVersion) {
     return false;
   }
+  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
+  const char *beginQuery = callerOwnsTransaction
+                               ? "SAVEPOINT asobmashow_replay_migration"
+                               : "BEGIN IMMEDIATE TRANSACTION";
+  const char *commitQuery =
+      callerOwnsTransaction ? "RELEASE asobmashow_replay_migration" : "COMMIT";
+  const char *rollbackQuery =
+      callerOwnsTransaction
+          ? "ROLLBACK TO asobmashow_replay_migration; RELEASE "
+            "asobmashow_replay_migration"
+          : "ROLLBACK";
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
+                                      commitQuery, rollbackQuery);
+  if (!transaction.active()) {
+    logSqlErrorText("starting replay database migration", transactionError);
+    return false;
+  }
+
+  if (!migrateIrRemoteLampRanks(db)) return false;
+
   if (*version >= kReplayDatabaseSchemaVersion) {
     ReplayResultOutboxSchemaState resultOutboxState{};
     IrOutboxSchemaState irOutboxState{};
@@ -1990,30 +2011,14 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
               "outbox, receipt, or remote score schema");
       return false;
     }
-    return execSql(db, kModernChartScoreMetricsTableSql,
-                   "creating modern chart score metrics");
+    if (!execSql(db, kModernChartScoreMetricsTableSql,
+                 "creating modern chart score metrics")) return false;
+    if (!transaction.commit(transactionError)) {
+      logSqlErrorText("committing current replay schema preparation", transactionError);
+      return false;
+    }
+    return true;
   }
-
-  const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
-  const char *beginQuery = callerOwnsTransaction
-                               ? "SAVEPOINT asobmashow_replay_migration"
-                               : "BEGIN IMMEDIATE TRANSACTION";
-  const char *commitQuery =
-      callerOwnsTransaction ? "RELEASE asobmashow_replay_migration" : "COMMIT";
-  const char *rollbackQuery =
-      callerOwnsTransaction
-          ? "ROLLBACK TO asobmashow_replay_migration; RELEASE "
-            "asobmashow_replay_migration"
-          : "ROLLBACK";
-  std::string transactionError;
-  SqliteTransactionHandle transaction(db, beginQuery, transactionError,
-                                      commitQuery, rollbackQuery);
-  if (!transaction.active()) {
-    logSqlErrorText("starting replay database migration", transactionError);
-    return false;
-  }
-
-  if (!migrateIrRemoteLampRanks(db)) return false;
 
   if (*version == 20 || *version == 19 || *version == 18 || *version == 17 || *version == 16) {
     ReplayResultOutboxSchemaState resultOutboxState{};

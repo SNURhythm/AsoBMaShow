@@ -242,6 +242,59 @@ void testLegacyLightAssistMigrationPreservesAuthenticatedResults() {
   assert(testflight166::snapshot(db.get())==rows);
 }
 
+void testCurrentVersionRemoteLampUpgrade() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    assert(repository.StageModernChartResult(result(93), {}, {}).status ==
+           ModernChartStageStatus::Staged);
+  }
+  testflight166::Rows rows;
+  {
+    auto db = openDatabase(path);
+    SqliteStatementHandle objects;
+    assert(prepareSqliteStatement(db.get(),
+        "SELECT sql FROM sqlite_master WHERE tbl_name='ir_remote_scores' "
+        "AND sql IS NOT NULL ORDER BY type DESC", objects) == SQLITE_OK);
+    std::vector<std::string> statements;
+    while (sqlite3_step(objects.get()) == SQLITE_ROW) {
+      auto sql = sqliteColumnString(objects.get(), 0);
+      const std::string ranks = "(0,50,100,200,300,400,500,600,700,800)";
+      if (const auto pos = sql.find(ranks); pos != std::string::npos) {
+        sql.replace(pos, ranks.size(), "(0,50,100,200,300,400,500,600)");
+      }
+      statements.push_back(std::move(sql));
+    }
+    objects.reset();
+    exec(db.get(), "DROP TABLE ir_remote_scores");
+    for (const auto &sql : statements) exec(db.get(), sql);
+    exec(db.get(), "INSERT INTO ir_remote_scores(provider_id,server_origin,remote_score_id,"
+        "remote_user_id,game,remote_chart_id,chart_md5,chart_sha256,title,artist,note_count,"
+        "score,lamp_rank,service,time_added_ms,sync_generation) VALUES("
+        "'tachi','https://boku.tachi.ac','current-lamp',42,'bms-7k','chart','" +
+        repeated('b', 32) + "','" + repeated('a', 64) +
+        "','Title','Artist',5,7,600,'Bokutachi',1700000000000,1)");
+    assert(queryInt(db.get(), "PRAGMA user_version") == 21);
+    rows = testflight166::snapshot(db.get());
+    const auto schema = testflight166::schemaSnapshot(db.get());
+    const auto deny = [](void *, int action, const char *name, const char *, const char *, const char *) {
+      return action == SQLITE_CREATE_TABLE && name && std::string_view(name) == "ir_remote_scores"
+          ? SQLITE_DENY : SQLITE_OK;
+    };
+    assert(sqlite3_set_authorizer(db.get(), deny, nullptr) == SQLITE_OK);
+    assert(!replay_repository_detail::MigrateSchema(db.get()));
+    assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+    assert(testflight166::schemaSnapshot(db.get()) == schema);
+  }
+  ReplayRepository upgraded(path);
+  assert(upgraded.EnsureSchema());
+  assert(upgraded.EnsureSchema());
+  auto db = openDatabase(path);
+  assert(testflight166::snapshot(db.get()) == rows);
+}
+
 void testPendingGaugeEvidenceRecoveryAndCleanup() {
   TemporaryDirectory temporary;
   const auto path = temporary.path / "replay.db";
@@ -1029,6 +1082,7 @@ void testExactRetryAttachesOnlyMissingReplayAtomically() {
 } // namespace
 
 int main() {
+  testCurrentVersionRemoteLampUpgrade();
   testLegacyLightAssistMigrationPreservesAuthenticatedResults();
   testPendingGaugeEvidenceRecoveryAndCleanup();
   testCurrentSchemaAddsSelectorMetricsTable();
