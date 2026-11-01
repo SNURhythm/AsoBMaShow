@@ -40,19 +40,33 @@ class LaneCoverSceneInputTests(unittest.TestCase):
         methods = "\n".join(extract(source, signature) for signature in (
             "lane_cover::State GamePlayScene::laneCoverState() const noexcept",
             "void GamePlayScene::adjustLaneCoverFromInput(float deltaPercent)",
+            "void GamePlayScene::applyStartSelectControlActions(",
+            "void GamePlayScene::persistFloatingLaneCoverSettings()",
         ))
         fixture = r'''
 #include "AppSettings.h"
+#include "scene/play/StartSelectControl.h"
+#define SDL_Log(...) ((void)0)
 #include "replay/ReplayLaneCoverChange.h"
 #include <cassert>
 #include <memory>
 struct HiSpeed {
   void setLaneCover(float, double, bool) {}
   void resetHispeed(double) {}
+  void changeHispeed(bool) {}
+  float hispeed() const { return 2.0F; }
+  void setDurationMilliseconds(int) {}
+  void setLaneCoverEnabled(bool) {}
 };
+struct TestSettings : AppSettings { void sanitize() {} };
 struct GamePlayScene {
   struct Jukebox { long long getTimeMicros() const { return 1000; } };
-  struct { AppSettings settings; Jukebox jukebox; } context;
+  struct {
+    TestSettings settings; Jukebox jukebox;
+    int saves = 0;
+    bool saveSucceeds = true;
+    bool saveSettings() { ++saves; return saveSucceeds; }
+  } context;
   bool replay = false;
   float playfieldLaneCoverPercent = 50;
   bool playfieldLaneCoverEnabled = true;
@@ -64,7 +78,7 @@ struct GamePlayScene {
   bool playfieldLaneCoverResetPending = false;
   bool floatingLaneCoverSettingsDirty = false;
   std::unique_ptr<HiSpeed> playfieldHispeedState = std::make_unique<HiSpeed>();
-  int saves = 0, configurations = 0, recordings = 0;
+  int configurations = 0, recordings = 0;
   ReplayLaneCoverChangeKind recordedKind = ReplayLaneCoverChangeKind::Value;
   bool isReplayPlayback() const { return replay; }
   bool courseNoSpeed() const { return false; }
@@ -72,7 +86,9 @@ struct GamePlayScene {
   long long getGameplayTimeMicros(long long value) const { return value; }
   double noteDisplayBpmAtGameplayTime(long long) const { return 120; }
   void refreshRuntimePresentationConfiguration() { ++configurations; }
-  void persistFloatingLaneCoverSettings() { ++saves; }
+  void persistFloatingLaneCoverSettings();
+  void abortPlayFromStartSelectControl() {}
+  void applyStartSelectControlActions(const std::vector<gameplay::StartSelectControlAction> &actions);
   void appendReplayLaneCoverEvent(float, long long, bool, ReplayLaneCoverChangeKind kind) {
     ++recordings;
     recordedKind = kind;
@@ -96,7 +112,7 @@ int main() {
     scene.adjustLaneCoverFromInput(0.5F);
     assert(scene.context.settings.presentation() == personal);
     assert(scene.laneCoverState() == recorded);
-    assert(scene.saves == 0 && scene.configurations == 0 && scene.recordings == 0);
+    assert(scene.context.saves == 0 && scene.configurations == 0 && scene.recordings == 0);
     assert(!scene.floatingLaneCoverSettingsDirty);
 
     // The same entry point still adjusts and records every mode in live play.
@@ -105,11 +121,27 @@ int main() {
     scene.adjustLaneCoverFromInput(0.5F);
     assert(scene.laneCoverState() != recorded);
     assert(scene.context.settings.presentation().laneCoverState() == scene.laneCoverState());
-    assert(scene.saves == 1 && scene.configurations == 1 && scene.recordings == 1);
+    assert(scene.context.saves == 0 && scene.floatingLaneCoverSettingsDirty && scene.configurations == 1 && scene.recordings == 1);
     const auto expected = target == 0 ? ReplayLaneCoverChangeKind::Value
                         : target == 1 ? ReplayLaneCoverChangeKind::Lift
                                       : ReplayLaneCoverChangeKind::Hidden;
     assert(scene.recordedKind == expected);
+    for (int i = 0; i < 100; ++i) {
+      scene.applyStartSelectControlActions({
+          {.kind = gameplay::StartSelectControlActionKind::AdjustDuration, .delta = 1},
+          {.kind = gameplay::StartSelectControlActionKind::AdjustHispeed, .delta = 1}});
+    }
+    scene.applyStartSelectControlActions({
+        {.kind = gameplay::StartSelectControlActionKind::ToggleLaneCover}});
+    assert(scene.context.saves == 0 && scene.floatingLaneCoverSettingsDirty);
+    scene.context.saveSucceeds = false;
+    scene.persistFloatingLaneCoverSettings();
+    assert(scene.context.saves == 1 && scene.floatingLaneCoverSettingsDirty);
+    scene.context.saveSucceeds = true;
+    scene.persistFloatingLaneCoverSettings();
+    assert(scene.context.saves == 2 && !scene.floatingLaneCoverSettingsDirty);
+    scene.persistFloatingLaneCoverSettings();
+    assert(scene.context.saves == 2);
   }
 }
 '''.replace("PRODUCTION_METHODS", methods)

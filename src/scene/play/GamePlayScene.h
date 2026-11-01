@@ -432,6 +432,8 @@ private:
   bool playfieldChangeLiftTarget = true;
   bool floatingLaneCoverDragActive = false;
   bool floatingLaneCoverDragChanged = false;
+  // Cover and speed controls update memory immediately; persist at lifecycle
+  // boundaries so continuous scratch input never waits for profile disk I/O.
   bool floatingLaneCoverSettingsDirty = false;
   bool notesDisplayTimingSettingsDirty = false;
   bool skinAudioSettingsDirty = false;
