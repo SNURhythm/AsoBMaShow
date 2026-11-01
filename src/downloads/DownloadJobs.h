@@ -42,6 +42,7 @@ struct Job {
 };
 
 Request transferRequest(const Job &job);
+std::optional<std::filesystem::path> importedLibraryPath(const Job &job);
 bool validRequest(const Request &request);
 bool terminal(State state);
 const char *stateName(State state);

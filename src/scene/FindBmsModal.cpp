@@ -251,7 +251,7 @@ FindBmsModal::FindBmsModal(FindBmsModalCallbacks callbacks)
 
 FindBmsModal::~FindBmsModal() {
   cancelAndWait();
-  for (auto *button : {findBmsCloseButton, findBmsConfirmButton, findBmsRetryButton,
+  for (auto *button : {findBmsCloseButton, findBmsBackgroundButton, findBmsConfirmButton, findBmsRetryButton,
                        findBmsKeepFilesButton,
                        findBmsDeleteFilesButton, findBmsOpenButton,
                        findBmsGoogleButton, findBmsRefreshButton}) {
@@ -287,9 +287,9 @@ void FindBmsModal::resize(int width, int height) {
   auto *footer = findBmsModalRoot->findViewByName("findBmsFooter");
   footer->setFlexWrap(YGWrapWrap)->setHeight(YGUndefined)->setFlexShrink(0);
   const float actionHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 58;
-  const std::array<float, 8> widths{130, 240, 150, 150, 150, 180, 150, 150};
+  const std::array<float, 9> widths{130, 240, 240, 150, 150, 150, 180, 150, 150};
   size_t index = 0;
-  for (auto *button : {findBmsCloseButton, findBmsConfirmButton, findBmsRetryButton,
+  for (auto *button : {findBmsCloseButton, findBmsBackgroundButton, findBmsConfirmButton, findBmsRetryButton,
                        findBmsKeepFilesButton, findBmsDeleteFilesButton,
                        findBmsOpenButton, findBmsGoogleButton, findBmsRefreshButton}) {
     button->setWidth(std::min(widths[index++], contentWidth));
@@ -440,6 +440,8 @@ void FindBmsModal::build(View *parent) {
   footer->setHeight(58);
 
   findBmsCloseButton = makeModalButton(i18n::message("library.find_bms.cancel.label"), 20, &findBmsCloseButtonText);
+  findBmsBackgroundButton = makeModalButton(
+      i18n::message("library.find_bms.background.label"), 18, &findBmsBackgroundButtonText);
   findBmsConfirmButton = makeModalButton(
       i18n::message("library.find_bms.search_and_download.label"), 20,
       &findBmsConfirmButtonText);
@@ -454,6 +456,7 @@ void FindBmsModal::build(View *parent) {
       makeModalButton(i18n::message("library.find_bms.refresh.label"), 18, &findBmsRefreshButtonText);
 
   findBmsCloseButton->setWidth(130);
+  findBmsBackgroundButton->setWidth(240);
   findBmsConfirmButton->setWidth(240);
   findBmsRetryButton->setWidth(150);
   findBmsKeepFilesButton->setWidth(150);
@@ -462,6 +465,7 @@ void FindBmsModal::build(View *parent) {
   findBmsGoogleButton->setWidth(150);
   findBmsRefreshButton->setWidth(150);
   findBmsCloseButton->setOnClickListener([this]() { cancelOrClose(); });
+  findBmsBackgroundButton->setOnClickListener([this]() { hide(); });
   findBmsConfirmButton->setOnClickListener([this]() { startLookup(); });
   findBmsRetryButton->setOnClickListener([this]() {
     findBmsTask.retryDownload();
@@ -489,6 +493,7 @@ void FindBmsModal::build(View *parent) {
   });
 
   footer->addView(findBmsCloseButton);
+  footer->addView(findBmsBackgroundButton);
   footer->addView(findBmsConfirmButton);
   footer->addView(findBmsRetryButton);
   footer->addView(findBmsKeepFilesButton);
@@ -639,11 +644,16 @@ void FindBmsModal::startPendingArtifactResolution(
 }
 
 void FindBmsModal::hide() {
+  if (findBmsModalRoot == nullptr) return;
+  const bool wasVisible = findBmsModalRoot->getVisible();
+  // Mark the explicit dismissal before consuming a queued-download handoff,
+  // so completion cannot immediately reopen Downloads over the user's work.
+  findBmsModalRoot->setVisible(false);
   const bool wasRunning = findBmsTask.running();
   update();
   const bool running = wasRunning || findBmsTask.running();
-  if (findBmsModalRoot == nullptr ||
-      !findBmsDialogPolicy(running, findBmsResult).canDismiss) {
+  if (!findBmsDialogPolicy(running, findBmsResult).canDismiss) {
+    findBmsModalRoot->setVisible(wasVisible);
     return;
   }
   findBmsAwaitingConfirmation = false;
@@ -784,6 +794,9 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     detail = i18n::message("library.find_bms.storage.detail", {{"detail", detail},
         {"storage", i18n::message("downloads.ui.ios_notice")}});
 #endif
+  if (policy.showBackgroundClose)
+    detail = i18n::message("library.find_bms.storage.detail", {{"detail", detail},
+        {"storage", i18n::message("library.find_bms.background.message")}});
   if (findBmsDetailText != nullptr) {
     findBmsDetailText->setLocalizedText(detail);
   }
@@ -844,6 +857,10 @@ void FindBmsModal::refresh(bool refreshCandidates) {
     findBmsCloseButton->setVisible(policy.showCloseOrCancel);
     findBmsCloseButton->setWidth(policy.showCloseOrCancel ? 130.0f : 0.0f);
   }
+  if (findBmsBackgroundButton != nullptr) {
+    findBmsBackgroundButton->setVisible(policy.showBackgroundClose);
+    findBmsBackgroundButton->setWidth(policy.showBackgroundClose ? 240.0f : 0.0f);
+  }
   if (findBmsConfirmButton != nullptr) {
     findBmsConfirmButton->setVisible(findBmsAwaitingConfirmation);
     findBmsConfirmButton->setWidth(findBmsAwaitingConfirmation ? 240.0f : 0.0f);
@@ -893,7 +910,7 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   }
   // Visibility alone only suppresses drawing; hidden children still add gaps
   // to the footer's flex layout, even when their width is zero.
-  for (auto *button : {findBmsCloseButton, findBmsConfirmButton, findBmsRetryButton,
+  for (auto *button : {findBmsCloseButton, findBmsBackgroundButton, findBmsConfirmButton, findBmsRetryButton,
                        findBmsKeepFilesButton, findBmsDeleteFilesButton,
                        findBmsOpenButton, findBmsGoogleButton, findBmsRefreshButton}) {
     if (button != nullptr) {
@@ -902,6 +919,9 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   }
 
   styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
+                          app_theme::control, app_theme::controlHover,
+                          app_theme::controlPressed, app_theme::hairlineStrong);
+  styleThemedActionButton(findBmsBackgroundButton, findBmsBackgroundButtonText, true,
                           app_theme::control, app_theme::controlHover,
                           app_theme::controlPressed, app_theme::hairlineStrong);
   styleThemedActionButton(findBmsConfirmButton, findBmsConfirmButtonText,
@@ -975,8 +995,9 @@ void FindBmsModal::update() {
     findBmsResult = std::move(*result);
     findBmsPendingDecision.reset();
     if (!findBmsResult.queuedDownloadId.empty()) {
+      const bool showDownloads = findBmsModalRoot != nullptr && findBmsModalRoot->getVisible();
       if (findBmsModalRoot != nullptr) findBmsModalRoot->setVisible(false);
-      if (callbacks_.downloadQueued) callbacks_.downloadQueued(findBmsResult.queuedDownloadId);
+      if (showDownloads && callbacks_.downloadQueued) callbacks_.downloadQueued(findBmsResult.queuedDownloadId);
       return;
     }
     const bool keptMismatchedFiles =

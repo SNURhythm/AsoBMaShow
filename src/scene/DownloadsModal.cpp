@@ -41,7 +41,9 @@ i18n::Text stateLabel(downloads::State state) {
   return {};
 }
 }
-DownloadsModal::DownloadsModal(View *parent) {
+DownloadsModal::DownloadsModal(View *parent,
+    std::function<bool(const std::filesystem::path &)> locate)
+    : locate_(std::move(locate)) {
   root_ = new BlockingOverlayView(0, 0, rendering::window_width, rendering::window_height);
   root_->setName("downloadsModal"); root_->setPositionType(YGPositionTypeAbsolute);
   root_->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)->setZIndex(1200);
@@ -64,7 +66,7 @@ DownloadsModal::DownloadsModal(View *parent) {
   panel_->addView(footer); root_->addView(panel_); parent->addView(root_);
   resize(rendering::window_width, rendering::window_height);
 }
-void DownloadsModal::show() { root_->setVisible(true); snapshot_.clear(); nextRefresh_ = 0; update(); }
+void DownloadsModal::show() { root_->setVisible(true); locateFailed_ = false; snapshot_.clear(); nextRefresh_ = 0; update(); }
 bool DownloadsModal::isVisible() const { return root_->getVisible(); }
 void DownloadsModal::hide() { root_->setVisible(false); }
 void DownloadsModal::resize(int width, int height) {
@@ -82,7 +84,8 @@ void DownloadsModal::update() {
   nextRefresh_ = SDL_GetTicks() + 300;
   try {
     if (!owner_) owner_ = downloads::service();
-    error_->setText(owner_->error());
+    if (locateFailed_) error_->setLocalizedText(i18n::message("downloads.ui.locate_failed"));
+    else error_->setText(owner_->error());
     refresh();
   } catch (...) { error_->setLocalizedText(i18n::message("downloads.ui.storage_error")); }
 }
@@ -126,6 +129,20 @@ void DownloadsModal::refresh() {
     }
     if (!downloads::terminal(job.state) && !job.publicationPrepared) {
       action(buttons, i18n::message("library.find_bms.cancel.label"), [this, id, invoke] { invoke([&] { owner_->cancel(id); }); });
+    }
+    if (const auto path = downloads::importedLibraryPath(job); path && locate_) {
+      action(buttons, i18n::message("downloads.ui.locate"), [this, path = *path] {
+        std::error_code error;
+        try {
+          if (std::filesystem::exists(path, error)) {
+            hide();
+            if (locate_(path)) return;
+          }
+        } catch (const std::exception &) {}
+        root_->setVisible(true);
+        locateFailed_ = true;
+        error_->setLocalizedText(i18n::message("downloads.ui.locate_failed"));
+      });
     }
     const std::string source = job.request.displayUrl.empty() ? job.request.url : job.request.displayUrl;
     action(buttons, i18n::message("library.find_bms.source.label"), [source] { std::string error; (void)platform_open::openExternalUrl(source, error); });

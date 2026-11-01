@@ -19,9 +19,17 @@ its chart packages. Event tables may have an empty symbol.
 Accepted browser archives and Find BMS selections enter the same **Downloads**
 queue. Closing a dialog, closing the browser, or changing scenes leaves accepted
 work running. Downloads shows transfer/import/indexing phases, explicit Cancel
-and Retry, and keep/delete decisions for unmatched content. Remove discards the
+and Retry, and keep/delete decisions for unmatched content. Once library indexing
+finishes, **Locate** closes Downloads and opens the imported folder or packed
+archive in the current selector, clearing filters that could hide its charts.
+Missing files leave Downloads open with a refresh-library message. Remove discards the
 job's private retained files and history after completion; it does not remove an
 installed chart from the library.
+
+While Find BMS is working, **Hide (keep running)** dismisses its dialog without
+cancelling the task. **Cancel** stops it. Hidden lookup completion does not reopen
+Downloads automatically. On desktop, the task continues in its owning selector;
+on mobile, accepted downloads belong to the durable queue described above.
 
 Android uses user-initiated transfer jobs on Android 14+ and a separate data-sync
 foreground service on older releases. Transfers can continue while backgrounded

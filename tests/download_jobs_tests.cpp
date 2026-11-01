@@ -89,9 +89,22 @@ int main() {
     const auto saved = *recovered.get(second.id);
     assert(saved.state == State::Complete);
     assert(saved.result->outputPath == "/tmp/bms-library/BMSSEARCH/song");
+    assert(!importedLibraryPath(saved)); // Locate waits for library indexing.
     auto acknowledged = saved;
     acknowledged.libraryAcknowledged = true;
     assert(recovered.update(acknowledged));
+    JobStore indexed(root);
+    assert(importedLibraryPath(*indexed.get(second.id)) == saved.result->outputPath);
+    auto packed = *indexed.get(second.id);
+    packed.result->outputPath = "/tmp/bms-library/BMSSEARCH/song.zip";
+    assert(importedLibraryPath(packed) == packed.result->outputPath);
+    packed.state = State::NeedsAttention;
+    assert(!importedLibraryPath(packed));
+    packed.state = State::Cancelled;
+    assert(!importedLibraryPath(packed));
+    packed.state = State::Complete;
+    packed.result.reset();
+    assert(!importedLibraryPath(packed));
     assert(recovered.forget(second.id));
   }
   {

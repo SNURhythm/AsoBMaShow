@@ -1479,23 +1479,29 @@ void testPublicDownloadApiAcceptsOptions() {
 
 void testPendingMismatchCannotDismiss() {
   BmsSearchResult result;
+  const auto downloading = findBmsDialogPolicy(true, result);
+  assert(downloading.canDismiss && downloading.showBackgroundClose);
+  assert(downloading.showCloseOrCancel);
   result.status = BmsSearchResult::Status::HashMismatch;
   result.pendingArtifact = BmsSearchPendingArtifact{};
   const auto pending = findBmsDialogPolicy(false, result);
   assert(!pending.canDismiss);
   assert(!pending.showCloseOrCancel);
+  assert(!pending.showBackgroundClose);
   assert(pending.showPendingActions);
   assert(!pending.showNormalResultActions);
 
   const auto resolving = findBmsDialogPolicy(true, result);
   assert(!resolving.canDismiss);
   assert(!resolving.showCloseOrCancel);
+  assert(!resolving.showBackgroundClose);
   assert(!resolving.showPendingActions);
 
   result.pendingArtifact.reset();
   const auto resolved = findBmsDialogPolicy(false, result);
   assert(resolved.canDismiss);
   assert(resolved.showCloseOrCancel);
+  assert(!resolved.showBackgroundClose);
   assert(!resolved.showPendingActions);
 }
 

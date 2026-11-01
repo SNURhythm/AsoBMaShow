@@ -2643,7 +2643,24 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   buildFindBmsModal();
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  downloadsModal_ = std::make_unique<DownloadsModal>(rootLayout);
+  downloadsModal_ = std::make_unique<DownloadsModal>(rootLayout,
+      [this](const std::filesystem::path &path) {
+        if (!chartSession || this->context.storageMaintenanceActive || willStart.load() ||
+            replayExportJob_.inProgress()) return false;
+        selectTab(Tab::Play);
+        defer([this, path, profile = this->context.profileManager.activeProfile().id] {
+          if (profile != this->context.profileManager.activeProfile().id) return true;
+          if (pendingTab_) return false;
+          applyFolderGoalSelection(
+              {.kind = folder_goals::SourceKind::Directory,
+               .identity = chart_storage_identity::StoredFolderPathText(path),
+               .name = fspath_to_utf8(path.filename())},
+              long_note_mode::valueFromId(this->context.settings.selectedLnMode));
+          refreshChartFilterPanel();
+          return true;
+        }, 0, true);
+        return true;
+      });
 #endif
   buildUnzipProgressModal();
   rootLayout->addView(new SelectedGoalOverlay<ChartListItemView>([this]() -> ChartListItemView * {

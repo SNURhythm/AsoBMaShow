@@ -85,6 +85,7 @@ constexpr std::size_t kFindBmsMaxLogLines = 120;
 struct FindBmsModal {
   std::thread::id owner = std::this_thread::get_id();
   bool visible = false;
+  bool getVisible() const { return visible; }
   void setSize(int, int) { assert(owner == std::this_thread::get_id()); }
   void setVisible(bool value) { assert(owner == std::this_thread::get_id()); visible = value; }
 };
@@ -274,10 +275,11 @@ void testSceneLookupProgressAndIndexHandoff() {
   assert(scene.findBmsProgressLog.size() == 2); // Repeated download lines coalesce.
   assert(scene.indexed.empty());
   scene.hideFindBmsModal();
-  assert(scene.modal.visible);
+  assert(!scene.modal.visible && scene.findBmsTask.running());
   gate.release.set_value();
   assert(scene.indexed.empty());
   applyUntilIdle(scene);
+  assert(!calls.cancellationObserved && !scene.modal.visible);
   assert(scene.findBmsProgressFraction == 1 && scene.indexed.size() == 1);
   assert(scene.indexed[0].identity == "sha256" && scene.indexed[0].generation == 7);
   assert(scene.indexed[0].path == "new.bms" && scene.indexed[0].removed == calls.result.removedPaths);
@@ -302,7 +304,7 @@ void testSceneDownloadPromptRetriesExistingWorker() {
     scene.context.settings.storagePreferences = {};
     assert(calls.storagePolicy.audio == storage_management::AudioAction::LossyVorbis);
     scene.hideFindBmsModal();
-    assert(scene.modal.visible);
+    assert(!scene.modal.visible && scene.findBmsTask.running());
     assert(calls.lookups == 1 && scene.indexed.empty());
     if (retry) assert(scene.findBmsTask.retryDownload());
     else scene.cancelFindBms();
@@ -433,23 +435,31 @@ void testSceneCandidateAndPendingArtifactDecisions() {
 }
 
 void testQueuedDownloadHandoffDoesNotIndexOrCancelOnSceneClose() {
-  ServiceCalls calls;
-  serviceCalls = &calls;
-  calls.result = {.status = BmsSearchResult::Status::Downloaded,
-                  .queuedDownloadId = "background-job"};
-  MainMenuScene scene;
-  int deliveries = 0;
-  scene.callbacks_.downloadQueued = [&](const std::string &id) {
-    assert(id == "background-job");
-    ++deliveries;
-  };
-  scene.showFindBmsModal({{"sha", "md5", "title", "artist"}});
-  applyUntilIdle(scene);
-  assert(deliveries == 1);
-  assert(scene.indexed.empty());
-  scene.applyFindBmsUpdates();
-  scene.cancelAndWait();
-  assert(deliveries == 1 && scene.indexed.empty());
+  for (const bool closeWhileRunning : {false, true}) {
+    ServiceCalls calls;
+    serviceCalls = &calls;
+    Gate gate;
+    calls.gate = &gate;
+    calls.result = {.status = BmsSearchResult::Status::Downloaded,
+                    .queuedDownloadId = "background-job"};
+    MainMenuScene scene;
+    int deliveries = 0;
+    scene.callbacks_.downloadQueued = [&](const std::string &id) {
+      assert(id == "background-job");
+      ++deliveries;
+    };
+    scene.showFindBmsModal({{"sha", "md5", "title", "artist"}});
+    gate.wait();
+    if (closeWhileRunning) scene.hideFindBmsModal();
+    gate.release.set_value();
+    applyUntilIdle(scene);
+    assert(deliveries == (closeWhileRunning ? 0 : 1));
+    assert(!calls.cancellationObserved && !scene.modal.visible);
+    assert(scene.indexed.empty());
+    scene.applyFindBmsUpdates();
+    scene.cancelAndWait();
+    assert(deliveries == (closeWhileRunning ? 0 : 1) && scene.indexed.empty());
+  }
 }
 } // namespace
 

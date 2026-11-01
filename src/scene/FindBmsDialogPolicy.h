@@ -7,6 +7,7 @@
 struct FindBmsDialogPolicy {
   bool canDismiss = false;
   bool showCloseOrCancel = false;
+  bool showBackgroundClose = false;
   bool showPendingActions = false;
   bool showNormalResultActions = false;
 };

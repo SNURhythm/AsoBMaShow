@@ -555,7 +555,17 @@ void MusicSelectScene::init() {
         preloadedChart_ = std::move(chart);
       });
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  downloadsModal_ = std::make_unique<DownloadsModal>(modalLayer_);
+  downloadsModal_ = std::make_unique<DownloadsModal>(modalLayer_,
+      [this](const std::filesystem::path &path) {
+        if (!chartSession_ || !repositoryMetadata_ || !sceneActive_ || failed_ ||
+            launching_ || context.storageMaintenanceActive) return false;
+        applyFolderGoalSelection(
+            {.kind = folder_goals::SourceKind::Directory,
+             .identity = chart_storage_identity::StoredFolderPathText(path),
+             .name = fspath_to_utf8(path.filename())},
+            long_note_mode::valueFromId(context.settings.selectedLnMode));
+        return true;
+      });
 #endif
   addView(modalLayer_);
   startInputListening();

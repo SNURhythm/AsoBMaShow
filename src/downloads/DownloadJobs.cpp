@@ -169,6 +169,12 @@ bool transition(const Job &old, const Job &next) {
 }
 }
 
+std::optional<std::filesystem::path> importedLibraryPath(const Job &job) {
+  if (job.state != State::Complete || !job.libraryAcknowledged ||
+      !job.result || job.result->outputPath.empty()) return std::nullopt;
+  return job.result->outputPath;
+}
+
 Request transferRequest(const Job &job) {
   auto request = job.request;
   if (!job.transferUrl.empty()) {
