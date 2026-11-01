@@ -5999,6 +5999,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(input_profile_tests
         tests/input_profile_tests.cpp
+        src/AtomicFile.cpp
         src/input/GyroscopeTurntable.cpp
         src/input/InputProfile.cpp
         src/input/VirtualControllerConfig.cpp
@@ -6007,7 +6008,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(input_profile_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(input_profile_tests PRIVATE cxx_std_23)
-    target_compile_definitions(input_profile_tests PRIVATE INPUT_PROFILE_STORE_TESTING)
     if(TARGET SDL3::SDL3)
         target_link_libraries(input_profile_tests PRIVATE SDL3::SDL3)
     elseif(TARGET SDL3::SDL3-static)
