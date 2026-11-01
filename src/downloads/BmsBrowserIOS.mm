@@ -34,12 +34,11 @@ bool http(NSURL *url) { return url && downloads::httpOrigin(url.absoluteString.U
   WKWebViewConfiguration *configuration = [WKWebViewConfiguration new];
   // Retained while this browser lives; session credentials never enter backups.
   configuration.websiteDataStore = WKWebsiteDataStore.nonPersistentDataStore;
-  // Google serves its legacy UI to the generic WKWebView user agent, notably
-  // in iPad desktop mode. Keep WebKit's device tokens and identify Safari
-  // compatibility using the installed iOS version rather than a frozen UA.
+  // Safari compatibility tokens keep Google from serving its legacy UI.
+  // Leave out an app suffix for compatibility with ordinary browsing sites.
   NSOperatingSystemVersion osVersion = NSProcessInfo.processInfo.operatingSystemVersion;
   configuration.applicationNameForUserAgent = [NSString stringWithFormat:
-      @"Version/%ld.%ld Safari/605.1.15 AsoBMaShow", (long)osVersion.majorVersion, (long)osVersion.minorVersion];
+      @"Version/%ld.%ld Safari/605.1.15", (long)osVersion.majorVersion, (long)osVersion.minorVersion];
   self.web = [[WKWebView alloc] initWithFrame:CGRectZero configuration:configuration];
   self.web.navigationDelegate = self; self.web.UIDelegate = self;
   self.web.allowsBackForwardNavigationGestures = YES;
