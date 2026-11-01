@@ -1164,6 +1164,7 @@ void testBrowserTableImportUsesTheSharedTaskOperation() {
       "browser selection imports through the existing table importer");
   expect(importedUrl == "https://gingerrush.com/api/v1/table/meta/header/109.json",
       "only the user-selected published header is requested");
+  expect(reloadRequested, "browser table import refreshes the folder sidebar immediately");
 }
 
 void testDifficultyTableUpdateStopsAtAnImporterCheckpoint() {

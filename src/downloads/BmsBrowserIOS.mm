@@ -126,7 +126,7 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
 - (void)sites {
   UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"Browse BMS" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
   [menu addAction:[UIAlertAction actionWithTitle:@"GingerRush" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://gingerrush.com/"]; }]];
-  [menu addAction:[UIAlertAction actionWithTitle:@"Manbow" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://manbow.nothing.sh/event/"]; }]];
+  [menu addAction:[UIAlertAction actionWithTitle:@"Manbow" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self load:@"https://manbow.nothing.sh/event/event.cgi"]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Downloads" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { downloads::requestDownloadsPresentation(); [self close]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Open externally" style:UIAlertActionStyleDefault handler:^(UIAlertAction *) { [self external:self.web.URL]; }]];
   [menu addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -187,6 +187,14 @@ NSString *cookieHeader(NSArray<NSHTTPCookie *> *cookies, NSURL *url) {
   if (action.shouldPerformDownload) {
     decision(WKNavigationActionPolicyCancel);
     [self download:action.request.URL filename:action.request.URL.lastPathComponent method:action.request.HTTPMethod]; return;
+  }
+  if (action.navigationType == WKNavigationTypeLinkActivated &&
+      (action.targetFrame.mainFrame || !action.targetFrame) &&
+      http(action.request.URL) && [action.request.HTTPMethod isEqualToString:@"GET"]) {
+    // A user-activated universal link may launch Drive (or another app).
+    // Programmatic loads keep this HTTP request in WebKit, including redirects.
+    decision(WKNavigationActionPolicyCancel);
+    [web loadRequest:action.request]; return;
   }
   decision(WKNavigationActionPolicyAllow);
 }

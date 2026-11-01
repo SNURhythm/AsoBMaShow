@@ -136,7 +136,8 @@ TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
       stopToken.stop_requested()) {
     return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
-  if (dependencies_.requestReload) dependencies_.requestReload(false);
+  if (dependencies_.requestReload)
+    dependencies_.requestReload(request.kind == TaskKind::ImportDifficultyTable);
   return {.detail = i18n::message("library.tasks.complete.label")};
 }
 

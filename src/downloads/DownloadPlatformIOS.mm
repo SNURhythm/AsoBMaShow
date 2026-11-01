@@ -5,6 +5,7 @@
 #import <objc/runtime.h>
 #include "DownloadPlatform.h"
 #include "DownloadService.h"
+#include "DownloadIOSDispatch.h"
 #include "BrowserPolicy.h"
 #include "../AtomicFile.h"
 #include <charconv>
@@ -316,14 +317,17 @@ std::string startTransfer(const Job &job, const std::filesystem::path &) {
     NSURLSession *session = persistentTransfer(requestValue) ? host().background : host().foreground;
     NSURLSessionDownloadTask *task = resume ? [session downloadTaskWithResumeData:resume] : [session downloadTaskWithRequest:request];
     task.taskDescription = descriptor(job);
-    dispatch_async(dispatch_get_main_queue(), ^{ [host() requestRuntime:job]; });
+    dispatchOwnedJob(dispatch_get_main_queue(), job, ^(const Job &snapshot) {
+      [host() requestRuntime:snapshot];
+    });
     [task resume];
     return {};
   }
 }
 void cancelTransfer(const Job &job) { [host() stop:descriptor(job)]; }
 void finishActivity(const Job &job, bool success) {
-  dispatch_async(dispatch_get_main_queue(), ^{ [host() finishRuntime:descriptor(job) success:success]; });
+  NSString *description = descriptor(job);
+  dispatch_async(dispatch_get_main_queue(), ^{ [host() finishRuntime:description success:success]; });
 }
 void reportProgress(const Job &job) {
   static std::mutex mutex; static std::chrono::steady_clock::time_point last;
@@ -332,14 +336,14 @@ void reportProgress(const Job &job) {
     if (now - last < std::chrono::milliseconds(250)) return;
     last = now;
   }
-  dispatch_async(dispatch_get_main_queue(), ^{
+  dispatchOwnedJob(dispatch_get_main_queue(), job, ^(const Job &snapshot) {
     if (@available(iOS 26.0, *)) {
-      BGTask *task = host().continued[descriptor(job)];
+      BGTask *task = host().continued[descriptor(snapshot)];
       if (![task isKindOfClass:BGContinuedProcessingTask.class]) return;
       auto continued = (BGContinuedProcessingTask *)task;
-      const double fraction = job.totalBytes ? std::min(1.0, static_cast<double>(job.downloadedBytes) / job.totalBytes) : 0;
-      continued.progress.completedUnitCount = job.state == State::Importing ? 700 + static_cast<int>(300 * fraction) : static_cast<int>(700 * fraction);
-      [continued updateTitle:@"BMS download" subtitle:[NSString stringWithUTF8String:(job.message.empty() ? stateName(job.state) : job.message.c_str())]];
+      const double fraction = snapshot.totalBytes ? std::min(1.0, static_cast<double>(snapshot.downloadedBytes) / snapshot.totalBytes) : 0;
+      continued.progress.completedUnitCount = snapshot.state == State::Importing ? 700 + static_cast<int>(300 * fraction) : static_cast<int>(700 * fraction);
+      [continued updateTitle:@"BMS download" subtitle:[NSString stringWithUTF8String:(snapshot.message.empty() ? stateName(snapshot.state) : snapshot.message.c_str())]];
     }
   });
 }

@@ -372,14 +372,24 @@ void testDurableDownloadImportsExistingFileWithoutTransport() {
   job.request.libraryRoot = testDownloadRoot(*fixture).parent_path();
   cleanup.add(job.request.libraryRoot);
   job.request.skipUnarchiving = true;
+  const auto privateJobRoot = findBmsStagingBasePath().parent_path() / job.id;
+  std::filesystem::create_directories(privateJobRoot);
+  cleanup.add(privateJobRoot);
+  const auto retained = privateJobRoot / "archive.1.zip";
+  std::filesystem::rename(fixture->archivePath, retained);
   std::atomic_bool cancelled = false;
   int prepared = 0;
   observedDownloadAttempt.clear();
-  const auto result = downloads::importArchiveJob(job, fixture->archivePath, fixture->root,
-      cancelled, {}, [&](const BmsSearchPendingArtifact &) { ++prepared; return true; });
+  const auto result = downloads::importArchiveJob(job, retained, privateJobRoot,
+      cancelled, {}, [&](const BmsSearchPendingArtifact &) {
+        assert(std::filesystem::hard_link_count(retained) == 1);
+        ++prepared; return true;
+      });
+  if (result.status != BmsSearchResult::Status::Downloaded) std::cerr << result.message << '\n';
   assert(result.status == BmsSearchResult::Status::Downloaded);
   assert(!result.outputPath.empty() && std::filesystem::is_regular_file(result.outputPath));
-  assert(std::filesystem::exists(fixture->archivePath)); // Retained until durable result delivery.
+  assert(std::filesystem::exists(retained)); // Retained until durable result delivery.
+  assert(std::filesystem::hard_link_count(retained) == 1);
   assert(observedDownloadAttempt.empty());
   assert(prepared == 1);
 }

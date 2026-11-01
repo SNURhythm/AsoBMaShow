@@ -16,7 +16,7 @@ import java.util.*;
 public final class BmsBrowserActivity extends Activity {
     private static boolean webStorageConfigured;
     private static final String GINGER = "https://gingerrush.com/";
-    private static final String MANBOW = "https://manbow.nothing.sh/event/";
+    private static final String MANBOW = "https://manbow.nothing.sh/event/event.cgi";
     private final ArrayDeque<WebView> pages = new ArrayDeque<>();
     private LinearLayout layout;
     private EditText address;
@@ -44,7 +44,6 @@ public final class BmsBrowserActivity extends Activity {
         }
         lastPage = new File(getNoBackupFilesDir(), "bms-browser-url");
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setBackgroundColor(android.graphics.Color.WHITE);
         layout.setFitsSystemWindows(true);
         HorizontalScrollView controls = new HorizontalScrollView(this);
         controls.setHorizontalScrollBarEnabled(false);
@@ -64,7 +63,9 @@ public final class BmsBrowserActivity extends Activity {
         address.setImeOptions(EditorInfo.IME_ACTION_GO);
         address.setTextSize(14);
         address.setOnEditorActionListener((view, action, event) -> {
-            if (action != EditorInfo.IME_ACTION_GO) return false;
+            boolean enter = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
+            if (action != EditorInfo.IME_ACTION_GO && !enter) return false;
+            if (enter && event.getAction() != KeyEvent.ACTION_DOWN) return true;
             String url = address.getText().toString().trim();
             if (!url.contains("://")) url = "https://" + url;
             load(url); return true;

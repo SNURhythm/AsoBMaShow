@@ -1,6 +1,7 @@
 #include "DownloadJobs.h"
 #include "BrowserPolicy.h"
 #include "../AtomicFile.h"
+#include "../ArchiveFile.h"
 #include "../../yoga/lib/nlohmann/json.hpp"
 #include <algorithm>
 #include <fstream>
@@ -234,6 +235,16 @@ JobStore::JobStore(std::filesystem::path root) : root_(std::move(root)) {
     jobs_.push_back(std::move(job));
   }
   std::sort(jobs_.begin(), jobs_.end(), [](const auto &a, const auto &b) { return a.order < b.order; });
+  for (const auto &job : jobs_) {
+    const auto old = jobPath(job.id) / (job.attempt == 0 ? "archive" : "archive." + std::to_string(job.attempt));
+    const auto current = archivePath(job.id, job.attempt);
+    std::error_code error;
+    if (old == current || !std::filesystem::is_regular_file(std::filesystem::symlink_status(old, error))) continue;
+    std::string message;
+    if (std::filesystem::exists(current) || !atomic_file::renameDurably(old, current, message) ||
+        !atomic_file::syncDirectory(current.parent_path(), message))
+      throw std::runtime_error("Could not recover the retained archive name.");
+  }
 }
 void JobStore::save(const std::vector<Job> &jobs) const {
   json records = json::array();
@@ -302,6 +313,10 @@ std::filesystem::path JobStore::jobPath(const std::string &id) const {
   return root_ / id;
 }
 std::filesystem::path JobStore::archivePath(const std::string &id, std::uint64_t attempt) const {
-  return jobPath(id) / (attempt == 0 ? "archive" : "archive." + std::to_string(attempt));
+  const auto root = jobPath(id);
+  const auto job = get(id);
+  if (!job) throw std::runtime_error("Download is no longer available.");
+  return root / ((attempt == 0 ? "archive" : "archive." + std::to_string(attempt)) +
+      archive_file::archiveExtensionFromName(job->request.archiveName));
 }
 } // namespace downloads

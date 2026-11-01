@@ -64,3 +64,33 @@ Android restricted-file release APK packaging passed. It was installed with
 version code 5 and matching signing certificate. Installation succeeded without
 uninstalling or clearing data. Device interaction tests have not started at this
 intermediate push.
+
+## Device-driven corrections
+
+The connected Android 13 phone completed the 4 MiB loopback transfer while the
+launcher was foreground. Initial import then exposed Android's hard-link
+restriction. Import now reads the retained archive in place; the private file
+keeps its format suffix. Existing extensionless retained files are renamed using
+metadata only. The retained-file integration test verifies import without a
+second transfer or hard link, and the manifest test covers the filename upgrade.
+The platform restriction is documented in [AOSP's app sandbox policy](https://android.googlesource.com/platform/system/sepolicy/+/android-9.0.0_r42/private/app_neverallows.te).
+
+The supplied iOS build 1627 crash matches archive dSYM UUID
+`908F94A8-BD48-34C5-A523-11F058071D88`. Symbolication identifies
+`DownloadPlatformIOS.mm:319`: an asynchronous block copied a `Job` through a
+reference after the caller's object was gone, failing while copying request
+headers. Runtime and progress callbacks now own their job snapshot; completion
+captures its descriptor before dispatch. A Foundation queue regression fails
+with reference capture and passes with owned capture. This affects both browser
+and Find BMS downloads. No crash report or private request data is committed.
+
+Also corrected both Manbow bookmarks to `/event/event.cgi`, made a browser table
+import request a sidebar refresh, constrained Downloads text to its panel width,
+and fixed Android address-field contrast and hardware Enter handling. iOS HTTP
+link clicks now use programmatic WebKit navigation to avoid handing universal
+links to installed apps; the physical-device Drive retest is pending.
+
+After these corrections: desktop, unsigned iOS, and Android release builds pass;
+all 13 download-group tests pass, as does the focused library-operation test.
+The updated Android APK was installed successfully with version code 5 before
+another push and runtime retry.

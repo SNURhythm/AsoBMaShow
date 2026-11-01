@@ -61,10 +61,13 @@ int main() {
     second.state = State::Downloaded;
     second.downloadedBytes = 123;
     assert(store.update(second));
+    { std::ofstream legacy(root / second.id / "archive"); legacy << "retained"; }
     JobStore reopened(root);
     assert(reopened.get(first.id)->state == State::Cancelled);
     assert(reopened.get(second.id)->downloadedBytes == 123);
-    assert(reopened.archivePath(second.id) == root / second.id / "archive");
+    assert(reopened.archivePath(second.id) == root / second.id / "archive.zip");
+    assert(std::filesystem::file_size(reopened.archivePath(second.id)) == 8);
+    assert(!std::filesystem::exists(root / second.id / "archive"));
     bool rejected = false;
     try { (void)reopened.archivePath("../../escape"); } catch (...) { rejected = true; }
     assert(rejected);

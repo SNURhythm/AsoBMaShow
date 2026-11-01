@@ -58,6 +58,27 @@ bool isSafePathComponent(const std::string &value) {
          path.filename() == path;
 }
 
+bool isRetainedJobArchive(const std::filesystem::path &source,
+                          const std::filesystem::path &stagingRoot,
+                          const std::filesystem::path &base) {
+  // Durable jobs retain their immutable archive beside imports/<UUID>. Only
+  // that same job's numbered archive may be borrowed by the staging workflow.
+  if (source.parent_path().parent_path() != base.parent_path()) return false;
+  auto id = source.parent_path().filename().string();
+  if (id.size() != 32 || id.find_first_not_of("0123456789abcdef") != std::string::npos) return false;
+  id[12] = '4'; id[16] = '8';
+  id.insert(20, "-"); id.insert(16, "-"); id.insert(12, "-"); id.insert(8, "-");
+  if (stagingRoot.filename() != id) return false;
+  auto name = source.filename().string();
+  const auto extension = archive_file::archiveExtensionFromName(name);
+  if (extension.empty()) return false;
+  name.resize(name.size() - extension.size());
+  if (name != "archive" && (!name.starts_with("archive.") || name.size() == 8 ||
+      name.find_first_not_of("0123456789", 8) != std::string::npos)) return false;
+  std::error_code error;
+  return std::filesystem::is_regular_file(std::filesystem::symlink_status(source, error)) && !error;
+}
+
 bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
                              std::string &errorMessage) {
   std::error_code error;
@@ -73,8 +94,11 @@ bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
     return false;
   }
   const auto sourcePath = normalizedPath(artifact.sourcePath, error);
+  const bool retainedArchive = !error && artifact.kind == BmsSearchPendingArtifactKind::Archive &&
+      !std::filesystem::is_symlink(std::filesystem::symlink_status(artifact.sourcePath, error)) && !error &&
+      isRetainedJobArchive(sourcePath, stagingRoot, base);
   if (error || sourcePath.empty() ||
-      !isStrictDescendant(sourcePath, stagingRoot)) {
+      (!isStrictDescendant(sourcePath, stagingRoot) && !retainedArchive)) {
     errorMessage = "Refusing an unsafe Find BMS source path.";
     return false;
   }
@@ -124,7 +148,7 @@ bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
     }
     const bool pathsMatch =
         artifact.kind == BmsSearchPendingArtifactKind::Archive
-            ? sourcePath == expectedArchiveSource &&
+            ? (sourcePath == expectedArchiveSource || retainedArchive) &&
                   destinationPath == expectedArchivePath &&
                   alternateDestinationPath == expectedExtractedPath
             : destinationPath == expectedExtractedPath &&
@@ -135,7 +159,7 @@ bool validatePendingArtifact(const BmsSearchPendingArtifact &artifact,
     }
   }
   if (artifact.kind == BmsSearchPendingArtifactKind::Archive) {
-    if (sourcePath.parent_path() != stagingRoot ||
+    if ((!retainedArchive && sourcePath.parent_path() != stagingRoot) ||
         destinationPath.parent_path() != downloadRoot / "_archives") {
       errorMessage = "Refusing invalid Find BMS archive metadata.";
       return false;

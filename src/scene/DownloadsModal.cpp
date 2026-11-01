@@ -14,7 +14,8 @@ namespace {
 TextView *label(View *parent, const i18n::Text &text, int size = 18) {
   auto *view = new TextView(app_theme::font, size);
   view->setLocalizedText(text); view->setThemedColor(app_theme::textPrimary);
-  view->setWrap(true); view->setOverflow(TextView::TextOverflow::Visible);
+  view->setWrap(true); view->setOverflow(TextView::TextOverflow::Hidden);
+  view->setWidthPercent(100)->setMinWidth(0)->setFlexShrink(0);
   parent->addView(view); return view;
 }
 Button *action(View *parent, const i18n::Text &title, std::function<void()> callback) {
@@ -98,6 +99,7 @@ void DownloadsModal::refresh() {
   if (jobs.empty()) label(content, i18n::message("downloads.ui.empty"));
   for (const auto &job : jobs) {
     auto *row = new View(); row->setFlexDirection(FlexDirection::Column)->setGap(8)->setPadding(Edge::All, 14);
+    row->setWidthPercent(100)->setMinWidth(0)->setFlexShrink(0);
     row->setThemedBackgroundColor(app_theme::insetSurface)->setCornerRadius(app_theme::controlRadius());
     label(row, job.request.title.empty() ? job.request.archiveName : job.request.title, 20);
     auto state = stateLabel(job.state).resolve();

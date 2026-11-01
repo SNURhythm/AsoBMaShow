@@ -66,14 +66,13 @@ BmsSearchResult importArchiveJob(const Job &job, const std::filesystem::path &ar
   const auto root = importRoot(job);
   std::filesystem::create_directories(root);
   std::filesystem::permissions(root, std::filesystem::perms::owner_all);
-  const FindBmsDownloadAttempt attempt{root, root / names.archiveName, root / "extracted"};
+  const FindBmsDownloadAttempt attempt{root, archive, root / "extracted"};
   // Only this job owns the attempt. Restart interrupted extraction; retain the
   // immutable OS-completed archive and never fetch it again for import retries.
   std::filesystem::remove_all(attempt.extractedPath);
   std::filesystem::remove(root / "original-files.sqlite");
-  std::filesystem::remove(attempt.archivePath);
-  std::filesystem::create_hard_link(archive, attempt.archivePath, error);
-  if (error) return failed("Could not stage the retained archive on its private volume.");
+  // Read the retained file in place. Android forbids app-created hard links;
+  // copying here would duplicate potentially hundreds of gigabytes before import.
   std::filesystem::create_directory(attempt.extractedPath);
   BmsSearchDownloadOptions options;
   options.skipUnarchivingForNonSolidArchives = job.request.skipUnarchiving;
