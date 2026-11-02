@@ -1,5 +1,6 @@
 #include "view/SystemTextRasterizer.h"
 #include "iOSNatives.hpp"
+#include "i18n/Localization.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
 #include "bms_search/DownloadRetryWait.h"
@@ -5303,6 +5304,48 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
       }, errorMessage);
 }
 
+// Main-thread, non-interactive notice kept above the share sheet.
+static UIView *ShowIOSGuidedAccessShareNotice(UIWindow *window) {
+  static __weak UIView *previousNotice = nil;
+  [previousNotice removeFromSuperview];
+  UIView *notice = [[UIView alloc] init];
+  previousNotice = notice;
+  notice.translatesAutoresizingMaskIntoConstraints = NO;
+  notice.userInteractionEnabled = NO;
+  notice.backgroundColor = UIColor.systemYellowColor;
+  notice.layer.cornerRadius = 12;
+  UILabel *label = [[UILabel alloc] init];
+  label.translatesAutoresizingMaskIntoConstraints = NO;
+  label.text = NSStringFromUtf8(i18n::tr("result.share.guided_access_warning"));
+  label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+  label.adjustsFontForContentSizeCategory = YES;
+  label.textColor = UIColor.blackColor;
+  label.textAlignment = NSTextAlignmentCenter;
+  label.numberOfLines = 0;
+  [notice addSubview:label];
+  [window addSubview:notice];
+  NSLayoutConstraint *preferredWidth = [notice.widthAnchor constraintEqualToConstant:480];
+  preferredWidth.priority = UILayoutPriorityDefaultHigh;
+  [NSLayoutConstraint activateConstraints:@[
+    preferredWidth,
+    [notice.centerXAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.centerXAnchor],
+    [notice.topAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.topAnchor constant:12],
+    [notice.leadingAnchor constraintGreaterThanOrEqualToAnchor:window.safeAreaLayoutGuide.leadingAnchor constant:16],
+    [notice.trailingAnchor constraintLessThanOrEqualToAnchor:window.safeAreaLayoutGuide.trailingAnchor constant:-16],
+    [label.topAnchor constraintEqualToAnchor:notice.topAnchor constant:12],
+    [label.bottomAnchor constraintEqualToAnchor:notice.bottomAnchor constant:-12],
+    [label.leadingAnchor constraintEqualToAnchor:notice.leadingAnchor constant:16],
+    [label.trailingAnchor constraintEqualToAnchor:notice.trailingAnchor constant:-16]
+  ]];
+  UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, label.text);
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC),
+                 dispatch_get_main_queue(), ^{
+    [UIView animateWithDuration:0.2 animations:^{ notice.alpha = 0; }
+                     completion:^(BOOL finished) { [notice removeFromSuperview]; }];
+  });
+  return notice;
+}
+
 bool ShareIOSResultImage(const std::string &path, const std::string &text,
                           std::string &error) {
   @autoreleasepool {
@@ -5310,7 +5353,8 @@ bool ShareIOSResultImage(const std::string &path, const std::string &text,
     NSString *caption = NSStringFromUtf8(text);
     __block bool presented = false;
     void (^present)(void) = ^{
-      UIViewController *controller = TopViewController(FindActiveWindow().rootViewController);
+      UIWindow *window = FindActiveWindow();
+      UIViewController *controller = TopViewController(window.rootViewController);
       if (controller == nil || controller.view.window == nil) return;
       UIActivityViewController *sheet = [[UIActivityViewController alloc]
           initWithActivityItems:@[caption, url] applicationActivities:nil];
@@ -5323,7 +5367,12 @@ bool ShareIOSResultImage(const std::string &path, const std::string &text,
                                            NSArray *items, NSError *shareError) {
         [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
       };
-      [controller presentViewController:sheet animated:YES completion:nil];
+      UIView *notice = IsIOSGuidedAccessEnabled()
+          ? ShowIOSGuidedAccessShareNotice(window) : nil;
+      [controller presentViewController:sheet animated:YES completion:^{
+        // UIKit adds its presentation container above existing window subviews.
+        if (notice.superview == window) [window bringSubviewToFront:notice];
+      }];
       presented = true;
     };
     if ([NSThread isMainThread]) present();
