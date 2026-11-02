@@ -5,13 +5,12 @@
 using gameplay::GuidedAccessReminder;
 
 int main() {
-  assert(GuidedAccessReminder::required(true, true, false, false, 0, false));
-  assert(!GuidedAccessReminder::required(false, true, false, false, 0, false));
-  assert(!GuidedAccessReminder::required(true, false, false, false, 0, false));
-  assert(!GuidedAccessReminder::required(true, true, true, false, 0, false));
-  assert(!GuidedAccessReminder::required(true, true, false, true, 0, false));
-  assert(!GuidedAccessReminder::required(true, true, false, false, 1, false));
-  assert(!GuidedAccessReminder::required(true, true, false, false, 0, true));
+  assert(GuidedAccessReminder::required(true, true, false, false, false));
+  assert(!GuidedAccessReminder::required(false, true, false, false, false));
+  assert(!GuidedAccessReminder::required(true, false, false, false, false));
+  assert(!GuidedAccessReminder::required(true, true, true, false, false));
+  assert(!GuidedAccessReminder::required(true, true, false, true, false));
+  assert(!GuidedAccessReminder::required(true, true, false, false, true));
 
   GuidedAccessReminder reminder;
   reminder.update(false, true, 0);

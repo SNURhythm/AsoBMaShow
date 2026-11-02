@@ -3932,7 +3932,6 @@ bool GamePlayScene::reset() {
       gameplay::GuidedAccessReminder::required(
       context.settings.ipadGestureReminderEnabled, IsIOSPad(),
       isReplayPlayback(), options.autoPlay,
-      options.courseSession != nullptr ? options.courseSession->currentIndex : 0,
       isGuidedAccessEnabled());
 #endif
   if (guidedAccessReminderLayout != nullptr) {

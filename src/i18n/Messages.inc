@@ -2489,7 +2489,7 @@
 {"settings.visual.gauge_bar.label", "Gauge Bar", "게이지 바", "ゲージバー", "血条", "血條"},
 {"settings.visual.gauge_position.help", "World: below lanes. Left/Right: side HUD.", "월드: 레인 아래. 왼쪽/오른쪽: 측면 HUD.", "ワールド: レーンの下。左/右: サイドHUD。", "世界空间：轨道下方。左侧/右侧：侧边 HUD。", "世界空間：軌道下方。左側/右側：側邊 HUD。"},
 {"settings.visual.invisible_notes.label", "Invisible Notes", "인비저블 노트", "不可視ノーツ", "隐形音符", "隱形音符"},
-{"settings.visual.ipad_gesture_reminder.description", "Remind you to enable Guided Access before iPad play to prevent system gesture interruptions. Courses show it only before the first track.", "시스템 제스처로 인한 방해를 줄이도록 iPad 플레이 전에 사용법 유도를 켜도록 안내합니다. 코스에서는 첫 곡 전에만 표시합니다.", "システムジェスチャーによる中断を防ぐため、iPadでのプレイ前にアクセスガイドの有効化を案内します。コースでは最初の曲の前だけ表示します。", "提醒你在 iPad 游玩前开启引导式访问，避免系统手势打断。组曲模式只在第一首曲目前提醒。", "提醒你在 iPad 遊玩前開啟引導使用模式，避免系統手勢中斷。組曲模式只在第一首曲目前提醒。"},
+{"settings.visual.ipad_gesture_reminder.description", "Remind you to enable Guided Access before iPad play to prevent system gesture interruptions. Courses check before every track unless you skip this session.", "시스템 제스처로 인한 방해를 줄이도록 iPad 플레이 전에 사용법 유도를 켜도록 안내합니다. 이번 세션을 건너뛰지 않으면 코스의 매 곡 전에 확인합니다.", "システムジェスチャーによる中断を防ぐため、iPadでのプレイ前にアクセスガイドの有効化を案内します。コースでは、このセッションをスキップしない限り、各曲の前に確認します。", "提醒你在 iPad 游玩前开启引导式访问，避免系统手势打断。组曲模式会在每首曲目前检查，除非你选择跳过本次会话。", "提醒你在 iPad 遊玩前開啟引導使用模式，避免系統手勢中斷。組曲模式會在每首曲目前檢查，除非你選擇略過本次工作階段。"},
 {"settings.visual.ipad_gesture_reminder.label", "Guided Access Reminder", "사용법 유도 알림", "アクセスガイドの確認", "引导式访问提醒", "引導使用模式提醒"},
 {"settings.visual.ipad_gesture_reminder.off", "Disabled", "사용 안 함", "無効", "已禁用", "已停用"},
 {"settings.visual.ipad_gesture_reminder.on", "Enabled", "사용", "有効", "已启用", "已啟用"},
