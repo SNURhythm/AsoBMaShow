@@ -1282,6 +1282,16 @@ std::string GetAndroidInternalFilesDir() {
   return {};
 }
 
+bool ShareAndroidResultImage(const std::string &path, const std::string &text,
+                             std::string &error) {
+  const auto message = callActivityStringMethod2(
+      "shareResultImage", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      path.c_str(), text.c_str(), error);
+  if (!error.empty()) return false;
+  error = message;
+  return error.empty();
+}
+
 std::string GetAndroidCacheDir() {
   const char *cache = SDL_GetAndroidCachePath();
   if (cache == nullptr || cache[0] == '\0') return {};

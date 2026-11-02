@@ -38,6 +38,15 @@ struct PresentationPlan {
   std::string filename;
 };
 
+// Output policy only: saving and sharing use the same rendering entry points.
+struct ExportOptions {
+  std::filesystem::path outputDirectory;
+  bool saveToPhotos = true;
+};
+
+using ImageExportBackend =
+    std::function<ResultImageExportResult(const ExportOptions &)>;
+
 struct PresentationExportDestination {
   std::filesystem::path outputDirectory;
   std::string timestamp;
@@ -124,9 +133,13 @@ presentationPlanFor(const ResultPresentationModel &presentation,
 
 class ResultImageExporter {
 public:
+  static ResultImageExportResult Share(
+      const std::string &text,
+      const result_image_export::ImageExportBackend &exportImage);
   static ResultImageExportResult ExportSkin(
       ApplicationContext &context, const std::string &title,
-      const result_image_export::SkinRenderBackend &renderSkin);
+      const result_image_export::SkinRenderBackend &renderSkin,
+      const result_image_export::ExportOptions &options = {});
   // Shared presentation export orchestration. Production supplies the bgfx
   // renderer; controlled/headless callers can supply another artifact writer
   // while exercising the same destination, filename, skin, and gauge plan.
@@ -136,7 +149,8 @@ public:
       const result_image_export::PresentationRenderBackend &renderBackend);
   static ResultImageExportResult
   Export(ApplicationContext &context,
-         const ResultPresentationModel &presentation);
+         const ResultPresentationModel &presentation,
+         const result_image_export::ExportOptions &options = {});
   static ResultImageExportResult Export(ApplicationContext &context,
                                         const bms_parser::ChartMeta &meta,
                                         const RhythmState &state,
@@ -161,7 +175,9 @@ public:
                                         const std::optional<ResultPacemakerData>
                                             &pacemaker = std::nullopt,
                                         const std::optional<practice::ResultModel>
-                                            &analyticsModel = std::nullopt);
+                                            &analyticsModel = std::nullopt,
+                                        const result_image_export::ExportOptions
+                                            &options = {});
   static ResultImageExportResult ExportReplay(ApplicationContext &context,
                                               bms_parser::Chart &chart,
                                               const ReplayData &replay,

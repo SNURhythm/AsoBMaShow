@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -10,8 +9,8 @@ namespace gameplay {
 class GuidedAccessReminder {
 public:
   static bool required(bool enabled, bool ipad, bool replay, bool autoPlay,
-                       std::size_t courseTrackIndex, bool guidedAccessEnabled) {
-    return enabled && ipad && !replay && !autoPlay && courseTrackIndex == 0 &&
+                       bool guidedAccessEnabled) {
+    return enabled && ipad && !replay && !autoPlay &&
            !guidedAccessEnabled;
   }
 

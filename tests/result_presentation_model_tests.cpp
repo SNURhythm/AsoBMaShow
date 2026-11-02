@@ -1,4 +1,5 @@
 #include "scene/ResultPresentationModel.h"
+#include "ResultShareText.h"
 #include "CoursePlaySession.h"
 #include "i18n/Localization.h"
 #include "scene/ResultPhotoExportPresentation.h"
@@ -1401,7 +1402,7 @@ void testDefaultSkinExplicitZerosAndMobileMetadataWrap() {
 void testResultTouchControlsHideAndRestorePresentation() {
   const ResultTouchControlAvailability availability{
       .back = true, .retry = true, .retrySame = true, .rankings = true,
-      .exportPhoto = true, .selectSection = true, .next = false};
+      .exportPhoto = true, .share = true, .selectSection = true, .next = false};
   const auto visible = makeResultTouchControlPresentation(
       {.skinSelected = true, .hidden = false},
       availability);
@@ -1412,6 +1413,7 @@ void testResultTouchControlsHideAndRestorePresentation() {
                                     ResultTouchControlAction::RetrySame,
                                     ResultTouchControlAction::Rankings,
                                     ResultTouchControlAction::ExportPhoto,
+                                    ResultTouchControlAction::Share,
                                     ResultTouchControlAction::SelectSection,
                                     ResultTouchControlAction::Hide},
          "selected touch result skins expose the built-in actions and Hide");
@@ -1487,6 +1489,15 @@ void testResultSkinFailureRestoresAUsableApplicationState() {
 } // namespace
 
 int main() {
+  expect(makeResultShareText("Title", "Subtitle", "HARD CLEAR", "AAA") ==
+             "Title Subtitle HARD CLEAR AAA\n#AsoBMaShow",
+         "Share text follows the requested two-line format");
+  expect(makeResultShareText("曲名", "", "FAILED", "B") ==
+             "曲名 FAILED B\n#AsoBMaShow",
+         "Share text preserves Unicode and omits empty subtitles");
+  expect(makeResultShareText("Title\nline", " Sub\ttitle ", "", "") ==
+             "Title line Sub title\n#AsoBMaShow",
+         "Metadata whitespace cannot split the share summary line");
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
   init.resolution.width = 64;

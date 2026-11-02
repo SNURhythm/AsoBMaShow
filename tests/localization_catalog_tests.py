@@ -103,7 +103,7 @@ class LocalizationCatalogTests(unittest.TestCase):
         sources = list((ROOT / "src").rglob("*"))
         sources.extend((ROOT / "android/app/src/main/java").rglob("*.java"))
         for path in sources:
-            if path.suffix not in (".h", ".cpp", ".java"):
+            if path.suffix not in (".h", ".hpp", ".cpp", ".mm", ".java"):
                 continue
             source = path.read_text()
             for literal in re.findall(LITERAL, source):

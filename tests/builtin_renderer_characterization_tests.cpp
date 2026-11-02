@@ -3106,7 +3106,7 @@ void verifyScratchGradientAndPlainMines(const RenderTarget &target) {
 
 void verifyScratchlessChartEligibility() {
   for (int mode : {5, 7}) {
-    for (int content = 0; content < 7; ++content) {
+    for (int content = 0; content < 9; ++content) {
       bms_parser::Chart chart;
       chart.Meta.KeyMode = mode;
       auto *measure = new bms_parser::Measure();
@@ -3121,9 +3121,14 @@ void verifyScratchlessChartEligibility() {
       case 4: chart.Meta.TotalScratchNotes = 1; break;
       case 5: chart.Meta.TotalBackSpinNotes = 1; break;
       case 6: chart.Meta.IsDP = true; break;
+      case 7: timeline->SetNote(7, new bms_parser::Note(1)); break;
+      case 8:
+        timeline->SetInvisibleNote(7, new bms_parser::Note(1));
+        timeline->SetNote(7, new bms_parser::Note(1));
+        break;
       }
-      expect(gameplay::presentationKeyMode(chart) == (content == 0 ? -mode : mode),
-             "scratchless selection excludes invisible, mine, long, metadata-only scratches and DP");
+      expect(gameplay::presentationKeyMode(chart) == (content <= 1 ? -mode : mode),
+             "scratchless selection ignores invisible scratches but retains playable scratches, mines and DP");
       expect(chart.Meta.KeyMode == mode,
              "presentation selection never mutates chart/replay key-mode identity");
     }

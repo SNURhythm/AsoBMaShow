@@ -371,7 +371,8 @@ private:
   void continueCourse();
   void showSavedCourseStage();
   void showCourseResult();
-  void exportPhoto();
+  void exportPhoto(bool share = false);
+  Button *makeShareButton();
   void exitResult();
   [[nodiscard]] bool isCourseStageResult() const;
   [[nodiscard]] bool isCourseFinalResult() const;

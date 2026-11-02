@@ -1,6 +1,7 @@
 #include "goals/GoalPacemaker.h"
 #include "ResultImageExporter.h"
 #include "ExportFileName.h"
+#include "AndroidNatives.h"
 
 #include "PlayOptionUtils.h"
 #include "RAII.h"
@@ -541,7 +542,8 @@ ResultImageExportResult renderResultImageWithSkinData(
     const std::optional<result_gauge_history::ResultGaugeGraph> &gaugeGraph,
     const std::optional<practice::ResultModel> &analyticsModel,
     bool attachGaugeAsView, const std::filesystem::path &path,
-    const result_image_export::SkinRenderBackend &renderSkin = {}) {
+    const result_image_export::SkinRenderBackend &renderSkin = {},
+    bool saveToPhotos = true) {
   const int width = rendering::render_width;
   const bool mobileTarget =
       TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android;
@@ -767,6 +769,9 @@ ResultImageExportResult renderResultImageWithSkinData(
   }
 
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  if (!saveToPhotos) {
+    return {.success = true, .outputPath = path, .message = "Rendered"};
+  }
   if (!SaveImageToIOSPhotos(fspath_to_utf8(path), errorMessage)) {
     return {.success = false, .outputPath = path, .message = errorMessage};
   }
@@ -792,7 +797,8 @@ ResultImageExportResult renderResultImage(
     SkinGameplayGraphState gameplayGraph,
     const std::optional<practice::ResultModel> &analyticsModel,
     const std::filesystem::path &path,
-    std::optional<int> songReviewFavorite = std::nullopt) {
+    std::optional<int> songReviewFavorite = std::nullopt,
+    bool saveToPhotos = true) {
   const auto series = result_gauge_history::seriesFor(state);
   const auto gaugeGraph = result_gauge_history::graphFor(series, 0);
   ResultSkinData resultSkinData = {&state, &meta, &context};
@@ -817,7 +823,8 @@ ResultImageExportResult renderResultImage(
   resultSkinData.pacemaker = pacemaker;
   resultSkinData.gameplayGraph = std::move(gameplayGraph);
   return renderResultImageWithSkinData(context, std::move(resultSkinData),
-                                       gaugeGraph, analyticsModel, false, path);
+                                       gaugeGraph, analyticsModel, false, path, {},
+                                       saveToPhotos);
 }
 
 ResultImageExportResult exportResultImage(
@@ -831,10 +838,12 @@ ResultImageExportResult exportResultImage(
     const std::optional<std::string> &headerDifficultyLabelOverride,
     const std::optional<ResultPacemakerData> &pacemaker,
     SkinGameplayGraphState gameplayGraph,
-    const std::optional<practice::ResultModel> &analyticsModel) {
+    const std::optional<practice::ResultModel> &analyticsModel,
+    const result_image_export::ExportOptions &options = {}) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
-  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+  if (options.saveToPhotos &&
+      !RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
     return {.success = false,
             .message = photosErrorMessage.empty()
                            ? "Photos permission was not granted"
@@ -842,7 +851,8 @@ ResultImageExportResult exportResultImage(
   }
 #endif
 
-  const auto outputDir = Utils::GetDocumentsPath("result_exports");
+  const auto outputDir = options.outputDirectory.empty()
+      ? Utils::GetDocumentsPath("result_exports") : options.outputDirectory;
   if (const auto error = ensureExportDirectoryError(
           outputDir, "Failed to create result export directory")) {
     return {.success = false, .message = *error};
@@ -855,26 +865,76 @@ ResultImageExportResult exportResultImage(
       context, meta, state, playModeLabel, laneOrderLabel, difficultyLabel,
       previousBest, previousLampBest, currentClearLabelOverride,
       currentClearRankOverride, headerDifficultyLabelOverride, pacemaker,
-      std::move(gameplayGraph), analyticsModel, outputPath);
+      std::move(gameplayGraph), analyticsModel, outputPath, std::nullopt,
+      options.saveToPhotos);
 }
 } // namespace
 
+ResultImageExportResult ResultImageExporter::Share(
+    const std::string &text,
+    const result_image_export::ImageExportBackend &exportImage) {
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::error_code error;
+#if TARGET_OS_ANDROID
+  const auto cache = std::filesystem::path(GetAndroidCacheDir());
+#else
+  const auto cache = std::filesystem::temp_directory_path(error);
+#endif
+  if (error || cache.empty()) {
+    return {.message = "Share cache is unavailable"};
+  }
+  const auto directory = cache / "result_shares";
+  std::filesystem::create_directories(directory, error);
+  if (error) return {.message = "Could not create share cache"};
+  // Receivers may read after the chooser closes; retain recent attachments.
+  for (std::filesystem::directory_iterator entry(directory, error), end;
+       !error && entry != end; entry.increment(error)) {
+    const auto modified = entry->last_write_time(error);
+    if (!error && std::filesystem::file_time_type::clock::now() - modified >
+                      std::chrono::hours(24 * 7)) {
+      std::filesystem::remove_all(entry->path(), error);
+    }
+    error.clear();
+  }
+  if (!exportImage) return {.message = "No result image exporter"};
+  auto result = exportImage(
+      {.outputDirectory = directory / std::to_string(
+           std::chrono::steady_clock::now().time_since_epoch().count()),
+       .saveToPhotos = false});
+  if (!result.success) return result;
+#if TARGET_OS_ANDROID
+  result.success = ShareAndroidResultImage(fspath_to_utf8(result.outputPath),
+                                           text, result.message);
+#else
+  result.success = ShareIOSResultImage(fspath_to_utf8(result.outputPath),
+                                       text, result.message);
+#endif
+  if (!result.success) std::filesystem::remove(result.outputPath, error);
+  return result;
+#else
+  return {.message = "Result sharing is available on mobile"};
+#endif
+}
+
 ResultImageExportResult ResultImageExporter::ExportSkin(
     ApplicationContext &context, const std::string &title,
-    const result_image_export::SkinRenderBackend &renderSkin) {
+    const result_image_export::SkinRenderBackend &renderSkin,
+    const result_image_export::ExportOptions &options) {
   if (!renderSkin) {
     return {.success = false, .message = "No active result skin renderer"};
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
-  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+  if (options.saveToPhotos &&
+      !RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
     return {.success = false,
             .message = photosErrorMessage.empty()
                            ? "Photos permission was not granted"
                            : photosErrorMessage};
   }
 #endif
-  const auto outputDir = Utils::GetDocumentsPath("result_exports");
+  const auto outputDir = options.outputDirectory.empty()
+      ? Utils::GetDocumentsPath("result_exports") : options.outputDirectory;
   if (const auto error = ensureExportDirectoryError(
           outputDir, "Failed to create result export directory")) {
     return {.success = false, .message = *error};
@@ -882,15 +942,17 @@ ResultImageExportResult ResultImageExporter::ExportSkin(
   const auto outputPath = outputDir / (sanitizeFileNamePart(title) + "_" +
                                        makeTimestamp() + ".png");
   return renderResultImageWithSkinData(context, {}, std::nullopt, std::nullopt,
-                                       false, outputPath, renderSkin);
+                                       false, outputPath, renderSkin, options.saveToPhotos);
 }
 
 ResultImageExportResult ResultImageExporter::Export(
     ApplicationContext &context,
-    const ResultPresentationModel &presentation) {
+    const ResultPresentationModel &presentation,
+    const result_image_export::ExportOptions &options) {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   std::string photosErrorMessage;
-  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+  if (options.saveToPhotos &&
+      !RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
     return {.success = false,
             .message = photosErrorMessage.empty()
                            ? "Photos permission was not granted"
@@ -900,9 +962,11 @@ ResultImageExportResult ResultImageExporter::Export(
 
   return Export(
       presentation,
-      {.outputDirectory = Utils::GetDocumentsPath("result_exports"),
+      {.outputDirectory = options.outputDirectory.empty()
+                              ? Utils::GetDocumentsPath("result_exports")
+                              : options.outputDirectory,
        .timestamp = makeTimestamp()},
-      [&context](ResultSkinData skinData,
+      [&context, &options](ResultSkinData skinData,
                  std::optional<result_gauge_history::ResultGaugeGraph> gauge,
                  const std::filesystem::path &outputPath) {
         skinData.context = &context;
@@ -910,7 +974,7 @@ ResultImageExportResult ResultImageExporter::Export(
         skinData.configuration->irAccountName = context.irAccountNameSnapshot();
         return renderResultImageWithSkinData(
             context, std::move(skinData), gauge, std::nullopt, true,
-            outputPath);
+            outputPath, {}, options.saveToPhotos);
       });
 }
 
@@ -934,12 +998,13 @@ ResultImageExporter::Export(ApplicationContext &context,
                             const std::optional<ResultPacemakerData>
                                 &pacemaker,
                             const std::optional<practice::ResultModel>
-                                &analyticsModel) {
+                                &analyticsModel,
+                            const result_image_export::ExportOptions &options) {
   return exportResultImage(
       context, meta, state, playModeLabel, laneOrderLabel, difficultyLabel,
       previousBest, previousLampBest, currentClearLabelOverride,
       currentClearRankOverride, headerDifficultyLabelOverride, pacemaker, {},
-      analyticsModel);
+      analyticsModel, options);
 }
 
 ResultImageExportResult

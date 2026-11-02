@@ -9,6 +9,17 @@
 #include <string>
 #include <utility>
 
+ASOBMS_SHARE_TEXT_HELPER
+struct Presentation {
+  std::string title = "Title";
+  struct Comparison { struct { std::string value = "HARD CLEAR"; } current; };
+  std::optional<Comparison> lampComparison = Comparison{};
+};
+struct Grade { std::string grade = "AAA"; };
+std::optional<Grade> gradeCard(const Presentation &) { return Grade{}; }
+namespace i18n { const char *tr(const char *) { return "Share"; } }
+constexpr int SDL_MESSAGEBOX_ERROR = 1;
+template<class... Args> void SDL_ShowSimpleMessageBox(Args &&...) {}
 #define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1
 struct RenderContext {
   struct UiBatchScope { explicit UiBatchScope(RenderContext &) {} };
@@ -50,32 +61,72 @@ struct ResultSkinSession {
     return succeeds;
   }
 };
+namespace result_image_export {
+struct ExportOptions {
+  std::filesystem::path outputDirectory;
+  bool saveToPhotos = true;
+};
+}
+struct ChartMeta {
+  std::string Title = "Local chart", SubTitle = "Subtitle";
+  std::string StageFile = "jacket.png", Banner = "banner.png";
+};
 struct ResultImageExporter {
   static inline int nativeExports = 0;
+  static inline int shares = 0;
+  static inline std::string sharedText;
+  static inline const ChartMeta *exportedMeta = nullptr;
+  static inline int exportedAnalytics = -1;
+  static inline result_image_export::ExportOptions exportedOptions;
+  static ResultImageExportResult Share(
+      const std::string &text,
+      const std::function<ResultImageExportResult(
+          const result_image_export::ExportOptions &)> &exportImage) {
+    ++shares;
+    sharedText = text;
+    return exportImage({.outputDirectory = "share-cache", .saveToPhotos = false});
+  }
   static inline int skinExports = 0;
-  template<class... Args>
-  static ResultImageExportResult Export(Args &&...) {
+  static ResultImageExportResult Export(
+      ApplicationContext &, const ChartMeta &meta, int,
+      const std::string &, const std::string &, const std::string &,
+      int, int, int, int, int, const std::optional<ResultPacemakerData> &,
+      int analytics, const result_image_export::ExportOptions &options) {
     ++nativeExports;
+    exportedMeta = &meta;
+    exportedAnalytics = analytics;
+    exportedOptions = options;
+    return {};
+  }
+  static ResultImageExportResult Export(
+      ApplicationContext &, const Presentation &,
+      const result_image_export::ExportOptions &options) {
+    ++nativeExports;
+    exportedMeta = nullptr;
+    exportedOptions = options;
     return {};
   }
   static ResultImageExportResult ExportSkin(
       ApplicationContext &, const std::string &,
-      const std::function<bool(RenderContext &)> &draw) {
+      const std::function<bool(RenderContext &)> &draw,
+      const result_image_export::ExportOptions &options) {
     ++skinExports;
+    exportedOptions = options;
     RenderContext context;
     return {.success = draw(context)};
   }
 };
 struct LocalSource {
   bool autoPlayResult = false;
-  struct { std::string Title = "Local chart"; } meta;
+  ChartMeta meta;
+  Presentation presentation;
   int resultState = 0;
   std::string playModeLabel, laneOrderLabel, difficultyLabel;
   int previousBest = 0, previousLampBest = 0;
   int currentClearLabelOverride = 0, currentClearRankOverride = 0;
   int headerDifficultyLabelOverride = 0;
 };
-struct RemoteSource { struct { std::string title = "Remote chart"; } presentation; };
+struct RemoteSource { Presentation presentation; };
 struct View {
   int renders = 0;
   void applyYogaLayout() {}
@@ -101,11 +152,11 @@ struct ResultScene {
   const RemoteSource *remoteSource() const { return isRemote ? &remote : nullptr; }
   ResultSkinData makeResultSkinData() const { return {}; }
   std::optional<ResultPacemakerData> pacemakerDataForCurrentResult() const { return {}; }
-  int makeTimingAnalyticsModel() const { return 0; }
+  int makeTimingAnalyticsModel() const { return 42; }
   void setResultPhotoExportPresentation(ResultPhotoExportPresentation value) { status = value; }
   void appendResultSkinRenderDiagnostics() { ++diagnosticPublications; }
   template<class Callback> void defer(Callback, int, bool) {}
-  void exportPhoto();
+  void exportPhoto(bool share = false);
   bool drawOnscreen() {
     RenderContext renderContext;
     auto skinData = makeResultSkinData();
@@ -188,6 +239,43 @@ int main() {
     expect(ResultImageExporter::nativeExports == 1,
            "results without an active skin retain native image export");
   }
+  ResultScene sharing;
+  sharing.resultSkinSession = std::make_unique<ResultSkinSession>();
+  sharing.exportPhoto(true);
+  expect(ResultImageExporter::shares == 1 &&
+             ResultImageExporter::sharedText == "Title Subtitle HARD CLEAR AAA\n#AsoBMaShow" &&
+             sharing.resultSkinSession->captures == 1 &&
+             !sharing.resultSkinSession->controls && !sharing.resultPhotoExportInProgress,
+         "sharing hands off requested text and the current skin without controls");
+  sharing.local.autoPlayResult = true;
+  sharing.exportPhoto(true);
+  expect(ResultImageExporter::shares == 1, "autoplay cannot share results");
+  sharing.local.autoPlayResult = false;
+  sharing.resultSkinSession.reset();
+  ResultImageExporter::nativeExports = 0;
+  sharing.exportPhoto(true);
+  expect(ResultImageExporter::shares == 2, "default result layout can be shared");
+  expect(ResultImageExporter::nativeExports == 1,
+         "default sharing must reuse photo export with chart metadata and analytics");
+  expect(ResultImageExporter::exportedMeta == &sharing.local.meta &&
+             ResultImageExporter::exportedMeta->StageFile == "jacket.png" &&
+             ResultImageExporter::exportedMeta->Banner == "banner.png" &&
+             ResultImageExporter::exportedAnalytics == 42,
+         "sharing preserves jacket sources and uses the photo analytics preparation");
+  expect(!ResultImageExporter::exportedOptions.saveToPhotos &&
+             ResultImageExporter::exportedOptions.outputDirectory == "share-cache",
+         "sharing changes only the destination and disables saving to Photos");
+  sharing.exportPhoto();
+  expect(ResultImageExporter::exportedMeta == &sharing.local.meta &&
+             ResultImageExporter::exportedAnalytics == 42 &&
+             ResultImageExporter::exportedOptions.saveToPhotos &&
+             ResultImageExporter::exportedOptions.outputDirectory.empty(),
+         "photo export retains the same chart and analytics with its normal destination");
+  sharing.isRemote = true;
+  sharing.exportPhoto(true);
+  expect(ResultImageExporter::exportedMeta == nullptr &&
+             !ResultImageExporter::exportedOptions.saveToPhotos,
+         "remote sharing retains the existing presentation export path");
   View nativeRoot;
   int skinDraws = 0;
   auto image = drawExportFrame(&nativeRoot, [&](RenderContext &) {

@@ -597,8 +597,8 @@ int main() {
     data = repository_test::loadFolderClearDataByLongNoteMode(
         db, scoreRanks, localCourseRanks);
   }
-  ASSERT_EQ(4, trace.count,
-            "folder clear aggregation keeps four streaming SELECTs");
+  ASSERT_EQ(3, trace.count,
+            "folder clear aggregation uses three streaming SELECTs");
 
   ASSERT_EQ(kClearTypeHardClearRank,
             folderRankForLn(data, main_menu_library::folderKeyForTable(1)),
@@ -627,17 +627,17 @@ int main() {
                               main_menu_library::folderKeyForTable(2),
                               long_note_mode::kHcnValue),
             "forced-CN folder keeps its historical lamp for every selection");
-  ASSERT_EQ(kClearTypeHardClearRank,
+  ASSERT_EQ(kNoClearTypeRank,
             folderRankForLn(data, "courses"),
-            "local chart clear contributes to the course root");
-  ASSERT_EQ(kClearTypeHardClearRank,
+            "unplayed course leaves the course root unlit");
+  ASSERT_EQ(kNoClearTypeRank,
             folderRankForLn(data,
                             main_menu_library::folderKeyForCourseTable(1)),
-            "course table folder uses matched chart sha");
-  ASSERT_EQ(kClearTypeHardClearRank,
+            "course table lamp uses course results");
+  ASSERT_EQ(kNoClearTypeRank,
             folderRankForLn(
                 data, main_menu_library::folderKeyForCourseGroup(1, "Courses")),
-            "course group folder uses matched chart sha");
+            "course group lamp uses course results");
   ASSERT_EQ(kClearTypeNormalClearRank,
             folderRankForLn(data, main_menu_library::folderKeyForCourse(10)),
             "course folder uses canonical-key wildcard score lamp");
@@ -661,11 +661,41 @@ int main() {
                               main_menu_library::folderKeyForCourse(20),
                               long_note_mode::kLnValue),
             "blank-key score uses same-ID course folder fallback");
-  ASSERT_EQ(kClearTypeHardClearRank,
+  ASSERT_EQ(kNoClearTypeRank,
             folderRankForMode(data,
                               main_menu_library::folderKeyForCourse(30),
                               long_note_mode::kLnValue),
             "same-ID nonempty mismatching key cannot override course folder");
+
+  const std::string unplayedCourseKey =
+      "course:v1:" + std::string(64, 'c');
+  localCourseRanks.rankByCourseKey[unplayedCourseKey]
+      .wildcardRank = kClearTypeFailedRank;
+  data = repository_test::loadFolderClearDataByLongNoteMode(
+      db, scoreRanks, localCourseRanks);
+  ASSERT_EQ(kClearTypeFailedRank,
+            folderRankForLn(data, main_menu_library::folderKeyForCourse(30)),
+            "failed course does not inherit its charts' Hard Clear");
+  ASSERT_EQ(kClearTypeFailedRank, folderRankForLn(data, "courses"),
+            "course root includes failed course results");
+
+  localCourseRanks.rankByCourseKey[unplayedCourseKey]
+      .wildcardRank = kClearTypeHardClearRank;
+  localCourseRanks.rankBySha256.clear();
+  data = repository_test::loadFolderClearDataByLongNoteMode(
+      db, scoreRanks, localCourseRanks);
+  ASSERT_EQ(kClearTypeNormalClearRank, folderRankForLn(data, "courses"),
+            "course root takes weakest course result without chart scores");
+  ASSERT_EQ(kClearTypeNormalClearRank,
+            folderRankForLn(data, main_menu_library::folderKeyForCourseTable(1)),
+            "course table takes weakest course result");
+  ASSERT_EQ(kClearTypeNormalClearRank,
+            folderRankForLn(
+                data, main_menu_library::folderKeyForCourseGroup(1, "Courses")),
+            "course group takes weakest course result");
+  ASSERT_EQ(kClearTypeHardClearRank,
+            folderRankForLn(data, main_menu_library::folderKeyForCourse(30)),
+            "course clear survives absent chart scores");
 
   // A folder lamp is the weakest available chart's best lamp, including
   // Failed and No Play. Missing downloads must not lower a table's lamp.

@@ -19,8 +19,8 @@ namespace gameplay {
       const auto occupied = [](const auto &notes) {
         return notes.size() > 7 && notes[7] != nullptr;
       };
-      if (occupied(timeline->Notes) || occupied(timeline->InvisibleNotes) ||
-          occupied(timeline->LandmineNotes)) return false;
+      // Invisible notes only supply keysounds; they do not require scratch input.
+      if (occupied(timeline->Notes) || occupied(timeline->LandmineNotes)) return false;
     }
   }
   return true;

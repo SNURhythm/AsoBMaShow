@@ -22,6 +22,10 @@
 #include "../replay/CourseReplayConsumer.h"
 #include "../replay/ReplayOption.h"
 #include "../ResultImageExporter.h"
+#include "../ResultShareText.h"
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#include "../iOSNatives.hpp"
+#endif
 #include "../ResultContracts.h"
 #include "../ResultPresentationUtils.h"
 #include "../ScoreHistoryTime.h"
@@ -2171,6 +2175,9 @@ void ResultScene::addRetryButtons() {
                                        app_theme::hairlineSubtle());
   }
   retryRow->addView(exportPhotoButton);
+  if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android) {
+    retryRow->addView(makeShareButton());
+  }
 
   practiceSectionButton = new Button();
   practiceSectionButton->setName("resultPracticeSectionButton");
@@ -2246,6 +2253,8 @@ void ResultScene::buildResultTouchControls() {
     availability.replay = false;
     availability.next = false;
   }
+  availability.share = availability.exportPhoto &&
+      (TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android);
   resultTouchControlsDecisionRequired = persistenceDecisionRequired();
 
   const auto presentation = makeResultTouchControlPresentation(
@@ -2340,6 +2349,11 @@ void ResultScene::buildResultTouchControls() {
       accent = app_theme::infoAction();
       callback = [this]() { openRankings(); };
       enabled = rankingsAvailable();
+      break;
+    case ResultTouchControlAction::Share:
+      label = i18n::tr("result.share.label");
+      accent = app_theme::violetAction();
+      callback = [this]() { exportPhoto(true); };
       break;
     case ResultTouchControlAction::ExportPhoto:
       label = i18n::tr("result.export.label");
@@ -2590,6 +2604,9 @@ void ResultScene::addRemoteButtons() {
         [this]() { exportPhoto(); });
     exportPhotoButton->setContentView(exportPhotoButtonText);
     row->addView(exportPhotoButton);
+    if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android) {
+      row->addView(makeShareButton());
+    }
   }
   actionHost->addView(row);
 }
@@ -3056,6 +3073,9 @@ void ResultScene::addCourseButtons() {
   exportPhotoButton = photoButton;
   exportPhotoButtonText = photoText;
   actionHost->addView(exportPhotoButton);
+  if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android) {
+    actionHost->addView(makeShareButton());
+  }
 
   if (auto *backButton =
           dynamic_cast<Button *>(rootLayout->findViewByName("backButton"));
@@ -3202,7 +3222,24 @@ bool ResultScene::recordCourseStageRestTime() {
       nowMicros() - local->courseStageResultShownMicros);
 }
 
-void ResultScene::exportPhoto() {
+Button *ResultScene::makeShareButton() {
+  auto *button = new Button();
+  auto *label = new TextView(app_theme::font, 24);
+  label->setText(i18n::tr("result.share.label"));
+  label->setAlign(TextView::CENTER);
+  label->setVAlign(TextView::MIDDLE);
+  label->setColor(app_theme::sdl(app_theme::textOn(app_theme::violetAction())));
+  button->setContentView(label);
+  button->setSize(160, 64);
+  button->setCornerRadius(app_theme::controlRadius());
+  button->setBackgroundColors(app_theme::violetAction(),
+      app_theme::violetActionHover(), app_theme::violetActionPressed());
+  button->setOnClickListener([this]() { exportPhoto(true); });
+  button->setEnabled(localSource() == nullptr || !localSource()->autoPlayResult);
+  return button;
+}
+
+void ResultScene::exportPhoto(bool share) {
   const auto *local = localSource();
   const auto *remote = remoteSource();
   if ((local != nullptr && local->autoPlayResult) || resultPhotoExportInProgress) {
@@ -3214,43 +3251,61 @@ void ResultScene::exportPhoto() {
   }
 
   resultPhotoExportInProgress = true;
-  setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saving);
-  ResultImageExportResult result;
+  if (!share) setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saving);
+  const auto &presentation = local != nullptr ? local->presentation : remote->presentation;
+  const auto grade = gradeCard(presentation);
+  const std::string shareText = makeResultShareText(
+      presentation.title, local != nullptr ? local->meta.SubTitle : "",
+      presentation.lampComparison ? presentation.lampComparison->current.value : "",
+      grade ? grade->grade : "");
+  const auto exportImage = [&](const result_image_export::ExportOptions &options) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  if (resultSkinSession) {
-    auto skinData = makeResultSkinData();
-    skinData.showControls = false;
-    const long long elapsedMillis =
-        std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
-    result = ResultImageExporter::ExportSkin(
-        context, local != nullptr ? local->meta.Title : remote->presentation.title,
-        [this, &skinData, elapsedMillis](RenderContext &renderContext) {
-          if (resultSkinSession->requiresRuntimeStringRefresh(skinData) &&
-              !resultSkinSession->refreshRuntimeStrings(skinData)) {
+    if (resultSkinSession) {
+      auto skinData = makeResultSkinData();
+      skinData.showControls = false;
+      const long long elapsedMillis =
+          std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+      const auto renderSkin =
+          [this, &skinData, elapsedMillis](RenderContext &renderContext) {
+            if (resultSkinSession->requiresRuntimeStringRefresh(skinData) &&
+                !resultSkinSession->refreshRuntimeStrings(skinData)) {
+              appendResultSkinRenderDiagnostics();
+              return false;
+            }
+            const bool rendered = resultSkinSession->renderForExport(
+                renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
             appendResultSkinRenderDiagnostics();
-            return false;
-          }
-          const bool rendered = resultSkinSession->renderForExport(
-              renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
-          appendResultSkinRenderDiagnostics();
-          return rendered;
-        });
-  } else
+            return rendered;
+          };
+      return ResultImageExporter::ExportSkin(
+          context, presentation.title, renderSkin, options);
+    } else
 #endif
-  if (remote != nullptr) {
-    result = ResultImageExporter::Export(context, remote->presentation);
-  } else {
-    const std::optional<ResultPacemakerData> pacemaker =
-        pacemakerDataForCurrentResult();
-    const auto analyticsModel = makeTimingAnalyticsModel();
-    result = ResultImageExporter::Export(
-        context, local->meta, local->resultState, local->playModeLabel,
-        local->laneOrderLabel, local->difficultyLabel, local->previousBest,
-        local->previousLampBest,
-        local->currentClearLabelOverride, local->currentClearRankOverride,
-        local->headerDifficultyLabelOverride, pacemaker, analyticsModel);
-  }
+    if (remote != nullptr) {
+      return ResultImageExporter::Export(context, remote->presentation, options);
+    } else {
+      const std::optional<ResultPacemakerData> pacemaker =
+          pacemakerDataForCurrentResult();
+      const auto analyticsModel = makeTimingAnalyticsModel();
+      return ResultImageExporter::Export(
+          context, local->meta, local->resultState, local->playModeLabel,
+          local->laneOrderLabel, local->difficultyLabel, local->previousBest,
+          local->previousLampBest,
+          local->currentClearLabelOverride, local->currentClearRankOverride,
+          local->headerDifficultyLabelOverride, pacemaker, analyticsModel, options);
+    }
+  };
+  const auto result = share ? ResultImageExporter::Share(shareText, exportImage)
+                            : exportImage({});
   resultPhotoExportInProgress = false;
+  if (share) {
+    if (!result.success) {
+      SDL_Log("Result sharing failed: %s", result.message.c_str());
+      SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+          i18n::tr("result.share.label"), result.message.c_str(), nullptr);
+    }
+    return;
+  }
 
   if (result.success) {
     setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saved);
@@ -4966,6 +5021,9 @@ void ResultScene::resizeResultLayout() {
 }
 
 void ResultScene::cleanupScene() {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  HideIOSResultShareNotice();
+#endif
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   resultSkinSession.reset();
   resultSkinFadeoutStartedMillis.reset();

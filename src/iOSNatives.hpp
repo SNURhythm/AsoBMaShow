@@ -201,6 +201,9 @@ bool RequestIOSPhotoAddAuthorization(std::string &errorMessage,
                                      std::stop_token stop = {});
 bool SaveVideoToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage, std::stop_token stop = {});
+void HideIOSResultShareNotice();
+bool ShareIOSResultImage(const std::string &path, const std::string &text,
+                          std::string &error);
 bool SaveImageToIOSPhotos(const std::string &filePath,
                           std::string &errorMessage);
 bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,

@@ -9,6 +9,7 @@ enum class ResultTouchControlAction : unsigned char {
   Replay,
   Rankings,
   ExportPhoto,
+  Share,
   SelectSection,
   Next,
   CourseDetails,
@@ -22,6 +23,7 @@ struct ResultTouchControlAvailability {
   bool replay = false;
   bool rankings = false;
   bool exportPhoto = false;
+  bool share = false;
   bool selectSection = false;
   bool next = false;
   bool courseDetails = false;
@@ -54,6 +56,7 @@ inline ResultTouchControlPresentation makeResultTouchControlPresentation(
   if (availability.replay) result.actions.push_back(ResultTouchControlAction::Replay);
   if (availability.rankings) result.actions.push_back(ResultTouchControlAction::Rankings);
   if (availability.exportPhoto) result.actions.push_back(ResultTouchControlAction::ExportPhoto);
+  if (availability.share) result.actions.push_back(ResultTouchControlAction::Share);
   if (availability.selectSection) result.actions.push_back(ResultTouchControlAction::SelectSection);
   if (availability.next) result.actions.push_back(ResultTouchControlAction::Next);
   if (availability.courseDetails) result.actions.push_back(ResultTouchControlAction::CourseDetails);

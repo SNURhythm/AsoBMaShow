@@ -936,27 +936,23 @@ void VideoPlayer::seek(int64_t micro) {
 void VideoPlayer::predecodeFrames() {
   AVPacket *localPacket = av_packet_alloc();
   AVFrame *decodedFrame = av_frame_alloc();
-  if (localPacket == nullptr || decodedFrame == nullptr) {
+  AVFrame *seekPrerollFrame = av_frame_alloc();
+  if (localPacket == nullptr || decodedFrame == nullptr || seekPrerollFrame == nullptr) {
     av_packet_free(&localPacket);
     av_frame_free(&decodedFrame);
+    av_frame_free(&seekPrerollFrame);
     return;
   }
 
   video::VideoDecodeState decodeState;
+  bool pendingDecodedFrame = false;
+  bool queuedInitialFrame = false;
   std::uint64_t observedGeneration =
       decodeGeneration.load(std::memory_order_acquire);
 
   auto queueDecodedFrame = [&]() {
     const auto timestamp = decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE
         ? decodedFrame->best_effort_timestamp : decodedFrame->pts;
-    if (timestamp != AV_NOPTS_VALUE) {
-      const double frameTime = (timestamp - startPTS) *
-          av_q2d(formatContext->streams[videoStreamIndex]->time_base);
-      // Discard seek preroll older than the target tolerance before
-      // conversion or queueing. Otherwise three obsolete frames stall decoding
-      // until the presentation thread drains them.
-      if (seekPositionSeconds > frameTime + 0.1) return;
-    }
     AVFrame *targetFrame = getRecycledFrame();
     if (targetFrame == nullptr) {
       SDL_Log("Failed to allocate a decoded video frame");
@@ -1023,11 +1019,25 @@ void VideoPlayer::predecodeFrames() {
       }
     }
     targetFrame->pts = timestamp;
+    if (!queuedInitialFrame && timestamp != AV_NOPTS_VALUE) {
+      // A demuxer can synthesize a positive first timestamp after a zero seek
+      // (notably elementary MPEG). With no predecessor, extend that first image
+      // back to the target so a frozen export clock can start. Leave every
+      // subsequent timestamp unchanged to preserve playback timing.
+      // Round down: a fraction of a stream tick in the future can also stall
+      // an export whose microsecond clock is held at the seek target.
+      const auto seekTimestamp = startPTS + av_rescale_q_rnd(
+          static_cast<int64_t>(std::llround(seekPositionSeconds * AV_TIME_BASE)),
+          {1, AV_TIME_BASE}, formatContext->streams[videoStreamIndex]->time_base,
+          AV_ROUND_DOWN);
+      targetFrame->pts = std::min(timestamp, seekTimestamp);
+    }
     std::lock_guard<std::mutex> lock(bufferMutex);
     if (predecodingActive && bufferSize < maxBufferSize) {
       frameBuffer[bufferTail] = targetFrame;
       bufferTail = (bufferTail + 1) % maxBufferSize;
       ++bufferSize;
+      queuedInitialFrame = true;
     } else {
       recycleFrame(targetFrame);
     }
@@ -1039,6 +1049,10 @@ void VideoPlayer::predecodeFrames() {
     if (generation != observedGeneration) {
       av_packet_unref(localPacket);
       decodeState.reset();
+      av_frame_unref(seekPrerollFrame);
+      av_frame_unref(decodedFrame);
+      pendingDecodedFrame = false;
+      queuedInitialFrame = false;
       observedGeneration = generation;
       isEOF = false;
     }
@@ -1093,15 +1107,50 @@ void VideoPlayer::predecodeFrames() {
         continue;
       }
 
+      if (pendingDecodedFrame) {
+        // The preceding image used one queue slot. Respect the bounded output
+        // wait before admitting the future frame; never receive over it.
+        queueDecodedFrame();
+        pendingDecodedFrame = false;
+        continue;
+      }
+
       if (action == video::VideoDecodeAction::ReceiveFrame) {
         av_frame_unref(decodedFrame);
         const int result = avcodec_receive_frame(codecContext, decodedFrame);
         if (result == 0) {
           decodeState.onReceive(video::VideoReceiveResult::Frame);
-          queueDecodedFrame();
+          const auto timestamp = decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE
+              ? decodedFrame->best_effort_timestamp : decodedFrame->pts;
+          const double frameTime = timestamp == AV_NOPTS_VALUE ? seekPositionSeconds
+              : (timestamp - startPTS) *
+                    av_q2d(formatContext->streams[videoStreamIndex]->time_base);
+          if (frameTime < seekPositionSeconds) {
+            // Retain only the latest predecessor, without converting or filling
+            // the output queue. Sparse/VFR intervals can be much longer than
+            // 100 ms, and a frozen export clock cannot wait for a future image.
+            av_frame_unref(seekPrerollFrame);
+            av_frame_move_ref(seekPrerollFrame, decodedFrame);
+          } else if (frameTime > seekPositionSeconds && seekPrerollFrame->format != AV_PIX_FMT_NONE) {
+            std::swap(decodedFrame, seekPrerollFrame);
+            queueDecodedFrame();
+            av_frame_unref(decodedFrame);
+            std::swap(decodedFrame, seekPrerollFrame);
+            pendingDecodedFrame = true;
+          } else {
+            av_frame_unref(seekPrerollFrame);
+            queueDecodedFrame();
+          }
         } else if (result == AVERROR(EAGAIN)) {
           decodeState.onReceive(video::VideoReceiveResult::NeedInput);
         } else if (result == AVERROR_EOF) {
+          // A seek into the last frame's interval still needs that image.
+          if (seekPrerollFrame->format != AV_PIX_FMT_NONE) {
+            std::swap(decodedFrame, seekPrerollFrame);
+            queueDecodedFrame();
+            av_frame_unref(decodedFrame);
+            std::swap(decodedFrame, seekPrerollFrame);
+          }
           decodeState.onReceive(video::VideoReceiveResult::EndOfStream);
         } else {
           SDL_Log("Video decoder receive failed: %d", result);
@@ -1159,6 +1208,7 @@ void VideoPlayer::predecodeFrames() {
 
   av_packet_unref(localPacket);
   av_frame_free(&decodedFrame);
+  av_frame_free(&seekPrerollFrame);
   av_packet_free(&localPacket);
 }
 

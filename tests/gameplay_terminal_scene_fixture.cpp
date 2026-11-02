@@ -2220,6 +2220,29 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
           "ending Guided Access during gameplay must not restart the reminder");
 }
 
+void testCourseStageReminder() {
+  auto course = std::make_shared<CoursePlaySession>();
+  course->entries.resize(4);
+  for (std::size_t index = 0; index < course->entries.size(); ++index) {
+    course->currentIndex = index;
+    GamePlayScene scene;
+    scene.options.courseSession = course;
+    scene.context.settings.ipadGestureReminderEnabled = true;
+    scene.resetAttemptBoundaryForTest();
+    require(scene.guidedAccessReminderPending,
+            "every course stage prompts when Guided Access is off");
+    scene.guidedAccessEnabled = true;
+    scene.resetAttemptBoundaryForTest();
+    require(!scene.guidedAccessReminderPending,
+            "stages do not prompt while Guided Access is already enabled");
+    scene.guidedAccessEnabled = false;
+    scene.options.guidedAccessReminderSkipped = true;
+    scene.resetAttemptBoundaryForTest();
+    require(!scene.guidedAccessReminderPending,
+            "Skip this session suppresses the reminder at every course stage");
+  }
+}
+
 void testReminderSkipSession() {
   for (const int mode : {0, 1, 2}) {
     const bool practice = mode != 0;
@@ -2807,6 +2830,7 @@ int main(int argc, char **argv) {
     testGuidedAccessReminderStartup(argv[2]);
     return 0;
   }
+  testCourseStageReminder();
   testReminderSkipSession();
   testReminderSwipesDoNotStart();
   for (const auto scenario : {"started", "background", "native-background", "ended",
