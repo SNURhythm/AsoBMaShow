@@ -4486,7 +4486,8 @@ void testScratchlessTableMembership() {
     timeline->SetInvisibleNote(7, new bms_parser::Note(1));
     measure->TimeLines.push_back(timeline);
     chart.Measures.push_back(measure);
-    assert(gameplay::presentationKeyMode(chart, settings, repository) == mode);
+    // Invisible scratch keysounds do not override scratchless table membership.
+    assert(gameplay::presentationKeyMode(chart, settings, repository) == -mode);
     delete timeline->InvisibleNotes[7];
     timeline->InvisibleNotes[7] = nullptr;
     chart.Meta.IsDP = true;

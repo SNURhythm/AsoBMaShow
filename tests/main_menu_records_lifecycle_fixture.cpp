@@ -259,6 +259,7 @@ struct MainMenuScene {
   std::atomic_bool selectedChartMediaReady = true, selectedChartReusableForStart = true;
   Recycler *recyclerView = nullptr;
   View *revealContextMenu = nullptr, *rankingsModal = nullptr;
+  View *addBmsContextMenu_ = nullptr;
   struct Cache { void releasePages() {} } chartListCache;
   std::vector<int> replayIrObservedRevisions;
   int scoreClearRanks = 0, scoreBestScores = 0, folderClearData = 0, scoreClearRanksRevision = 0;

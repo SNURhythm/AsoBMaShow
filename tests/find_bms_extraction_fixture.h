@@ -328,7 +328,9 @@ void testDownloadAttemptExtractionCleanup() {
     writeExtractionZip(fixture->archivePath,
         {{"previous.wav", std::string(65536, 'b')},
          {"sound.wav", std::string(2 * 1024 * 1024, 'a'),
-          cancel ? std::nullopt : std::optional<std::uint32_t>(3U * 1024 * 1024 * 1024)}});
+          // A small size mismatch still fails during extraction, without
+          // requiring gigabytes of free space just to reach that check.
+          cancel ? std::nullopt : std::optional<std::uint32_t>(3U * 1024 * 1024)}});
     std::atomic_bool cancelled = false;
     bool observedPartialOutput = false;
     BmsSearchResult result;

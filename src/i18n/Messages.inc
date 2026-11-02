@@ -666,7 +666,6 @@
 {"library.find_bms.result.files_deleted", "Mismatched files deleted.", "일치하지 않는 파일을 삭제했습니다.", "一致しないファイルを削除しました。", "已删除不匹配的文件。", "已刪除不符的檔案。"},
 {"library.find_bms.result.files_kept", "Mismatched files kept.", "일치하지 않는 파일을 보관했습니다.", "一致しないファイルを保持しました。", "已保留不匹配的文件。", "已保留不符的檔案。"},
 {"library.find_bms.result.html_response", "Downloaded response was an HTML page instead of an archive.", "다운로드한 응답이 아카이브가 아닌 HTML 페이지입니다.", "ダウンロードした応答はアーカイブではなくHTMLページでした。", "下载响应为 HTML 页面，而非压缩包。", "下載回應為 HTML 頁面，而非壓縮檔。"},
-{"library.find_bms.result.invalid_candidate", "Selected download candidate is not valid.", "선택한 다운로드 후보가 유효하지 않습니다.", "選択したダウンロード候補は無効です。", "所选下载候选项无效。", "所選下載候選項無效。"},
 {"library.find_bms.result.keep_archive_failed", "Could not keep downloaded archive.", "다운로드한 아카이브를 보관하지 못했습니다.", "ダウンロードしたアーカイブを保持できませんでした。", "无法保留已下载的压缩包。", "無法保留已下載的壓縮檔。"},
 {"library.find_bms.result.keep_extracted_failed", "Could not keep unarchived files.", "압축 해제한 파일을 보관하지 못했습니다.", "展開したファイルを保持できませんでした。", "无法保留解压后的文件。", "無法保留解壓縮後的檔案。"},
 {"library.find_bms.result.no_pending_files", "No downloaded files are awaiting a decision.", "처리를 기다리는 다운로드 파일이 없습니다.", "処理を選択する必要があるダウンロード済みファイルはありません。", "没有等待选择处理方式的下载文件。", "沒有等待選擇處理方式的下載檔案。"},

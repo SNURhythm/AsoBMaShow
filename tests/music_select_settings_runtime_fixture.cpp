@@ -189,6 +189,8 @@ struct MusicSelectScene {
   void hideDecideOverlay() {}
   void onApplicationBackgroundChanged(bool) {}
   void syncToolbar() {}
+  // This skin/settings fixture has no Tasks dialog to refresh.
+  void refreshTaskNotifications() {}
   void reloadLibrary(bool) {}
   // Settings round trips have no pending kombo assignment or notification.
   bool toolbarControlAvailable(MusicSelectToolbarControl) const { return true; }

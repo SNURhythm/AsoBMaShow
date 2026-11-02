@@ -104,8 +104,13 @@ bool active = true;
 bool applicationActive() { return active; }
 void windowSize(void *, int *width, int *height) { *width = 2400; *height = 1080; }
 }
+namespace downloads {
+void setGameForeground(bool) {}
+}
 int main() {
   Context context;
+  // This render/audio lifecycle fixture does not start the download service.
+  constexpr bool downloadService = false;
   struct BgaCache {
     unsigned invalidations = 0;
     void invalidate() { ++invalidations; }
