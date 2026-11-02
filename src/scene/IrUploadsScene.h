@@ -92,6 +92,7 @@ private:
   bool providerCanSubmit = false;
   bool reloadRequested = false;
   bool candidatesLoaded = false;
+  std::uint64_t observedLibraryRevision = 0;
   std::uint64_t observedScoreRevision = 0;
   std::uint64_t observedProfileCacheRevision = 0;
   std::string observedServerOrigin;

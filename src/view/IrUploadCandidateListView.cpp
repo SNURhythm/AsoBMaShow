@@ -108,6 +108,7 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
       ->setBorderWidth(1)
       ->setCornerRadius(app_theme::controlRadius());
   jacketImage_->setName("irUploadJacket");
+  jacketImage_->setContentMode(ImageView::ContentMode::Contain);
   jacketImage_->setWidth(78)->setHeight(78);
   jacketImage_->setCornerRadius(
       app_theme::childRadiusForInset(app_theme::controlRadius(), 1.0F, 2.0F));
@@ -182,7 +183,8 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
 
 void IrUploadCandidateListItemView::setCandidate(
     const ir::IrUploadCandidateSummary &candidate, bool selected, bool selectionLocked,
-    std::function<void(std::string)> selectionToggle) {
+    std::function<void(std::string)> selectionToggle,
+    const std::filesystem::path &artwork) {
   const auto &result = candidate.result;
   const auto &score = result.score;
   const std::string attemptId = result.attemptId;
@@ -235,7 +237,8 @@ void IrUploadCandidateListItemView::setCandidate(
     hasClearLamp_ = false;
   }
 
-  jacketImage_->freeImage();
+  if (artwork.empty()) jacketImage_->freeImage();
+  else jacketImage_->setImageAsync(fspath_to_path_t(artwork));
 
   const bool failed = candidate.state == ir::IrRecordState::Failed;
   statusText_->setLocalizedText(i18n::message(
@@ -272,18 +275,31 @@ IrUploadCandidateListView::IrUploadCandidateListView()
     }
     const bool selected =
         selectedAttemptIds_.contains(candidate.result.attemptId);
+    std::filesystem::path artwork;
+    const auto &hash = candidate.result.score.chartSha256;
+    if (resolveArtwork && !hash.empty()) {
+      auto found = artworkPaths_.find(hash);
+      if (found == artworkPaths_.end()) {
+        // Bound metadata memory while reusing lookups across selection rebinds
+        // and repeated plays of the same chart. Never decode image bytes here.
+        if (artworkPaths_.size() >= 128) artworkPaths_.clear();
+        found = artworkPaths_.emplace(hash, resolveArtwork(hash)).first;
+      }
+      artwork = found->second;
+    }
     itemView->setCandidate(candidate, selected, selectionLocked_,
                            [this](std::string attemptId) {
                              if (onSelectionToggle) {
                                onSelectionToggle(std::move(attemptId));
                              }
-                           });
+                           }, artwork);
   };
 }
 
 void IrUploadCandidateListView::setCandidates(
     const std::vector<ir::IrUploadCandidateSummary> &candidates,
     const std::unordered_set<std::string> &selectedAttemptIds) {
+  artworkPaths_.clear();
   selectedAttemptIds_ = selectedAttemptIds;
   setItems(candidates);
 }

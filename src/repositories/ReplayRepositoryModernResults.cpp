@@ -3372,6 +3372,7 @@ ir::IrUploadCandidateSummaryReadOutcome ReplayRepository::ListIrUploadCandidateS
     auto &score = summary.result.score;
     score.chartTitle = sqliteColumnString(row, 2);
     score.chartArtist = sqliteColumnString(row, 3);
+    score.chartSha256 = sqliteColumnString(row, 20);
     score.score = sqlite3_column_int(row, 4);
     score.maxScore = sqlite3_column_int(row, 5);
     score.maxCombo = sqlite3_column_int(row, 6);

@@ -73,7 +73,7 @@ struct IrUploadCandidateSummary {
     int resultId = 0;
     std::string attemptId;
     struct DisplayScore {
-      std::string chartTitle, chartArtist;
+      std::string chartTitle, chartArtist, chartSha256;
       int score = 0, maxScore = 0, maxCombo = 0, clearType = 0;
       float finalGauge = 0;
       ScoreProvenance provenance;

@@ -101,7 +101,7 @@ ir::IrUploadCandidateSummary candidate(int resultId, std::string title,
   value.result.score.provenance.player1.option = "RANDOM";
   value.result.keyMode = 7;
   value.result.adoptedGaugeType = GaugeType::Hard;
-  (void)jacket;
+  value.result.score.chartSha256 = jacket.empty() ? "" : std::string(64, 'a');
   value.state = state;
   return value;
 }
@@ -133,7 +133,15 @@ int main() {
     second.result.score.clearType = -1;
     second.result.keyMode = 14;
 
+    second.result.score.chartSha256.clear();
     IrUploadCandidateListView list;
+    int artworkLookups = 0;
+    std::filesystem::path artworkPath = "first.png";
+    list.resolveArtwork = [&](const std::string &hash) {
+      ++artworkLookups;
+      expect(hash == std::string(64, 'a'), "artwork uses chart identity from the summary");
+      return artworkPath;
+    };
     list.setSize(960, 140);
     list.applyYogaLayout();
     std::unordered_set<std::string> selected{first.result.attemptId};
@@ -156,8 +164,8 @@ int main() {
            "eligible candidate binds a selectable row");
     expect(text(row, "irUploadTitle")->getText() == "First Song",
            "row shows chart title");
-    expect(image(row, "irUploadJacket")->imagePath().empty(),
-           "snapshot-only row does not hydrate chart artwork");
+    expect(image(row, "irUploadJacket")->imagePath() == fspath_to_path_t("first.png"),
+           "visible IR row requests its library jacket asynchronously");
     expect(text(row, "irUploadArtist")->getText() == "First Artist" &&
                text(row, "irUploadAttempt")->getText().find("Attempt") !=
                    std::string::npos &&
@@ -191,6 +199,10 @@ int main() {
                rowSelections == 0,
            "checkbox toggles its attempt ID without selecting the row");
 
+    list.setSelectedAttemptIds({});
+    list.setSelectionLocked(true);
+    expect(artworkLookups == 1, "selection-only rebinds reuse resolved artwork metadata");
+    list.setSelectionLocked(false);
     list.setCandidates({second}, {});
     row = list.getViewByIndex(0);
     selection = button(row, "irUploadSelection");
@@ -198,7 +210,7 @@ int main() {
         selection->getContentView());
     expect(row == firstRow &&
                image(row, "irUploadJacket")->imagePath().empty(),
-           "rebind remains independent of chart artwork");
+           "recycled row without artwork clears the previous jacket");
     expect(!selection->hasStyledBackgroundStyle(),
            "unchecked IR upload checkbox remains unboxed");
     expect(sameColor(selectionContent->iconView()->currentColor(),
@@ -261,7 +273,10 @@ int main() {
     third.modernChartResultId = 99;
     third.result.attemptId = attemptId(99);
     third.failureReason.clear();
+    artworkPath = "updated.png";
     list.setCandidates({third}, {});
+    expect(image(list.getViewByIndex(0), "irUploadJacket")->imagePath() == fspath_to_path_t(artworkPath),
+           "candidate refresh invalidates resolved artwork after library changes");
     row = list.getViewByIndex(0);
     expect(text(row, "irUploadAttempt")->getText().find("Failed:") ==
                std::string::npos,
@@ -276,7 +291,7 @@ int main() {
     selection = button(row, "irUploadSelection");
     expect(row == firstRow &&
                image(row, "irUploadJacket")->imagePath().empty(),
-           "recycled row stays free of chart-library identity");
+           "recycled row without artwork stays clear");
     int binds = 0;
     const auto bindCandidate = list.onBind;
     list.onBind = [&](auto *view, const auto &item, int index, bool selected) {

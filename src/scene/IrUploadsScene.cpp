@@ -460,6 +460,18 @@ void IrUploadsScene::buildView() {
       ->setAlignItems(YGAlignStretch)
       ->setThemedBackgroundColor(main_menu_theme::surface);
   candidateList = new IrUploadCandidateListView();
+  auto artworkSession = std::make_shared<std::optional<ChartRepository::Session>>();
+  candidateList->resolveArtwork = [repository = &context.chartRepository, artworkSession](
+      const std::string &hash) -> std::filesystem::path {
+    if (!*artworkSession) *artworkSession = repository->OpenSession();
+    if (!*artworkSession) return {};
+    auto &session = **artworkSession;
+    for (const auto &meta : session.SelectChartMetaByHash(hash, {})) {
+      const auto artwork = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;
+      if (!artwork.empty()) return meta.Folder / artwork;
+    }
+    return {};
+  };
   candidateList->setFlex(1);
   candidateList->clearBackgroundColor();
   candidateList->setBorderWidth(0);
@@ -631,12 +643,15 @@ void IrUploadsScene::refreshUi() {
 
 void IrUploadsScene::observeRemoteRevisions() {
   bool changed = false;
+  const auto libraryRevision = context.chartRepository.GetLibraryRevision();
   const auto scoreRevision = context.scoreRepository.GetRevision();
   const auto profileRevision = context.profileCacheRevision.load();
   const auto origin = serverOrigin();
-  if (scoreRevision != observedScoreRevision ||
+  if (libraryRevision != observedLibraryRevision ||
+      scoreRevision != observedScoreRevision ||
       profileRevision != observedProfileCacheRevision ||
       origin != observedServerOrigin) {
+    observedLibraryRevision = libraryRevision;
     observedScoreRevision = scoreRevision;
     observedProfileCacheRevision = profileRevision;
     observedServerOrigin = origin;

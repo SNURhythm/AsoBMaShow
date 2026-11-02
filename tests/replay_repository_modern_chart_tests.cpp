@@ -975,7 +975,8 @@ void testIrSummaryLiveStateAndSelectedValidation() {
   const auto page = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac", {}, 1);
   assert(page.status == ir::IrUploadCandidateReadStatus::Loaded && page.candidates.size() == 1);
   assert(page.candidates[0].result.score.chartTitle == "Title" &&
-         page.candidates[0].result.score.score == 7);
+         page.candidates[0].result.score.score == 7 &&
+         page.candidates[0].result.score.chartSha256 == value.score.chartSha256);
   assert(repository.LoadIrUploadCandidate("tachi", "https://boku.tachi.ac", id, value.attemptId).candidates.size() == 1);
   assert(repository.LoadIrUploadCandidate("tachi", "https://boku.tachi.ac", id, attemptId(2)).candidates.empty());
   auto queued = draft(snapshot(value));
