@@ -3811,60 +3811,28 @@ LoadFolderClearDataByLongNoteMode(
             sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
       });
 
-  int currentCourseId = 0;
-  int currentCourseTableId = 0;
-  std::string currentCourseTableKey;
-  int currentCourseGroupTableId = 0;
-  std::string currentCourseGroupName;
-  std::string currentCourseGroupKey;
-  std::string currentCourseKey;
+  // A course lamp belongs to the course attempt, independently of the
+  // candidate charts' individual results. Parent folders aggregate courses.
   runQuery(
-      "SELECT dc.id, dc.table_id, dc.group_name, "
-      "COALESCE(NULLIF(dce.sha256, ''), cm.sha256, ''), "
-      "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
-      "COALESCE(cm.total_backspin_notes, 0) "
-      "FROM difficulty_courses dc "
-      "JOIN difficulty_course_entries dce ON dce.course_id = dc.id "
-      "LEFT JOIN chart_meta cm ON cm.path = " +
-          matchedChartPathSubquery("dce") + " "
-          "ORDER BY dc.table_id, dc.group_name, dc.id, dce.sort_order",
+      "SELECT id, table_id, group_name, COALESCE(course_key, '') "
+      "FROM difficulty_courses",
       [&](sqlite3_stmt *row) {
         const int courseId = sqlite3_column_int(row, 0);
         const int tableId = sqlite3_column_int(row, 1);
-        const std::string_view groupName = columnText(row, 2);
-        if (tableId != currentCourseTableId) {
-          currentCourseTableId = tableId;
-          currentCourseTableKey =
-              chart_library::folderKeyForCourseTable(tableId);
+        const std::string groupName(columnText(row, 2));
+        const std::string_view courseKey = columnText(row, 3);
+        const std::array<std::string, 4> folderKeys{
+            "courses", chart_library::folderKeyForCourseTable(tableId),
+            chart_library::folderKeyForCourseGroup(tableId, groupName),
+            chart_library::folderKeyForCourse(courseId)};
+        for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
+          const int clearRank = localCourseRanks.bestCourseRankFor(
+              courseKey, courseId, selectedLongNoteMode);
+          for (const auto &folderKey : folderKeys) {
+            aggregates[folderKey][static_cast<std::size_t>(selectedLongNoteMode)]
+                .addChart(clearRank);
+          }
         }
-        if (tableId != currentCourseGroupTableId ||
-            groupName != std::string_view(currentCourseGroupName)) {
-          currentCourseGroupTableId = tableId;
-          currentCourseGroupName = std::string(groupName);
-          currentCourseGroupKey = chart_library::folderKeyForCourseGroup(
-              tableId, currentCourseGroupName);
-        }
-        if (courseId != currentCourseId) {
-          currentCourseId = courseId;
-          currentCourseKey = chart_library::folderKeyForCourse(courseId);
-        }
-
-        addFolderChartForAllLongNoteModes(
-            aggregates, localCourseRanks, "courses", columnText(row, 3),
-            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6));
-        addFolderChartForAllLongNoteModes(
-            aggregates, localCourseRanks, currentCourseTableKey,
-            columnText(row, 3), sqlite3_column_int(row, 4),
-            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
-        addFolderChartForAllLongNoteModes(
-            aggregates, localCourseRanks, currentCourseGroupKey,
-            columnText(row, 3), sqlite3_column_int(row, 4),
-            sqlite3_column_int(row, 5), sqlite3_column_int(row, 6));
-        addFolderChartForAllLongNoteModes(
-            aggregates, localCourseRanks, currentCourseKey, columnText(row, 3),
-            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5),
-            sqlite3_column_int(row, 6));
       });
 
   for (const auto &[key, aggregateByMode] : aggregates) {
@@ -3878,22 +3846,6 @@ LoadFolderClearDataByLongNoteMode(
       }
     }
   }
-  runQuery(
-      "SELECT id, COALESCE(course_key, '') FROM difficulty_courses",
-      [&](sqlite3_stmt *row) {
-        const int courseId = sqlite3_column_int(row, 0);
-        const std::string_view courseKey = columnText(row, 1);
-        const std::string folderKey =
-            chart_library::folderKeyForCourse(courseId);
-        for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
-          const int clearRank = localCourseRanks.bestCourseRankFor(
-              courseKey, courseId, selectedLongNoteMode);
-          if (clearRank >= kClearTypeLightAssistedEasyClearRank) {
-            data.clearRanks[static_cast<std::size_t>(selectedLongNoteMode)]
-                           [folderKey] = clearRank;
-          }
-        }
-      });
 
   return data;
 }
