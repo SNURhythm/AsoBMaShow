@@ -880,6 +880,50 @@ void testIrSourceHistoryOverGlobalBoundReturnsKeysetPages() {
          reconciliation.nextBeforeModernChartResultId.has_value());
 }
 
+// Count SELECT compilation, not execution, across the repository's own connections.
+int irSelectPreparations = 0;
+bool countIrSelectPreparations = false;
+int countIrSelect(void *, int action, const char *, const char *, const char *, const char *) {
+  if (countIrSelectPreparations && action == SQLITE_SELECT) ++irSelectPreparations;
+  return SQLITE_OK;
+}
+int installIrSelectCounter(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(db, countIrSelect, nullptr);
+}
+
+void testIrPageReusesLookupStatements() {
+  TemporaryDirectory temporary;
+  assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(installIrSelectCounter)) == SQLITE_OK);
+  {
+    ReplayRepository repository(temporary.path / "replay.db");
+    assert(repository.EnsureSchema());
+    for (int i = 1; i <= 8; ++i) {
+      const auto value = result(i);
+      assert(repository.StageModernChartResult(value, snapshot(value), std::nullopt, {}).status ==
+             ModernChartStageStatus::Staged);
+    }
+    irSelectPreparations = 0;
+    countIrSelectPreparations = true;
+    const auto page = repository.ListIrUploadCandidates("tachi", "https://boku.tachi.ac");
+    countIrSelectPreparations = false;
+    assert(page.status == ir::IrUploadCandidateReadStatus::Loaded && page.candidates.empty());
+    std::cout << "IR page SELECT preparations: " << irSelectPreparations << std::endl;
+    assert(irSelectPreparations <= 6); // Page/schema reads + four reusable lookups.
+    const auto records = repository.ListIrUploadRecords("tachi", "https://boku.tachi.ac");
+    assert(records.records.size() == 8);
+    for (std::size_t i = 0; i < records.records.size(); ++i)
+      assert(records.records[i].attemptId == result(8 - static_cast<int>(i)).attemptId);
+    auto database = openDatabase(temporary.path / "replay.db");
+    exec(database.get(), "UPDATE ir_submission_snapshots SET payload_json='invalid' WHERE attempt_id='" +
+         result(4).attemptId + "'");
+    const auto afterCorruption = repository.ListIrUploadRecords("tachi", "https://boku.tachi.ac");
+    assert(afterCorruption.records.size() == 7 && afterCorruption.omittedRows == 1);
+    assert(afterCorruption.records.back().attemptId == result(1).attemptId);
+
+  }
+  sqlite3_cancel_auto_extension(reinterpret_cast<void (*)()>(installIrSelectCounter));
+}
+
 void testChartScopedIrRecordsIgnoreUnrelatedHistory() {
   TemporaryDirectory temporary;
   ReplayRepository repository(temporary.path / "replay.db");
@@ -1082,6 +1126,7 @@ void testExactRetryAttachesOnlyMissingReplayAtomically() {
 } // namespace
 
 int main() {
+  testIrPageReusesLookupStatements();
   testCurrentVersionRemoteLampUpgrade();
   testLegacyLightAssistMigrationPreservesAuthenticatedResults();
   testPendingGaugeEvidenceRecoveryAndCleanup();

@@ -1678,16 +1678,18 @@ void MusicPlaylistRepository::Impl::SelectLibraryTracks(
   representativeOrder += chartSourceOrderBy("rep");
   representativeOrder += ", rep.title COLLATE NOCASE, rep.path";
 
+  // A singleton already identifies its representative; avoid another indexed
+  // lookup, source-preference check and title/artwork sort for those folders.
   std::string query =
       "WITH folder_groups AS ("
       "SELECT cm.folder AS music_key, COUNT(*) AS music_chart_count, "
-      "(SELECT rep.path FROM ";
+      "CASE WHEN COUNT(*) = 1 THEN MIN(cm.path) ELSE (SELECT rep.path FROM ";
   query += kChartMetaTable;
   query += " rep WHERE rep.folder = cm.folder AND ";
   query += preferredRepresentative;
   query += " ORDER BY ";
   query += representativeOrder;
-  query += " LIMIT 1) AS representative_path FROM ";
+  query += " LIMIT 1) END AS representative_path FROM ";
   query += kChartMetaTable;
   query += " cm WHERE cm.folder IS NOT NULL AND cm.folder != '' AND ";
   query += preferredChart;

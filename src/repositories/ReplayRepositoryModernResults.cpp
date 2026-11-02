@@ -541,11 +541,18 @@ readReplayReference(sqlite3 *database, int resultId, bool &found,
 ReadModernResultOutcome readModernResult(sqlite3 *database,
                                          const char *predicate,
                                          std::string_view textValue,
-                                         int intValue) {
-  SqliteStatementHandle statement;
+                                         int intValue,
+                                         SqliteStatementHandle *cachedStatement = nullptr) {
+  SqliteStatementHandle localStatement;
+  auto &statement = cachedStatement ? *cachedStatement : localStatement;
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
   const std::string query = std::string("SELECT ") + kModernChartColumns +
                             " FROM modern_chart_results WHERE " + predicate;
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+  if (!statement.get() &&
+      prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return {.diagnostic = "could not prepare modern chart result read"};
   }
   const bool bound =
@@ -605,13 +612,20 @@ ReadRecordOutcome readRecord(sqlite3 *database, const char *predicate,
 std::optional<ir::IrSubmissionSnapshot> readSnapshot(sqlite3 *database,
                                                      std::string_view attemptId,
                                                      bool &found,
-                                                     std::string &diagnostic) {
+                                                     std::string &diagnostic,
+                                                     SqliteStatementHandle *cachedStatement = nullptr) {
   found = false;
-  SqliteStatementHandle statement;
+  SqliteStatementHandle localStatement;
+  auto &statement = cachedStatement ? *cachedStatement : localStatement;
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
   constexpr const char *query =
       "SELECT schema_version,payload_json,fingerprint FROM "
       "ir_submission_snapshots WHERE attempt_id=?";
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+  if ((!statement.get() &&
+       prepareSqliteStatement(database, query, statement) != SQLITE_OK) ||
       !bindText(statement.get(), 1, attemptId)) {
     diagnostic = "could not prepare modern IR snapshot read";
     return std::nullopt;
@@ -670,15 +684,22 @@ struct OutboxLookupOutcome {
 ReceiptLookupOutcome readScopedReceipt(sqlite3 *database,
                                        std::string_view providerId,
                                        std::string_view serverOrigin,
-                                       int modernResultId) {
+                                       int modernResultId,
+                                       SqliteStatementHandle *cachedStatement = nullptr) {
   using replay_repository_detail::decodeIrSubmissionReceiptRow;
   using replay_repository_detail::kIrSubmissionReceiptColumns;
-  SqliteStatementHandle statement;
+  SqliteStatementHandle localStatement;
+  auto &statement = cachedStatement ? *cachedStatement : localStatement;
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
   const std::string query =
       std::string("SELECT ") + kIrSubmissionReceiptColumns +
       " FROM ir_submission_receipts WHERE provider_id=? AND "
       "server_origin=? AND modern_chart_result_id=?";
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+  if ((!statement.get() &&
+       prepareSqliteStatement(database, query, statement) != SQLITE_OK) ||
       !bindText(statement.get(), 1, providerId) ||
       !bindText(statement.get(), 2, serverOrigin) ||
       sqlite3_bind_int(statement.get(), 3, modernResultId) != SQLITE_OK) {
@@ -708,14 +729,21 @@ ReceiptLookupOutcome readScopedReceipt(sqlite3 *database,
 
 OutboxLookupOutcome readScopedOutbox(sqlite3 *database,
                                      std::string_view providerId,
-                                     std::string_view attemptId) {
+                                     std::string_view attemptId,
+                                     SqliteStatementHandle *cachedStatement = nullptr) {
   using replay_repository_detail::decodeIrOutboxRow;
   using replay_repository_detail::kIrOutboxColumns;
-  SqliteStatementHandle statement;
+  SqliteStatementHandle localStatement;
+  auto &statement = cachedStatement ? *cachedStatement : localStatement;
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
   const std::string query = std::string("SELECT ") + kIrOutboxColumns +
                             " FROM ir_outbox WHERE provider_id=? AND "
                             "attempt_id=?";
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+  if ((!statement.get() &&
+       prepareSqliteStatement(database, query, statement) != SQLITE_OK) ||
       !bindText(statement.get(), 1, providerId) ||
       !bindText(statement.get(), 2, attemptId)) {
     return {.status = OptionalIrRowStatus::StorageFailure,
@@ -831,8 +859,12 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
     outcome.nextBeforeModernChartResultId = resultIds.back();
   }
   outcome.sources.reserve(resultIds.size());
+  // Keep compilation bounded per page; every lookup resets on all return paths.
+  // These statements never outlive this connection/transaction.
+  SqliteStatementHandle resultStatement, snapshotStatement, receiptStatement,
+      outboxStatement;
   for (const int resultId : resultIds) {
-    auto loaded = readModernResult(database, "id=?", {}, resultId);
+    auto loaded = readModernResult(database, "id=?", {}, resultId, &resultStatement);
     if (loaded.status == ReadRecordStatus::StorageFailure) {
       return {.status = IrSourceReadStatus::StorageFailure,
               .diagnostic = std::move(loaded.diagnostic)};
@@ -845,7 +877,7 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
     bool snapshotFound = false;
     std::string diagnostic;
     auto snapshot = readSnapshot(database, loaded.result->attemptId,
-                                 snapshotFound, diagnostic);
+                                 snapshotFound, diagnostic, &snapshotStatement);
     if (!snapshotFound && !diagnostic.empty()) {
       return {.status = IrSourceReadStatus::StorageFailure,
               .diagnostic = std::move(diagnostic)};
@@ -856,9 +888,9 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
     }
 
     auto receipt = readScopedReceipt(database, providerId, serverOrigin,
-                                     loaded.result->resultId);
-    auto outbox =
-        readScopedOutbox(database, providerId, loaded.result->attemptId);
+                                     loaded.result->resultId, &receiptStatement);
+    auto outbox = readScopedOutbox(database, providerId, loaded.result->attemptId,
+                                  &outboxStatement);
     if (receipt.status == OptionalIrRowStatus::StorageFailure ||
         outbox.status == OptionalIrRowStatus::StorageFailure) {
       return {.status = IrSourceReadStatus::StorageFailure,
