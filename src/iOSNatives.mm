@@ -5305,11 +5305,19 @@ bool SaveVideoToIOSPhotos(const std::string &filePath,
 }
 
 // Main-thread, non-interactive notice kept above the share sheet.
+static __weak UIView *gIOSResultShareNotice = nil;
+
+void HideIOSResultShareNotice() {
+  platform::onMain([] {
+    [gIOSResultShareNotice removeFromSuperview];
+    gIOSResultShareNotice = nil;
+  });
+}
+
 static UIView *ShowIOSGuidedAccessShareNotice(UIWindow *window) {
-  static __weak UIView *previousNotice = nil;
-  [previousNotice removeFromSuperview];
+  HideIOSResultShareNotice();
   UIView *notice = [[UIView alloc] init];
-  previousNotice = notice;
+  gIOSResultShareNotice = notice;
   notice.translatesAutoresizingMaskIntoConstraints = NO;
   notice.userInteractionEnabled = NO;
   notice.backgroundColor = UIColor.systemYellowColor;
@@ -5338,10 +5346,13 @@ static UIView *ShowIOSGuidedAccessShareNotice(UIWindow *window) {
     [label.trailingAnchor constraintEqualToAnchor:notice.trailingAnchor constant:-16]
   ]];
   UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, label.text);
+  __weak UIView *weakNotice = notice;
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC),
                  dispatch_get_main_queue(), ^{
-    [UIView animateWithDuration:0.2 animations:^{ notice.alpha = 0; }
-                     completion:^(BOOL finished) { [notice removeFromSuperview]; }];
+    UIView *currentNotice = weakNotice;
+    if (currentNotice.superview == nil) return;
+    [UIView animateWithDuration:0.2 animations:^{ currentNotice.alpha = 0; }
+                     completion:^(BOOL finished) { [currentNotice removeFromSuperview]; }];
   });
   return notice;
 }

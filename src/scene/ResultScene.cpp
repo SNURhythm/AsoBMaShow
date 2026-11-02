@@ -23,6 +23,9 @@
 #include "../replay/ReplayOption.h"
 #include "../ResultImageExporter.h"
 #include "../ResultShareText.h"
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#include "../iOSNatives.hpp"
+#endif
 #include "../ResultContracts.h"
 #include "../ResultPresentationUtils.h"
 #include "../ScoreHistoryTime.h"
@@ -5018,6 +5021,9 @@ void ResultScene::resizeResultLayout() {
 }
 
 void ResultScene::cleanupScene() {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  HideIOSResultShareNotice();
+#endif
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   resultSkinSession.reset();
   resultSkinFadeoutStartedMillis.reset();
