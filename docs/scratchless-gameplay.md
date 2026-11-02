@@ -20,8 +20,8 @@ The controls are available with Built-in, Follow, and imported skins. Live play,
 replay viewing, and replay video exports use the same policy. Layout previews
 still allow editing either mode directly.
 
-For all enabled modes, normal scratches, long scratches, invisible scratch
-keysounds, and scratch mines prevent this switch.
+For all enabled modes, normal scratches, long scratches, and scratch mines
+prevent this switch. Invisible scratch keysounds do not prevent scratchless mode.
 Play modifiers are checked against the resulting chart, too.
 
 Each scratchless skin dropdown offers:
@@ -53,4 +53,4 @@ Chart identities, judgements, scores, replay formats, and IR protocol key
 modes remain canonical. The chart list labels single-play charts with no counted
 scratch or backspin notes `5K` / `7K`; charts with either are labeled `5K1S` / `7K1S`. This
 metadata-only label does not change gameplay skin selection, which also checks
-invisible scratch keysounds and scratch mines in the loaded chart.
+playable scratch notes and scratch mines in the loaded chart.
