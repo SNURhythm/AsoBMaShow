@@ -657,6 +657,15 @@ public:
       std::string_view providerId, std::string_view serverOrigin,
       std::string_view chartSha256,
       std::size_t limit = kDefaultModernChartHistoryRows);
+  ir::IrUploadCandidateSummaryReadOutcome ListIrUploadCandidateSummaries(
+      std::string_view providerId, std::string_view serverOrigin,
+      std::optional<int> beforeModernChartResultId = std::nullopt,
+      std::size_t limit = ir::kDefaultIrUploadSourcePageRows);
+  // Reloads and authenticates exactly the selected identity, including live
+  // receipt/outbox state. Never trusts display cache eligibility.
+  ir::IrUploadCandidateReadOutcome LoadIrUploadCandidate(
+      std::string_view providerId, std::string_view serverOrigin,
+      int resultId, std::string_view attemptId);
   ir::IrUploadCandidateReadOutcome
   ListIrUploadCandidates(std::string_view providerId,
                          std::string_view serverOrigin,

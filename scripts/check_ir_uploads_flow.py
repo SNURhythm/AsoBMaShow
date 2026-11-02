@@ -136,10 +136,10 @@ require(
     "indirect IR Settings visits notify the retained Song Select scene",
 )
 require(
-    "ListIrUploadCandidates" in uploads_scene
+    "ListIrUploadCandidateSummaries" in uploads_scene
     and "candidateLoadTask.start" in uploads_scene
     and "nextBeforeModernChartResultId" in (root / "src/scene/IrCandidateLoadTask.cpp").read_text(),
-    "the page reads snapshot-backed modern candidates through the paged "
+    "the page reads derived candidate summaries through the paged "
     "repository boundary",
 )
 reject(
@@ -160,7 +160,7 @@ reject(
     "IR Uploads must not replace proof analysis with a generic rejection",
 )
 
-verify_position = uploads_scene.find("submissionForIrUploadCandidate")
+verify_position = uploads_scene.find("LoadIrUploadCandidate")
 batch_position = uploads_scene.find("executeIrSavedResultBatchUpload", verify_position)
 enqueue_position = uploads_scene.find("enqueueManualBatch", batch_position)
 require(
@@ -168,7 +168,7 @@ require(
     and batch_position > verify_position
     and enqueue_position > batch_position
     and uploads_scene.count("enqueueManualBatch") == 1,
-    "stored result agreement must precede exactly one batch enqueue",
+    "authoritative selected-result reload must precede exactly one batch enqueue",
 )
 reject(
     "LoadReplayResult" in uploads_scene

@@ -15,7 +15,7 @@ class IrUploadCandidateListItemView final : public View {
 public:
   IrUploadCandidateListItemView();
 
-  void setCandidate(const ir::IrUploadCandidate &candidate, bool selected,
+  void setCandidate(const ir::IrUploadCandidateSummary &candidate, bool selected,
                     bool selectionLocked,
                     std::function<void(std::string)> selectionToggle);
   [[nodiscard]] bool hasClearLamp() const noexcept { return hasClearLamp_; }
@@ -40,11 +40,11 @@ private:
   bool hasClearLamp_ = false;
 };
 
-class IrUploadCandidateListView : public RecyclerView<ir::IrUploadCandidate> {
+class IrUploadCandidateListView : public RecyclerView<ir::IrUploadCandidateSummary> {
 public:
   IrUploadCandidateListView();
 
-  void setCandidates(const std::vector<ir::IrUploadCandidate> &candidates,
+  void setCandidates(const std::vector<ir::IrUploadCandidateSummary> &candidates,
                      const std::unordered_set<std::string> &selectedAttemptIds);
   void setSelectedAttemptIds(
       const std::unordered_set<std::string> &selectedAttemptIds);

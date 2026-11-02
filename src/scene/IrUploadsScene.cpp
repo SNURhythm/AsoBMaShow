@@ -467,7 +467,7 @@ void IrUploadsScene::buildView() {
     controller.toggle(attemptId);
     refreshUi();
   };
-  candidateList->onSelected = [this](const ir::IrUploadCandidate &candidate,
+  candidateList->onSelected = [this](const ir::IrUploadCandidateSummary &candidate,
                                      int) {
     controller.toggle(candidate.result.attemptId);
     refreshUi();
@@ -534,7 +534,7 @@ void IrUploadsScene::reloadCandidates() {
   auto *repository = &context.replayRepository;
   try {
     candidateLoadTask.start([repository, origin](std::optional<int> before, std::size_t limit) {
-      return repository->ListIrUploadCandidates(ir::kTachiProviderId, origin, before, limit);
+      return repository->ListIrUploadCandidateSummaries(ir::kTachiProviderId, origin, before, limit);
     });
   } catch (...) {
     loadError = i18n::message("ir.upload.saved_results_failed_loaded.message");
@@ -692,12 +692,17 @@ void IrUploadsScene::startUpload() {
   refreshUi();
 
   ir_uploads::PreparationDependencies dependencies;
-  dependencies.verify = [](const ir::IrUploadCandidate &candidate,
-                           const std::stop_token &) {
-    std::string diagnostic;
-    auto submission = ir::submissionForIrUploadCandidate(candidate, diagnostic);
+  dependencies.verify = [repository = &context.replayRepository, origin = serverOrigin()](
+                           const ir::IrUploadCandidateSummary &candidate,
+                           const std::stop_token &stop) {
+    if (stop.stop_requested()) return ir_uploads::VerificationOutcome{};
+    auto loaded = repository->LoadIrUploadCandidate(ir::kTachiProviderId, origin,
+        candidate.modernChartResultId, candidate.attemptId());
+    if (loaded.status != ir::IrUploadCandidateReadStatus::Loaded || loaded.candidates.size() != 1)
+      return ir_uploads::VerificationOutcome{.diagnostic = loaded.diagnostic};
+    // The repository has authenticated the current result/snapshot agreement.
     return ir_uploads::VerificationOutcome{
-        .submission = std::move(submission), .diagnostic = std::move(diagnostic)};
+        .submission = std::move(loaded.candidates.front().snapshot.submission)};
   };
   dependencies.enqueueBatch =
       [&application = context](std::span<const ir::IrSubmission> submissions) {

@@ -83,10 +83,10 @@ std::string attemptId(int suffix) {
   return value;
 }
 
-ir::IrUploadCandidate candidate(int resultId, std::string title,
+ir::IrUploadCandidateSummary candidate(int resultId, std::string title,
                                 std::string artist, std::string jacket,
                                 ir::IrRecordState state) {
-  ir::IrUploadCandidate value;
+  ir::IrUploadCandidateSummary value;
   value.modernChartResultId = resultId;
   value.result.resultId = resultId;
   value.result.attemptId = attemptId(resultId);
@@ -144,7 +144,7 @@ int main() {
       ++toggles;
       toggledAttemptId = std::move(attemptId);
     };
-    list.onSelected = [&](const ir::IrUploadCandidate &, int) {
+    list.onSelected = [&](const ir::IrUploadCandidateSummary &, int) {
       ++rowSelections;
     };
     list.setCandidates({first}, selected);

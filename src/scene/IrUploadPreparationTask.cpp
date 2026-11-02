@@ -6,7 +6,7 @@ namespace ir_uploads {
 
 PreparationTask::~PreparationTask() { stopAndWait(); }
 
-bool PreparationTask::start(std::vector<ir::IrUploadCandidate> candidates,
+bool PreparationTask::start(std::vector<ir::IrUploadCandidateSummary> candidates,
                             PreparationDependencies dependencies) {
   if (worker_.joinable()) {
     return false;

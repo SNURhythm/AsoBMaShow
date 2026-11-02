@@ -24,7 +24,7 @@ public:
 
   // Rejects work or completion still owned by this task. The progress callback
   // is supplied by this owner; callers provide verification/enqueue dependencies.
-  bool start(std::vector<ir::IrUploadCandidate> candidates,
+  bool start(std::vector<ir::IrUploadCandidateSummary> candidates,
              PreparationDependencies dependencies);
   bool hasWorker() const noexcept;
   // Consuming completion joins before returning it to the scene controller.

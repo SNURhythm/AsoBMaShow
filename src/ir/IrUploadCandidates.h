@@ -65,6 +65,27 @@ struct IrUploadCandidate {
   }
 };
 
+// Display-only metadata. This type cannot be passed to submission validation;
+// selected rows must be reloaded from authoritative storage before upload.
+struct IrUploadCandidateSummary {
+  int modernChartResultId = 0;
+  struct DisplayResult {
+    int resultId = 0;
+    std::string attemptId;
+    struct DisplayScore {
+      std::string chartTitle, chartArtist;
+      int score = 0, maxScore = 0, maxCombo = 0, clearType = 0;
+      float finalGauge = 0;
+      ScoreProvenance provenance;
+    } score;
+    int keyMode = 0;
+    GaugeType adoptedGaugeType = GaugeType::Normal;
+  } result;
+  IrRecordState state = IrRecordState::Hidden;
+  std::string failureReason;
+  [[nodiscard]] std::string_view attemptId() const noexcept { return result.attemptId; }
+};
+
 struct IrUploadCandidateProjection {
   std::vector<IrUploadCandidate> candidates;
   std::size_t omittedRows = 0;
@@ -84,6 +105,14 @@ struct IrUploadCandidateReadOutcome {
   std::vector<IrUploadCandidate> candidates;
   std::size_t omittedRows = 0;
   // Exclusive keyset cursor for the next older page, when one exists.
+  std::optional<int> nextBeforeModernChartResultId;
+  std::string diagnostic;
+};
+
+struct IrUploadCandidateSummaryReadOutcome {
+  IrUploadCandidateReadStatus status = IrUploadCandidateReadStatus::StorageFailure;
+  std::vector<IrUploadCandidateSummary> candidates;
+  std::size_t omittedRows = 0;
   std::optional<int> nextBeforeModernChartResultId;
   std::string diagnostic;
 };

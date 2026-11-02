@@ -18,7 +18,7 @@ void testBackgroundCandidatesAndStaleScope() {
   application.replayRepository.reader = [&](auto, std::size_t limit) {
     assert(std::this_thread::get_id() != uiThread && limit <= 64);
     gate.block();
-    return ir::IrUploadCandidateReadOutcome{.status = ir::IrUploadCandidateReadStatus::Loaded,
+    return ir::IrUploadCandidateSummaryReadOutcome{.status = ir::IrUploadCandidateReadStatus::Loaded,
         .candidates = {candidate(7)}};
   };
   scene.reloadCandidates();
@@ -29,7 +29,7 @@ void testBackgroundCandidatesAndStaleScope() {
   finishCandidateLoad(scene);
   assert(scene.controller.candidates().empty());
   application.replayRepository.reader = [](auto before, auto) {
-    return ir::IrUploadCandidateReadOutcome{.status = ir::IrUploadCandidateReadStatus::Loaded,
+    return ir::IrUploadCandidateSummaryReadOutcome{.status = ir::IrUploadCandidateReadStatus::Loaded,
         .candidates = {candidate(before ? 6 : 8)},
         .nextBeforeModernChartResultId = before ? std::nullopt : std::optional(8)};
   };
@@ -39,7 +39,7 @@ void testBackgroundCandidatesAndStaleScope() {
   assert(list.candidates.front().attemptId() == attemptId(8));
   assert(!scene.profileSwitchBlocker());
   // A failing refresh keeps the published controller state intact.
-  application.replayRepository.reader = [](auto, auto) -> ir::IrUploadCandidateReadOutcome {
+  application.replayRepository.reader = [](auto, auto) -> ir::IrUploadCandidateSummaryReadOutcome {
     throw std::runtime_error("read failed");
   };
   scene.reloadCandidates();
@@ -57,7 +57,7 @@ void testCandidateCancellationAndPagination() {
   application.replayRepository.reader = [&](auto, auto) {
     ++reads;
     gate.block();
-    return ir::IrUploadCandidateReadOutcome{.status = ir::IrUploadCandidateReadStatus::Loaded,
+    return ir::IrUploadCandidateSummaryReadOutcome{.status = ir::IrUploadCandidateReadStatus::Loaded,
         .nextBeforeModernChartResultId = 9};
   };
   scene.reloadCandidates();
@@ -67,7 +67,7 @@ void testCandidateCancellationAndPagination() {
   scene.onProfileWillChange();
   assert(reads == 1 && !scene.candidateLoadTask.hasWorker() && !scene.candidateLoadTask.takeResult());
   application.replayRepository.reader = [](auto, auto) {
-    return ir::IrUploadCandidateReadOutcome{.status = ir::IrUploadCandidateReadStatus::Loaded,
+    return ir::IrUploadCandidateSummaryReadOutcome{.status = ir::IrUploadCandidateReadStatus::Loaded,
         .nextBeforeModernChartResultId = 9};
   };
   scene.reloadCandidates();

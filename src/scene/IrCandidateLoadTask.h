@@ -8,10 +8,10 @@ namespace ir_uploads {
 class CandidateLoadTask final {
 public:
   struct Result {
-    std::vector<ir::IrUploadCandidate> candidates;
+    std::vector<ir::IrUploadCandidateSummary> candidates;
     i18n::Text error, diagnostic;
   };
-  using Reader = std::function<ir::IrUploadCandidateReadOutcome(std::optional<int>, std::size_t)>;
+  using Reader = std::function<ir::IrUploadCandidateSummaryReadOutcome(std::optional<int>, std::size_t)>;
   ~CandidateLoadTask();
   bool start(Reader reader);
   bool hasWorker() const noexcept { return worker_.joinable(); }

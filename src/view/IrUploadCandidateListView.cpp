@@ -37,7 +37,7 @@ std::string keyModeDescription(int keyMode) {
 }
 
 i18n::Text attemptDetail(
-    const result_persistence::ModernChartResult &result) {
+    const ir::IrUploadCandidateSummary::DisplayResult &result) {
   auto detail = i18n::message("ir.upload.candidate.detail",
       {{"attempt", result.attemptId.substr(0, 8)},
        {"combo", std::to_string(result.score.maxCombo)},
@@ -181,7 +181,7 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
 }
 
 void IrUploadCandidateListItemView::setCandidate(
-    const ir::IrUploadCandidate &candidate, bool selected, bool selectionLocked,
+    const ir::IrUploadCandidateSummary &candidate, bool selected, bool selectionLocked,
     std::function<void(std::string)> selectionToggle) {
   const auto &result = candidate.result;
   const auto &score = result.score;
@@ -255,16 +255,16 @@ void IrUploadCandidateListItemView::setCandidate(
 }
 
 IrUploadCandidateListView::IrUploadCandidateListView()
-    : RecyclerView<ir::IrUploadCandidate>(
-          [](const ir::IrUploadCandidate &left,
-             const ir::IrUploadCandidate &right) {
+    : RecyclerView<ir::IrUploadCandidateSummary>(
+          [](const ir::IrUploadCandidateSummary &left,
+             const ir::IrUploadCandidateSummary &right) {
             return left.attemptId() == right.attemptId();
           }) {
   itemHeight = 108;
-  onCreateView = [](const ir::IrUploadCandidate &) {
+  onCreateView = [](const ir::IrUploadCandidateSummary &) {
     return new IrUploadCandidateListItemView();
   };
-  onBind = [this](View *view, const ir::IrUploadCandidate &candidate, int,
+  onBind = [this](View *view, const ir::IrUploadCandidateSummary &candidate, int,
                   bool) {
     auto *itemView = dynamic_cast<IrUploadCandidateListItemView *>(view);
     if (itemView == nullptr) {
@@ -282,7 +282,7 @@ IrUploadCandidateListView::IrUploadCandidateListView()
 }
 
 void IrUploadCandidateListView::setCandidates(
-    const std::vector<ir::IrUploadCandidate> &candidates,
+    const std::vector<ir::IrUploadCandidateSummary> &candidates,
     const std::unordered_set<std::string> &selectedAttemptIds) {
   selectedAttemptIds_ = selectedAttemptIds;
   setItems(candidates);

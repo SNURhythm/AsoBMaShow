@@ -7,12 +7,7 @@
 
 class Scene {};
 
-namespace ir {
-std::optional<IrSubmission> submissionForIrUploadCandidate(
-    const IrUploadCandidate &value, std::string &) noexcept {
-  return submissionFor(value);
-}
-} // namespace ir
+
 
 namespace {
 struct PreparationContext;
@@ -54,8 +49,21 @@ struct PreparationService {
   }
 };
 struct CandidateRepository {
+  bool rejectSelected = false;
+  int selectedReads = 0;
+  ir::IrUploadCandidateReadOutcome LoadIrUploadCandidate(std::string_view, std::string_view,
+      int id, std::string_view attempt) {
+    ++selectedReads;
+    if (rejectSelected) return {.status = ir::IrUploadCandidateReadStatus::IntegrityConflict,
+                               .diagnostic = "result changed"};
+    auto summary = candidate(id);
+    assert(summary.attemptId() == attempt);
+    ir::IrUploadCandidate full;
+    full.snapshot.submission = submissionFor(summary);
+    return {.status = ir::IrUploadCandidateReadStatus::Loaded, .candidates = {full}};
+  }
   ir_uploads::CandidateLoadTask::Reader reader;
-  ir::IrUploadCandidateReadOutcome ListIrUploadCandidates(std::string_view, const std::string &,
+  ir::IrUploadCandidateSummaryReadOutcome ListIrUploadCandidateSummaries(std::string_view, const std::string &,
       std::optional<int> before, std::size_t limit) { return reader(before, limit); }
 };
 struct PreparationContext {
@@ -66,8 +74,8 @@ struct PreparationContext {
 };
 struct PreparationCandidateList {
   float scrollOffset = 25;
-  std::vector<ir::IrUploadCandidate> candidates;
-  void setCandidates(const std::vector<ir::IrUploadCandidate> &values,
+  std::vector<ir::IrUploadCandidateSummary> candidates;
+  void setCandidates(const std::vector<ir::IrUploadCandidateSummary> &values,
                      const std::unordered_set<std::string> &) {
     candidates = values;
   }
@@ -187,6 +195,26 @@ void testScenePreparationLaunchGatesAndApplicationThreadCompletion() {
   scene.applyPreparationUpdates();
   scene.stopPreparation();
   assert(scene.refreshes == refreshes);
+}
+
+void testSceneReloadsSelectionBeforeEnqueue() {
+  PreparationContext application;
+  IrUploadsScene scene(application);
+  scene.controller.replaceCandidates({candidate(23)});
+  scene.controller.selectAll();
+  scene.providerCanSubmit = true;
+  application.replayRepository.rejectSelected = true;
+  scene.startUpload();
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (scene.preparationTask.hasWorker() && std::chrono::steady_clock::now() < deadline) {
+    scene.applyPreparationUpdates();
+    std::this_thread::yield();
+  }
+  assert(!scene.preparationTask.hasWorker());
+  assert(application.replayRepository.selectedReads == 1);
+  assert(application.irDrivers.drafts == 0 && application.irSubmissionService->batches == 0);
+  assert(scene.controller.selectedCount() == 1);
+  assert(scene.controller.candidates()[0].failureReason == "result changed");
 }
 
 void testSceneStopRetainsCancelledSelectionUntilCompletion() {
