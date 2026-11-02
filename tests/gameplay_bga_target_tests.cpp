@@ -2060,6 +2060,54 @@ void testFullscreenBgaReuseOnMetal() {
             "backward seek cannot collide with an earlier decoded frame identity");
     require(present(frame, false).pixels == firstPixels,
             "backward seek recomposes the original decoded pixels");
+
+    // A frozen export clock can seek between sparse video frames. The preceding
+    // frame remains the correct image even when it is over 100 ms old.
+    jukebox.unloadVisuals();
+    fixture.timestamps = {0, 10, 20};
+    storage_test::makeVideo(path, fixture);
+    bms_parser::Chart sparseChart;
+    sparseChart.Meta.Folder = directory.root;
+    sparseChart.ReferencedBmpTable.emplace(1, path.filename().string());
+    appendBgaTimeline(sparseChart, 0, 1, -1);
+    jukebox.loadVisuals(sparseChart, cancelled);
+    require(awaitInitialVideo(250'000) == firstPixels,
+            "export seeking inside a sparse frame interval retains the preceding image");
+
+    jukebox.unloadVisuals();
+    fixture.timestamps = {0};
+    storage_test::makeVideo(path, fixture);
+    jukebox.loadVisuals(sparseChart, cancelled);
+    require(awaitInitialVideo(250'000) == firstPixels,
+            "export seeking past the final timestamp retains the last image at EOF");
+
+    if (!native) {
+      // Elementary MPEG synthesizes a positive first timestamp after seeking
+      // to zero, even though playback/export needs an image at time zero.
+      jukebox.unloadVisuals();
+      fixture.elementaryMpeg = true;
+      fixture.lossless = false;
+      fixture.rate = {30, 1};
+      fixture.timestamps = {0, 1, 2, 3, 4, 5};
+      storage_test::makeVideo(path, fixture);
+      jukebox.loadVisuals(sparseChart, cancelled);
+      const auto mpegFirstPixels = awaitInitialVideo(0);
+      frame = prepare(0);
+      const auto mpegFirstIdentity = frame.base->contentIdentity;
+      require(present(frame, false).pixels == mpegFirstPixels &&
+                  present(prepare(20'000), true).pixels == mpegFirstPixels,
+              "elementary MPEG keeps its first image until the next timestamp");
+      frame = awaitVideo(100'000, mpegFirstIdentity);
+      require(present(frame, false).pixels != mpegFirstPixels,
+              "elementary MPEG advances after its initial export image");
+      jukebox.seekVisualsToSongTime(0);
+      require(awaitInitialVideo(0) == mpegFirstPixels,
+              "elementary MPEG seeks back to its first image at a frozen clock");
+      jukebox.unloadVisuals();
+      jukebox.loadVisuals(sparseChart, cancelled);
+      require(awaitInitialVideo(3) == mpegFirstPixels,
+              "initial image is due even when the seek falls between stream clock ticks");
+    }
   }
   // Recovery must restore reuse despite the excessive historical demand peak.
   image = makeImage(false);

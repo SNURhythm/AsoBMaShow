@@ -17,6 +17,7 @@ struct VideoFixture {
   AVRational rate{25, 1};
   std::vector<std::int64_t> timestamps;
   bool h264 = false, audio = false;
+  bool elementaryMpeg = false;
   bool alpha = false, hdr = false, interlaced = false;
   AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
   AVColorSpace colorSpace = AVCOL_SPC_UNSPECIFIED;
@@ -49,7 +50,7 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   if (fixture.timestamps.empty()) for (int i = 0; i < 30; ++i) fixture.timestamps.push_back(i);
   // NUT preserves the codec's exact rational timestamps, including deliberate
   // VFR gaps, without a millisecond container clock rounding the fixture.
-  const char *container = fixture.asf ? "asf" : fixture.millisecondContainer ? "matroska" :
+  const char *container = fixture.elementaryMpeg ? "mpeg1video" : fixture.asf ? "asf" : fixture.millisecondContainer ? "matroska" :
                           fixture.rotation || fixture.scaledDisplayMatrix || fixture.captions || fixture.faststart ? "mp4" : "nut";
   require(avformat_alloc_output_context2(&resources.mux, nullptr, container, path.string().c_str()) >= 0,
           "create fixture container");
