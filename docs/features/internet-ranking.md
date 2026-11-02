@@ -18,6 +18,7 @@ remote records local replay or persistence actions.
 - `IrUploadsScene.*`, `IrUploadsController.*`, ranking views, and result scenes
   expose the flows. `IrUploadPreparationTask.*` owns the preparation worker,
   durable-enqueue gate, and typed progress/completion handoff.
+  `IrCandidateLoadTask.*` reads candidate history off the application thread.
 
 ## Boundaries and invariants
 
@@ -33,6 +34,17 @@ stopped preparation retains completion for application-thread consumption.
 Consuming completion joins before updating the controller. Scene reset discards
 queued updates explicitly. The scene supplies external application dependencies,
 while the preparation function retains verification and partial-failure policy.
+
+Candidate loading uses bounded keyset pages and publishes data on the application
+thread. Navigation can continue while it loads; upload/selection controls wait
+for a complete result. Revisions observed during a scan discard its output and
+trigger a fresh scan. Profile changes and cleanup join the reader before its
+repository can be replaced; storage maintenance also observes this work.
+
+IR validation reuses a single bounded, thread-local cache of successfully
+validated provenance JSON. Cache equality uses exact serialized bytes, not
+semantic object equality. Fingerprints, canonical snapshot bytes, and agreement
+checks remain authoritative.
 
 ## Verification
 

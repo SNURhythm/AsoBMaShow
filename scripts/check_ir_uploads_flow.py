@@ -137,7 +137,8 @@ require(
 )
 require(
     "ListIrUploadCandidates" in uploads_scene
-    and "nextBeforeModernChartResultId" in uploads_scene,
+    and "candidateLoadTask.start" in uploads_scene
+    and "nextBeforeModernChartResultId" in (root / "src/scene/IrCandidateLoadTask.cpp").read_text(),
     "the page reads snapshot-backed modern candidates through the paged "
     "repository boundary",
 )
@@ -151,7 +152,7 @@ reject(
     "the page must not queue selections one by one",
 )
 require(
-    "loadDiagnostic = page.diagnostic" in uploads_scene,
+    "loadDiagnostic = std::move(result->diagnostic)" in uploads_scene,
     "IR Uploads forwards durable result/snapshot agreement diagnostics",
 )
 reject(

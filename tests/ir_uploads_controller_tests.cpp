@@ -546,8 +546,11 @@ void testProviderAvailabilityRejectsAuthenticatedHttpUploads() {
 
 #include "ir_upload_preparation_task_tests.h"
 #include "ir_upload_scene_fixture.h"
+#include "ir_candidate_load_task_tests.h"
 
 int main() {
+  testBackgroundCandidatesAndStaleScope();
+  testCandidateCancellationAndPagination();
   testPreparationStatusFollowsLanguageChanges();
   testSceneSettingsRouteRetainsEmbeddedShell();
   testScenePreparationLaunchGatesAndApplicationThreadCompletion();

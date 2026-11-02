@@ -3,6 +3,7 @@
 // effects; the fixture never submits scores or writes a real outbox.
 #include "ir/IrProfileSettings.h"
 #include "scene/SceneReturnTarget.h"
+#include "scene/IrCandidateLoadTask.h"
 
 class Scene {};
 
@@ -52,7 +53,13 @@ struct PreparationService {
     return result;
   }
 };
+struct CandidateRepository {
+  ir_uploads::CandidateLoadTask::Reader reader;
+  ir::IrUploadCandidateReadOutcome ListIrUploadCandidates(std::string_view, const std::string &,
+      std::optional<int> before, std::size_t limit) { return reader(before, limit); }
+};
 struct PreparationContext {
+  CandidateRepository replayRepository;
   PreparationSceneManager *sceneManager = nullptr;
   PreparationDrivers irDrivers;
   std::unique_ptr<PreparationService> irSubmissionService = std::make_unique<PreparationService>();
@@ -71,6 +78,11 @@ public:
   PreparationContext &context;
   ir_uploads::Controller controller;
   ir_uploads::PreparationTask preparationTask;
+  ir_uploads::CandidateLoadTask candidateLoadTask;
+  void applyCandidateLoad();
+  void reloadCandidates();
+  void observeRemoteRevisions() {}
+  std::string serverOrigin() const { return "https://boku.tachi.ac"; }
   bool providerCanSubmit = true, reloadRequested = false;
   bool candidatesLoaded = false;
   bool presentationActive = true;

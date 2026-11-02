@@ -119,6 +119,8 @@ std::optional<std::string> IrUploadsScene::profileSwitchBlocker() {
   // Settings can ask while the retained menu receives no updates. Consume a
   // completed worker here so it cannot indefinitely block a profile switch.
   applyPreparationUpdates();
+  applyCandidateLoad();
+  if (candidateLoadTask.hasWorker()) return i18n::tr("menu.loading.progress");
   if (!preparationTask.hasWorker()) return std::nullopt;
   auto status = controller.statusMessage().resolve();
   return status.empty() ? i18n::tr("menu.loading.progress") : status;
@@ -138,6 +140,7 @@ void IrUploadsScene::onResume() {
 }
 
 void IrUploadsScene::onProfileWillChange() {
+  candidateLoadTask.reset();
   stopPreparation();
   preparationTask.reset();
   controller = {};
@@ -219,6 +222,7 @@ void IrUploadsScene::updateLayoutInsets() {
 }
 
 void IrUploadsScene::init() {
+  candidateLoadTask.reset();
   presentationActive = true;
   displayedProfileId = context.profileManager.activeProfile().id;
   context.jukebox.stop();
@@ -254,7 +258,8 @@ void IrUploadsScene::update(float) {
     return;
   }
   observeRemoteRevisions();
-  if (reloadRequested && !controller.selectionLocked()) {
+  applyCandidateLoad();
+  if (reloadRequested && !candidateLoadTask.hasWorker() && !controller.selectionLocked()) {
     reloadRequested = false;
     reloadCandidates();
   }
@@ -279,6 +284,7 @@ void IrUploadsScene::renderScene() {
 }
 
 void IrUploadsScene::cleanupScene() {
+  candidateLoadTask.reset();
   stopPreparation();
   rootLayout = nullptr;
   headerLayout = nullptr;
@@ -517,66 +523,21 @@ std::string IrUploadsScene::serverOrigin() const {
 }
 
 void IrUploadsScene::reloadCandidates() {
+  if (candidateLoadTask.hasWorker() || controller.selectionLocked()) return;
   candidatesLoaded = false;
-  // Consume changes before the read; changes arriving during it trigger a
-  // subsequent refresh. Failed reads are retried on resume or explicit Refresh.
   observeRemoteRevisions();
   reloadRequested = false;
-  const float scrollOffset =
-      candidateList != nullptr ? candidateList->scrollOffset : 0.0F;
   loadError = {};
   loadDiagnostic = {};
   refreshProviderState();
-
-  const std::string origin = serverOrigin();
-  std::vector<ir::IrUploadCandidate> candidates;
-  std::optional<int> beforeResultId;
-  do {
-    auto page = context.replayRepository.ListIrUploadCandidates(
-        ir::kTachiProviderId, origin, beforeResultId);
-    if (page.status != ir::IrUploadCandidateReadStatus::Loaded) {
-      loadError = page.diagnostic.empty()
-                      ? i18n::message("ir.upload.saved_results_failed_loaded.message")
-                      : i18n::Text(ir::sanitizeDiagnostic(page.diagnostic));
-      controller.applyCandidateRefresh(std::nullopt);
-      refreshUi();
-      return;
-    }
-    if (loadDiagnostic.empty() && !page.diagnostic.empty()) {
-      loadDiagnostic = page.diagnostic;
-    }
-    const std::size_t available =
-        ir::kMaximumIrUploadCandidateRows - candidates.size();
-    const std::size_t accepted = std::min(available, page.candidates.size());
-    candidates.insert(candidates.end(),
-                      std::make_move_iterator(page.candidates.begin()),
-                      std::make_move_iterator(page.candidates.begin() +
-                                              static_cast<std::ptrdiff_t>(
-                                                  accepted)));
-    if (accepted != page.candidates.size() ||
-        (candidates.size() == ir::kMaximumIrUploadCandidateRows &&
-         page.nextBeforeModernChartResultId)) {
-      if (loadDiagnostic.empty()) {
-        loadDiagnostic = i18n::message("ir.upload.only_newest_saved_ir_candidates_shown.message");
-      }
-      break;
-    }
-    if (page.nextBeforeModernChartResultId && beforeResultId &&
-        *page.nextBeforeModernChartResultId >= *beforeResultId) {
-      loadError = i18n::message("ir.upload.pagination_failed.message");
-      controller.applyCandidateRefresh(std::nullopt);
-      refreshUi();
-      return;
-    }
-    beforeResultId = page.nextBeforeModernChartResultId;
-  } while (beforeResultId.has_value());
-
-  controller.applyCandidateRefresh(std::move(candidates));
-  candidatesLoaded = true;
-  if (candidateList != nullptr) {
-    candidateList->setCandidates(controller.candidates(),
-                                 controller.selectedAttemptIds());
-    candidateList->scrollOffset = scrollOffset;
+  const auto origin = serverOrigin();
+  auto *repository = &context.replayRepository;
+  try {
+    candidateLoadTask.start([repository, origin](std::optional<int> before, std::size_t limit) {
+      return repository->ListIrUploadCandidates(ir::kTachiProviderId, origin, before, limit);
+    });
+  } catch (...) {
+    loadError = i18n::message("ir.upload.saved_results_failed_loaded.message");
   }
   refreshUi();
 }
@@ -616,7 +577,8 @@ void IrUploadsScene::refreshUi() {
   View::LayoutBatchScope layoutBatch;
   const std::size_t candidateCount = controller.candidates().size();
   const std::size_t selectedCount = controller.selectedCount();
-  const bool locked = controller.selectionLocked();
+  const bool loading = candidateLoadTask.hasWorker();
+  const bool locked = controller.selectionLocked() || loading;
 
   if (candidateCountText != nullptr) {
     candidateCountText->setLocalizedText(i18n::message(
@@ -651,12 +613,13 @@ void IrUploadsScene::refreshUi() {
   if (candidateList != nullptr) {
     candidateList->setSelectedAttemptIds(controller.selectedAttemptIds());
     candidateList->setSelectionLocked(locked);
-    candidateList->setVisible(loadError.empty() && candidateCount > 0);
+    candidateList->setVisible(!loading && loadError.empty() && candidateCount > 0);
   }
   if (stateText != nullptr) {
-    const bool visible = !loadError.empty() || candidateCount == 0;
+    const bool visible = loading || !loadError.empty() || candidateCount == 0;
     stateText->setVisible(visible);
-    stateText->setLocalizedText(!loadError.empty() ? loadError
+    stateText->setLocalizedText(loading ? i18n::message("menu.loading.progress")
+                                          : !loadError.empty() ? loadError
                                           : i18n::message("ir.upload.no_scores_waiting_ir_upload.message"));
     stateText->setThemedColor(!loadError.empty() ? app_theme::coral
                                                  : app_theme::textSecondary);
@@ -713,7 +676,7 @@ void IrUploadsScene::applyPreparationUpdates() {
 }
 
 void IrUploadsScene::startUpload() {
-  if (controller.selectionLocked()) {
+  if (candidateLoadTask.hasWorker() || controller.selectionLocked()) {
     return;
   }
   refreshProviderState();
@@ -774,6 +737,7 @@ void IrUploadsScene::goBack() {
 }
 
 void IrUploadsScene::openIrSettings() {
+  candidateLoadTask.reset();
   stopPreparation();
   if (context.sceneManager != nullptr) {
     returnTarget_.notifySettingsWillOpen();
@@ -784,4 +748,26 @@ void IrUploadsScene::openIrSettings() {
                         : returnTarget_),
         embeddedTab);
   }
+}
+
+void IrUploadsScene::applyCandidateLoad() {
+  auto result = candidateLoadTask.takeResult();
+  if (!result) return;
+  // Revisions observed during the scan invalidate its result. The next active
+  // update restarts it using the current provider/profile scope.
+  if (reloadRequested) return;
+  loadError = std::move(result->error);
+  loadDiagnostic = std::move(result->diagnostic);
+  if (loadError.empty()) {
+    controller.applyCandidateRefresh(std::move(result->candidates));
+    candidatesLoaded = true;
+    if (candidateList != nullptr) {
+      const float scroll = candidateList->scrollOffset;
+      candidateList->setCandidates(controller.candidates(), controller.selectedAttemptIds());
+      candidateList->scrollOffset = scroll;
+    }
+  } else {
+    controller.applyCandidateRefresh(std::nullopt);
+  }
+  if (presentationActive) refreshUi();
 }
