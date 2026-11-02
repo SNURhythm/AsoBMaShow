@@ -304,6 +304,7 @@ void IrUploadsScene::cleanupScene() {
 }
 
 void IrUploadsScene::buildView() {
+  View::LayoutBatchScope layoutBatch;
   auto safe = getSafeAreaInsetsUi();
   if (embeddedTab) safe.top = 0;
   rootLayout =
@@ -612,6 +613,7 @@ void IrUploadsScene::refreshProviderState() {
 }
 
 void IrUploadsScene::refreshUi() {
+  View::LayoutBatchScope layoutBatch;
   const std::size_t candidateCount = controller.candidates().size();
   const std::size_t selectedCount = controller.selectedCount();
   const bool locked = controller.selectionLocked();

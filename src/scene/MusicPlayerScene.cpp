@@ -520,6 +520,7 @@ void MusicPlayerScene::onLanguageChanged() {
 }
 
 void MusicPlayerScene::updateLayoutInsets() {
+  View::LayoutBatchScope layoutBatch;
   if (rootLayout == nullptr) {
     return;
   }
@@ -2533,6 +2534,7 @@ void MusicPlayerScene::refreshActiveQueueList(bool force) {
 }
 
 void MusicPlayerScene::refreshUi() {
+  View::LayoutBatchScope layoutBatch;
   const auto playback = context.musicPlayer.PlaybackState();
   if (librarySubtitleText != nullptr) {
     const auto text = i18n::format(

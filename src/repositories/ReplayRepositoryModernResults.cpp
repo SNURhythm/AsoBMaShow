@@ -911,11 +911,9 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
         .receipt = std::move(receipt.receipt),
         .outbox = std::move(outbox.outbox),
     };
-    if (!ir::validateIrUploadCandidateSource(source, providerId, serverOrigin,
-                                             diagnostic)) {
-      ++outcome.omittedRows;
-      continue;
-    }
+    // Row decoders authenticate individual facts. Cross-fact agreement belongs
+    // to the consuming projection; checking it here as well serializes and
+    // fingerprints every result/snapshot pair twice on the tab-opening path.
     outcome.sources.push_back(std::move(source));
   }
   if (outcome.omittedRows != 0) {
@@ -3296,7 +3294,16 @@ ReplayRepository::LoadIrReconciliationCandidates(
       .nextBeforeModernChartResultId = loaded.nextBeforeModernChartResultId,
       .diagnostic = loaded.diagnostic};
   outcome.candidates.reserve(loaded.sources.size());
+  std::size_t omittedRows = loaded.omittedRows;
   for (auto &source : loaded.sources) {
+    // Reconciliation does not use the Records/manual-upload projections, so
+    // perform their same agreement check here before exposing receipt facts.
+    std::string diagnostic;
+    if (!ir::validateIrUploadCandidateSource(source, providerId, serverOrigin,
+                                             diagnostic)) {
+      ++omittedRows;
+      continue;
+    }
     ir::IrLocalReceiptCandidate candidate{
         .modernChartResultId = source.modernChartResultId,
         .attemptId = source.result.attemptId,
@@ -3318,6 +3325,10 @@ ReplayRepository::LoadIrReconciliationCandidates(
   if (!transaction.commit(transactionError)) {
     return {.status = Status::StorageFailure,
             .diagnostic = "could not finish modern IR reconciliation read"};
+  }
+  if (omittedRows != 0) {
+    outcome.diagnostic = std::to_string(omittedRows) +
+        " modern IR rows were omitted because durable facts disagreed.";
   }
   outcome.diagnostic = ir::sanitizeDiagnostic(outcome.diagnostic);
   return outcome;

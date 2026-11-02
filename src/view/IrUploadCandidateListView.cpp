@@ -290,6 +290,7 @@ void IrUploadCandidateListView::setCandidates(
 
 void IrUploadCandidateListView::setSelectedAttemptIds(
     const std::unordered_set<std::string> &selectedAttemptIds) {
+  if (selectedAttemptIds_ == selectedAttemptIds) return;
   selectedAttemptIds_ = selectedAttemptIds;
   rebindVisibleItems();
 }

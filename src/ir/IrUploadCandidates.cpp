@@ -14,15 +14,15 @@ bool sourceAgrees(const IrUploadCandidateSource &source,
                   std::string_view providerId, std::string_view serverOrigin,
                   std::string &diagnostic) noexcept {
   if (source.modernChartResultId <= 0 ||
-      source.result.resultId != source.modernChartResultId ||
-      !result_persistence::validateModernChartResult(source.result,
-                                                     diagnostic)) {
+      source.result.resultId != source.modernChartResultId) {
     if (diagnostic.empty()) {
       diagnostic = "IR upload modern result ownership is invalid";
     }
     return false;
   }
 
+  // Owner-aware serialization also validates the modern result fingerprint
+  // through makeIrSubmission; do not hash that result a second time here.
   if (!serializeIrSubmissionSnapshot(source.snapshot, source.result, diagnostic)) {
     if (diagnostic.empty()) {
       diagnostic = "IR upload snapshot disagrees with its modern result";

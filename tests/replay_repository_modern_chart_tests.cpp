@@ -914,10 +914,35 @@ void testIrPageReusesLookupStatements() {
     for (std::size_t i = 0; i < records.records.size(); ++i)
       assert(records.records[i].attemptId == result(8 - static_cast<int>(i)).attemptId);
     auto database = openDatabase(temporary.path / "replay.db");
+    // Individually authenticated facts must still agree with their owner at
+    // every projection boundary, including reconciliation (which has no UI projection).
+    auto differentOwner = result(5);
+    ++differentOwner.playedAtUnixMillis;
+    differentOwner.resultFingerprint = result_persistence::modernResultFingerprint(differentOwner);
+    const auto mismatchedSnapshot = snapshot(differentOwner);
+    std::string diagnostic;
+    const auto payload = ir::serializeIrSubmissionSnapshot(mismatchedSnapshot, diagnostic);
+    assert(payload);
+    SqliteStatementHandle replaceSnapshot;
+    assert(prepareSqliteStatement(database.get(),
+        "UPDATE ir_submission_snapshots SET payload_json=?,fingerprint=? WHERE attempt_id=?",
+        replaceSnapshot) == SQLITE_OK);
+    bindSqliteText(replaceSnapshot, 1, *payload);
+    bindSqliteText(replaceSnapshot, 2, mismatchedSnapshot.fingerprint);
+    bindSqliteText(replaceSnapshot, 3, differentOwner.attemptId);
+    assert(sqlite3_step(replaceSnapshot) == SQLITE_DONE);
+    replaceSnapshot.reset();
+    const auto mismatched = repository.ListIrUploadCandidates("tachi", "https://boku.tachi.ac");
+    assert(mismatched.status == ir::IrUploadCandidateReadStatus::Loaded && mismatched.omittedRows == 1);
+    const auto reconciled = repository.LoadIrReconciliationCandidates("tachi", "https://boku.tachi.ac");
+    assert(reconciled.status == ir::IrReconciliationReadOutcome::Status::Loaded &&
+           reconciled.candidates.size() == 7 && !reconciled.diagnostic.empty());
+    for (const auto &candidate : reconciled.candidates)
+      assert(candidate.attemptId != differentOwner.attemptId);
     exec(database.get(), "UPDATE ir_submission_snapshots SET payload_json='invalid' WHERE attempt_id='" +
          result(4).attemptId + "'");
     const auto afterCorruption = repository.ListIrUploadRecords("tachi", "https://boku.tachi.ac");
-    assert(afterCorruption.records.size() == 7 && afterCorruption.omittedRows == 1);
+    assert(afterCorruption.records.size() == 6 && afterCorruption.omittedRows == 2);
     assert(afterCorruption.records.back().attemptId == result(1).attemptId);
 
   }

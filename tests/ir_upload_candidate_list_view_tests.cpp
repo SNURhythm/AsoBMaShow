@@ -277,8 +277,20 @@ int main() {
     expect(row == firstRow &&
                image(row, "irUploadJacket")->imagePath().empty(),
            "recycled row stays free of chart-library identity");
+    int binds = 0;
+    const auto bindCandidate = list.onBind;
+    list.onBind = [&](auto *view, const auto &item, int index, bool selected) {
+      ++binds;
+      bindCandidate(view, item, index, selected);
+    };
+    list.setSelectedAttemptIds({});
+    expect(binds == 0, "unchanged selection does not rebind visible rows");
     const float preservedScrollOffset = list.scrollOffset;
     list.setSelectedAttemptIds({fourth.result.attemptId});
+    expect(binds > 0, "changed selection rebinds visible rows");
+    binds = 0;
+    list.setSelectedAttemptIds({fourth.result.attemptId});
+    expect(binds == 0, "repeated nonempty selection does not rebind rows");
     row = list.getViewByIndex(0);
     selection = button(row, "irUploadSelection");
     expect(selection->isSelected() &&

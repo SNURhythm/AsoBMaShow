@@ -204,6 +204,12 @@ private:
   operator=(const ScopedConnectionOpenCounter &) = delete;
 };
 
+int countSelectPreparation(void *context, int action, const char *, const char *,
+                           const char *, const char *) {
+  if (action == SQLITE_SELECT) ++*static_cast<int *>(context);
+  return SQLITE_OK;
+}
+
 void testRoundTripAndConnectionReuse() {
   TempDirectory temporary;
   const auto playlistPath = temporary.path() / "music_playlist.db";
@@ -255,6 +261,21 @@ void testRoundTripAndConnectionReuse() {
   assert(repository.ReplaceNowPlayingTracks({chartMeta}));
   assert(repository.SaveNowPlayingState({chartMeta}, state));
   assert(repository.SelectNowPlayingTracks().size() == 1);
+  // Query compilation is independent of playlist identity; reset bindings and
+  // reread rows, while retaining the prepared SQL across refreshes.
+  int preparations = 0;
+  auto *owner = lastOpenedConnection;
+  assert(sqlite3_set_authorizer(owner, countSelectPreparation, &preparations) == SQLITE_OK);
+  assert(repository.SelectTracks(playlistId).size() == 1);
+  assert(repository.SelectNowPlayingTracks().size() == 1);
+  preparations = 0;
+  assert(repository.SelectTracks(batchPlaylistId).size() == 1);
+  assert(repository.SelectTracks(playlistId + batchPlaylistId + 1).empty());
+  assert(repository.SelectNowPlayingTracks().size() == 1);
+  std::cout << "Repeated playlist SELECT preparations: " << preparations << std::endl;
+  assert(preparations == 0);
+  assert(sqlite3_set_authorizer(owner, nullptr, nullptr) == SQLITE_OK);
+
   assert(!repository.MoveTrack(playlistId, chartMeta, -1));
   assert(repository.DeleteTrack(playlistId, chartMeta));
   assert(repository.InsertTrack(playlistId, chartMeta));
@@ -266,6 +287,8 @@ void testRoundTripAndConnectionReuse() {
   repository.Shutdown();
   assert(repository.EnsureReady());
   assert(connectionCount.load() > readyConnectionCount);
+  assert(repository.SelectTracks(playlistId).empty());
+  assert(repository.SelectNowPlayingTracks().size() == 1);
   repository.Shutdown();
 }
 
