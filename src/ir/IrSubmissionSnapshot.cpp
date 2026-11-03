@@ -197,13 +197,13 @@ serializeIrSubmissionSnapshot(const IrSubmissionSnapshot &snapshot,
     if (!validateIrSubmission(snapshot.submission, diagnostic)) {
       return std::nullopt;
     }
-    const std::string expected = calculatedFingerprint(snapshot);
+    Json root = fingerprintPayload(snapshot);
+    const std::string expected = file_checksum::sha256(root.dump());
     if (!canonical_digest::isCanonicalLowerHex(snapshot.fingerprint, 64) ||
         snapshot.fingerprint != expected) {
       diagnostic = "IR snapshot fingerprint is malformed or inconsistent";
       return std::nullopt;
     }
-    Json root = fingerprintPayload(snapshot);
     root["fingerprint"] = snapshot.fingerprint;
     std::string serialized = root.dump();
     if (!durable_payload::withinLimit(

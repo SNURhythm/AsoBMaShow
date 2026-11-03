@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IrUploadsController.h"
+#include "IrCandidateLoadTask.h"
 #include "IrUploadPreparationTask.h"
 #include "Scene.h"
 #include "SceneReturnTarget.h"
@@ -20,7 +21,7 @@ class View;
 
 class IrUploadsScene final : public Scene {
 public:
-  bool needsContinuousPresentation() const override { return false; }
+  bool needsContinuousPresentation() const override { return candidateLoadTask.hasWorker(); }
   bool usesResponsiveMenuCanvas() const override { return true; }
   explicit IrUploadsScene(
       ApplicationContext &context,
@@ -56,6 +57,7 @@ private:
   void refreshProfileIfNeeded();
   void buildView();
   void reloadCandidates();
+  void applyCandidateLoad();
   void refreshUi();
   void refreshProviderState();
   void observeRemoteRevisions();
@@ -84,11 +86,13 @@ private:
 
   ir_uploads::Controller controller;
   ir_uploads::PreparationTask preparationTask;
+  ir_uploads::CandidateLoadTask candidateLoadTask;
   i18n::Text loadError;
   i18n::Text loadDiagnostic;
   bool providerCanSubmit = false;
   bool reloadRequested = false;
   bool candidatesLoaded = false;
+  std::uint64_t observedLibraryRevision = 0;
   std::uint64_t observedScoreRevision = 0;
   std::uint64_t observedProfileCacheRevision = 0;
   std::string observedServerOrigin;

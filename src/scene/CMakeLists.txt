@@ -15,6 +15,7 @@ target_sources(main PRIVATE
     FindBmsTask.cpp
     IrUploadsController.cpp
     IrUploadPreparationTask.cpp
+    IrCandidateLoadTask.cpp
     IrUploadsScene.cpp
     IntroScene.cpp
     LibraryTasksScene.cpp

@@ -1061,6 +1061,12 @@ serializeValidatedScoreProvenance(const ScoreProvenance &provenance,
   error.clear();
   try {
     const std::string serialized = serializeScoreProvenance(provenance);
+    // IR validates the same provenance through result, snapshot and eligibility
+    // boundaries. Cache only a successfully validated exact wire representation:
+    // semantic equality would conflate floating-point encodings such as -0.0.
+    // One bounded entry per thread avoids locking and unbounded profile retention.
+    static thread_local std::string lastValidated;
+    if (!lastValidated.empty() && serialized == lastValidated) return serialized;
     auto decoded = deserializeScoreProvenance(serialized, error);
     if (!decoded.has_value()) {
       return std::nullopt;
@@ -1071,6 +1077,7 @@ serializeValidatedScoreProvenance(const ScoreProvenance &provenance,
       error = "Score provenance did not produce canonical JSON.";
       return std::nullopt;
     }
+    if (canonical.size() <= 64 * 1024) lastValidated = canonical;
     return canonical;
   } catch (const std::exception &exception) {
     error = exception.what();

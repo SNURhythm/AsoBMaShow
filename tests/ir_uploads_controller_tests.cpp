@@ -38,8 +38,8 @@ std::vector<std::string> attemptIds(std::initializer_list<int> suffixes) {
   return result;
 }
 
-ir::IrUploadCandidate candidate(int resultId) {
-  ir::IrUploadCandidate value;
+ir::IrUploadCandidateSummary candidate(int resultId) {
+  ir::IrUploadCandidateSummary value;
   value.modernChartResultId = resultId;
   value.result.resultId = resultId;
   value.result.attemptId = attemptId(resultId);
@@ -47,7 +47,7 @@ ir::IrUploadCandidate candidate(int resultId) {
   return value;
 }
 
-ir::IrSubmission submissionFor(const ir::IrUploadCandidate &candidate) {
+ir::IrSubmission submissionFor(const ir::IrUploadCandidateSummary &candidate) {
   ir::IrSubmission value;
   value.attemptId = candidate.result.attemptId;
   value.chartMd5 = std::string(32, 'b');
@@ -165,7 +165,7 @@ void testPreparationContinuesAfterFailureAndBatchesOnce() {
   int batchCalls = 0;
 
   ir_uploads::PreparationDependencies dependencies;
-  dependencies.verify = [&](const ir::IrUploadCandidate &value,
+  dependencies.verify = [&](const ir::IrUploadCandidateSummary &value,
                             const std::stop_token &) {
     verified.emplace_back(value.attemptId());
     if (value.attemptId() == attemptId(11)) {
@@ -219,7 +219,7 @@ void testCancellationStopsBeforeBatchAndRetainsUntouchedRows() {
   int batchCalls = 0;
 
   ir_uploads::PreparationDependencies dependencies;
-  dependencies.verify = [&](const ir::IrUploadCandidate &value,
+  dependencies.verify = [&](const ir::IrUploadCandidateSummary &value,
                             const std::stop_token &) {
     ++verifyCalls;
     stop.request_stop();
@@ -257,7 +257,7 @@ void testCancellationAfterFinalVerificationStopsBeforeBatch() {
   int batchCalls = 0;
 
   ir_uploads::PreparationDependencies dependencies;
-  dependencies.verify = [](const ir::IrUploadCandidate &value,
+  dependencies.verify = [](const ir::IrUploadCandidateSummary &value,
                            const std::stop_token &) {
     return ir_uploads::VerificationOutcome{.submission = submissionFor(value)};
   };
@@ -284,7 +284,7 @@ void testThrowingVerifierDoesNotAbortOtherCandidates() {
   int batchCalls = 0;
 
   ir_uploads::PreparationDependencies dependencies;
-  dependencies.verify = [&](const ir::IrUploadCandidate &value,
+  dependencies.verify = [&](const ir::IrUploadCandidateSummary &value,
                             const std::stop_token &) {
     verified.emplace_back(value.attemptId());
     if (value.attemptId() == attemptId(31)) {
@@ -327,7 +327,7 @@ void testThrowingVerifierDoesNotAbortOtherCandidates() {
 void testBatchOutcomesMapByAttemptId() {
   const std::vector candidates{candidate(40), candidate(41), candidate(42)};
   ir_uploads::PreparationDependencies dependencies;
-  dependencies.verify = [](const ir::IrUploadCandidate &value,
+  dependencies.verify = [](const ir::IrUploadCandidateSummary &value,
                            const std::stop_token &) {
     return ir_uploads::VerificationOutcome{.submission = submissionFor(value)};
   };
@@ -361,7 +361,7 @@ void testBatchOutcomesMapByAttemptId() {
 void testCompactedBatchOutcomesFailClosed() {
   const std::vector candidates{candidate(50), candidate(51), candidate(52)};
   ir_uploads::PreparationDependencies dependencies;
-  dependencies.verify = [](const ir::IrUploadCandidate &value,
+  dependencies.verify = [](const ir::IrUploadCandidateSummary &value,
                            const std::stop_token &) {
     return ir_uploads::VerificationOutcome{.submission = submissionFor(value)};
   };
@@ -401,7 +401,7 @@ void testCompactedBatchOutcomesFailClosed() {
 void testDuplicateBatchOutcomesFailClosed() {
   const std::vector candidates{candidate(60), candidate(61)};
   ir_uploads::PreparationDependencies dependencies;
-  dependencies.verify = [](const ir::IrUploadCandidate &value,
+  dependencies.verify = [](const ir::IrUploadCandidateSummary &value,
                            const std::stop_token &) {
     return ir_uploads::VerificationOutcome{.submission = submissionFor(value)};
   };
@@ -546,10 +546,14 @@ void testProviderAvailabilityRejectsAuthenticatedHttpUploads() {
 
 #include "ir_upload_preparation_task_tests.h"
 #include "ir_upload_scene_fixture.h"
+#include "ir_candidate_load_task_tests.h"
 
 int main() {
+  testBackgroundCandidatesAndStaleScope();
+  testCandidateCancellationAndPagination();
   testPreparationStatusFollowsLanguageChanges();
   testSceneSettingsRouteRetainsEmbeddedShell();
+  testSceneReloadsSelectionBeforeEnqueue();
   testScenePreparationLaunchGatesAndApplicationThreadCompletion();
   testSceneStopRetainsCancelledSelectionUntilCompletion();
   testPreparationTaskProgressPartialFailureAndCompletionJoining();

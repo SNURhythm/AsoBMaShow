@@ -541,11 +541,18 @@ readReplayReference(sqlite3 *database, int resultId, bool &found,
 ReadModernResultOutcome readModernResult(sqlite3 *database,
                                          const char *predicate,
                                          std::string_view textValue,
-                                         int intValue) {
-  SqliteStatementHandle statement;
+                                         int intValue,
+                                         SqliteStatementHandle *cachedStatement = nullptr) {
+  SqliteStatementHandle localStatement;
+  auto &statement = cachedStatement ? *cachedStatement : localStatement;
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
   const std::string query = std::string("SELECT ") + kModernChartColumns +
                             " FROM modern_chart_results WHERE " + predicate;
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+  if (!statement.get() &&
+      prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return {.diagnostic = "could not prepare modern chart result read"};
   }
   const bool bound =
@@ -605,13 +612,20 @@ ReadRecordOutcome readRecord(sqlite3 *database, const char *predicate,
 std::optional<ir::IrSubmissionSnapshot> readSnapshot(sqlite3 *database,
                                                      std::string_view attemptId,
                                                      bool &found,
-                                                     std::string &diagnostic) {
+                                                     std::string &diagnostic,
+                                                     SqliteStatementHandle *cachedStatement = nullptr) {
   found = false;
-  SqliteStatementHandle statement;
+  SqliteStatementHandle localStatement;
+  auto &statement = cachedStatement ? *cachedStatement : localStatement;
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
   constexpr const char *query =
       "SELECT schema_version,payload_json,fingerprint FROM "
       "ir_submission_snapshots WHERE attempt_id=?";
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+  if ((!statement.get() &&
+       prepareSqliteStatement(database, query, statement) != SQLITE_OK) ||
       !bindText(statement.get(), 1, attemptId)) {
     diagnostic = "could not prepare modern IR snapshot read";
     return std::nullopt;
@@ -670,15 +684,22 @@ struct OutboxLookupOutcome {
 ReceiptLookupOutcome readScopedReceipt(sqlite3 *database,
                                        std::string_view providerId,
                                        std::string_view serverOrigin,
-                                       int modernResultId) {
+                                       int modernResultId,
+                                       SqliteStatementHandle *cachedStatement = nullptr) {
   using replay_repository_detail::decodeIrSubmissionReceiptRow;
   using replay_repository_detail::kIrSubmissionReceiptColumns;
-  SqliteStatementHandle statement;
+  SqliteStatementHandle localStatement;
+  auto &statement = cachedStatement ? *cachedStatement : localStatement;
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
   const std::string query =
       std::string("SELECT ") + kIrSubmissionReceiptColumns +
       " FROM ir_submission_receipts WHERE provider_id=? AND "
       "server_origin=? AND modern_chart_result_id=?";
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+  if ((!statement.get() &&
+       prepareSqliteStatement(database, query, statement) != SQLITE_OK) ||
       !bindText(statement.get(), 1, providerId) ||
       !bindText(statement.get(), 2, serverOrigin) ||
       sqlite3_bind_int(statement.get(), 3, modernResultId) != SQLITE_OK) {
@@ -708,14 +729,21 @@ ReceiptLookupOutcome readScopedReceipt(sqlite3 *database,
 
 OutboxLookupOutcome readScopedOutbox(sqlite3 *database,
                                      std::string_view providerId,
-                                     std::string_view attemptId) {
+                                     std::string_view attemptId,
+                                     SqliteStatementHandle *cachedStatement = nullptr) {
   using replay_repository_detail::decodeIrOutboxRow;
   using replay_repository_detail::kIrOutboxColumns;
-  SqliteStatementHandle statement;
+  SqliteStatementHandle localStatement;
+  auto &statement = cachedStatement ? *cachedStatement : localStatement;
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
   const std::string query = std::string("SELECT ") + kIrOutboxColumns +
                             " FROM ir_outbox WHERE provider_id=? AND "
                             "attempt_id=?";
-  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
+  if ((!statement.get() &&
+       prepareSqliteStatement(database, query, statement) != SQLITE_OK) ||
       !bindText(statement.get(), 1, providerId) ||
       !bindText(statement.get(), 2, attemptId)) {
     return {.status = OptionalIrRowStatus::StorageFailure,
@@ -741,6 +769,31 @@ OutboxLookupOutcome readScopedOutbox(sqlite3 *database,
   return {.status = OptionalIrRowStatus::Loaded, .outbox = std::move(outbox)};
 }
 
+bool storeIrCandidateSummary(sqlite3 *database, int resultId,
+    std::string_view providerId, const ir::IrUploadCandidateSource *source,
+    SqliteStatementHandle &statement) {
+  std::string diagnostic;
+  const bool valid = source && ir::validateIrUploadCandidateSource(
+      *source, providerId, "https://boku.tachi.ac", diagnostic);
+  const bool eligible = valid && ir::isSubmissionEligibleForProvider(
+      providerId, source->snapshot.submission);
+  if (!statement.get() && prepareSqliteStatement(database,
+      "INSERT OR REPLACE INTO ir_candidate_summary_v1 "
+      "(result_id,provider_id,valid,eligible,player_option,assist_option) "
+      "VALUES(?,?,?,?,?,?)", statement) != SQLITE_OK) return false;
+  const auto reset = makeScopeExit([&] {
+    sqlite3_reset(statement.get());
+    sqlite3_clear_bindings(statement.get());
+  });
+  return sqlite3_bind_int(statement.get(), 1, resultId) == SQLITE_OK &&
+      bindText(statement.get(), 2, providerId) &&
+      sqlite3_bind_int(statement.get(), 3, valid) == SQLITE_OK &&
+      sqlite3_bind_int(statement.get(), 4, eligible) == SQLITE_OK &&
+      bindText(statement.get(), 5, valid ? source->result.score.provenance.player1.option : "") &&
+      bindText(statement.get(), 6, valid ? source->result.score.provenance.assistOption : "") &&
+      sqlite3_step(statement.get()) == SQLITE_DONE;
+}
+
 enum class IrSourceReadStatus { Loaded, Invalid, StorageFailure };
 
 struct IrSourceReadOutcome {
@@ -755,7 +808,7 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
     sqlite3 *database, std::string_view providerId,
     std::string_view serverOrigin,
     std::optional<int> beforeModernChartResultId, std::size_t limit,
-    std::string_view chartSha256 = {}) {
+    std::string_view chartSha256 = {}, int exactResultId = 0) {
   const auto scope = ir::projectIrUploadCandidates({}, providerId, serverOrigin);
   const bool chartScoped = !chartSha256.empty();
   if (!scope.diagnostic.empty() ||
@@ -775,7 +828,9 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
       "SELECT result.id FROM modern_chart_results result INNER JOIN "
       "ir_submission_snapshots snapshot ON "
       "snapshot.modern_chart_result_id=result.id ";
-  if (chartScoped) {
+  if (exactResultId > 0) {
+    query += "WHERE result.id=? ";
+  } else if (chartScoped) {
     query += "WHERE result.chart_sha256=? ";
   } else if (beforeModernChartResultId) {
     query += "WHERE result.id<? ";
@@ -788,6 +843,8 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
             .diagnostic = "could not prepare modern IR result scan"};
   }
   int binding = 1;
+  if (exactResultId > 0 && sqlite3_bind_int(statement.get(), binding++, exactResultId) != SQLITE_OK)
+    return {.diagnostic = "could not bind selected IR result"};
   if (chartScoped && !bindText(statement.get(), binding++, chartSha256)) {
     return {.status = IrSourceReadStatus::StorageFailure,
             .diagnostic = "could not bind modern IR chart scope"};
@@ -831,8 +888,12 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
     outcome.nextBeforeModernChartResultId = resultIds.back();
   }
   outcome.sources.reserve(resultIds.size());
+  // Keep compilation bounded per page; every lookup resets on all return paths.
+  // These statements never outlive this connection/transaction.
+  SqliteStatementHandle resultStatement, snapshotStatement, receiptStatement,
+      outboxStatement;
   for (const int resultId : resultIds) {
-    auto loaded = readModernResult(database, "id=?", {}, resultId);
+    auto loaded = readModernResult(database, "id=?", {}, resultId, &resultStatement);
     if (loaded.status == ReadRecordStatus::StorageFailure) {
       return {.status = IrSourceReadStatus::StorageFailure,
               .diagnostic = std::move(loaded.diagnostic)};
@@ -845,7 +906,7 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
     bool snapshotFound = false;
     std::string diagnostic;
     auto snapshot = readSnapshot(database, loaded.result->attemptId,
-                                 snapshotFound, diagnostic);
+                                 snapshotFound, diagnostic, &snapshotStatement);
     if (!snapshotFound && !diagnostic.empty()) {
       return {.status = IrSourceReadStatus::StorageFailure,
               .diagnostic = std::move(diagnostic)};
@@ -856,9 +917,9 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
     }
 
     auto receipt = readScopedReceipt(database, providerId, serverOrigin,
-                                     loaded.result->resultId);
-    auto outbox =
-        readScopedOutbox(database, providerId, loaded.result->attemptId);
+                                     loaded.result->resultId, &receiptStatement);
+    auto outbox = readScopedOutbox(database, providerId, loaded.result->attemptId,
+                                  &outboxStatement);
     if (receipt.status == OptionalIrRowStatus::StorageFailure ||
         outbox.status == OptionalIrRowStatus::StorageFailure) {
       return {.status = IrSourceReadStatus::StorageFailure,
@@ -879,11 +940,9 @@ IrSourceReadOutcome loadIrSourcesOnConnection(
         .receipt = std::move(receipt.receipt),
         .outbox = std::move(outbox.outbox),
     };
-    if (!ir::validateIrUploadCandidateSource(source, providerId, serverOrigin,
-                                             diagnostic)) {
-      ++outcome.omittedRows;
-      continue;
-    }
+    // Row decoders authenticate individual facts. Cross-fact agreement belongs
+    // to the consuming projection; checking it here as well serializes and
+    // fingerprints every result/snapshot pair twice on the tab-opening path.
     outcome.sources.push_back(std::move(source));
   }
   if (outcome.omittedRows != 0) {
@@ -2258,6 +2317,16 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     return {.status = ModernChartStageStatus::StorageFailure,
             .diagnostic = "could not stage modern score or IR work"};
   }
+  if (snapshot) {
+    auto owned = result;
+    owned.resultId = resultId;
+    const ir::IrUploadCandidateSource source{
+        .modernChartResultId = resultId, .result = std::move(owned), .snapshot = *snapshot};
+    SqliteStatementHandle summaryStatement;
+    if (!storeIrCandidateSummary(impl_->sessionDatabase, resultId, "tachi", &source, summaryStatement))
+      return {.status = ModernChartStageStatus::StorageFailure,
+              .diagnostic = "could not stage IR candidate summary"};
+  }
   auto stored = readRecord(impl_->sessionDatabase, "id=?", {}, resultId);
   if (stored.status != ReadRecordStatus::Loaded ||
       !transaction.commit(transactionError)) {
@@ -3181,6 +3250,169 @@ ir::IrUploadRecordReadOutcome ReplayRepository::ListIrUploadRecordsForChart(
       chartSha256);
 }
 
+ir::IrUploadCandidateSummaryReadOutcome ReplayRepository::ListIrUploadCandidateSummaries(
+    std::string_view providerId, std::string_view serverOrigin,
+    std::optional<int> beforeModernChartResultId, std::size_t limit) {
+  profile_database_activity::WriteGuard operation;
+  const auto scope = ir::projectIrUploadCandidates({}, providerId, serverOrigin);
+  if (!scope.diagnostic.empty() || limit == 0 || limit > ir::kMaximumIrUploadCandidateRows ||
+      (beforeModernChartResultId && *beforeModernChartResultId <= 0))
+    return {.status = ir::IrUploadCandidateReadStatus::Invalid,
+            .diagnostic = "IR candidate summary scope or page is invalid"};
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) return {.diagnostic = "replay storage is unavailable"};
+  auto *database = impl_->sessionDatabase;
+  std::string error;
+  // Backfill and display read share one snapshot. IMMEDIATE avoids a deferred
+  // read-to-write upgrade racing another SQLite connection.
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE", error);
+  if (!transaction.active()) return {.diagnostic = "could not begin IR summary read"};
+  SqliteStatementHandle scan;
+  const std::string range = beforeModernChartResultId ? "r.id<?" : "1";
+  const std::string scanSql =
+      "SELECT r.id,c.valid FROM modern_chart_results r "
+      "JOIN ir_submission_snapshots s ON s.modern_chart_result_id=r.id "
+      "LEFT JOIN ir_candidate_summary_v1 c ON c.result_id=r.id AND c.provider_id=? "
+      "WHERE " + range + " ORDER BY r.id DESC LIMIT ?";
+  auto bindPage = [&](sqlite3_stmt *statement, int limitExtra) {
+    int index = 1;
+    if (!bindText(statement, index++, providerId)) return false;
+    if (beforeModernChartResultId &&
+        sqlite3_bind_int(statement, index++, *beforeModernChartResultId) != SQLITE_OK) return false;
+    return sqlite3_bind_int64(statement, index, static_cast<sqlite3_int64>(limit + limitExtra)) == SQLITE_OK;
+  };
+  if (prepareSqliteStatement(database, scanSql, scan) != SQLITE_OK || !bindPage(scan.get(), 1))
+    return {.diagnostic = "could not scan IR summaries"};
+  std::vector<std::pair<int, bool>> ids;
+  int rc;
+  while ((rc = sqlite3_step(scan.get())) == SQLITE_ROW) {
+    const auto id = sqlite3_column_int64(scan.get(), 0);
+    if (id <= 0 || id > std::numeric_limits<int>::max())
+      return {.status = ir::IrUploadCandidateReadStatus::IntegrityConflict,
+              .diagnostic = "IR result identity is out of range"};
+    ids.emplace_back(static_cast<int>(id), sqlite3_column_type(scan.get(), 1) == SQLITE_NULL);
+  }
+  if (rc != SQLITE_DONE) return {.diagnostic = "IR summary scan failed"};
+  scan.reset();
+  ir::IrUploadCandidateSummaryReadOutcome outcome{.status = ir::IrUploadCandidateReadStatus::Loaded};
+  if (ids.size() > limit) {
+    ids.resize(limit);
+    outcome.nextBeforeModernChartResultId = ids.back().first;
+  }
+  SqliteStatementHandle resultStatement, snapshotStatement, cacheStatement;
+  for (const auto &[id, missing] : ids) {
+    if (!missing) continue;
+    auto loaded = readModernResult(database, "id=?", {}, id, &resultStatement);
+    if (loaded.status == ReadRecordStatus::StorageFailure)
+      return {.diagnostic = std::move(loaded.diagnostic)};
+    std::optional<ir::IrUploadCandidateSource> source;
+    if (loaded.status == ReadRecordStatus::Loaded && loaded.result) {
+      bool found = false;
+      std::string diagnostic;
+      auto snapshot = readSnapshot(database, loaded.result->attemptId, found, diagnostic, &snapshotStatement);
+      if (!found && !diagnostic.empty()) return {.diagnostic = std::move(diagnostic)};
+      if (snapshot) source = ir::IrUploadCandidateSource{
+          .modernChartResultId = id, .result = std::move(*loaded.result), .snapshot = std::move(*snapshot)};
+    }
+    if (!storeIrCandidateSummary(database, id, providerId, source ? &*source : nullptr, cacheStatement))
+      return {.diagnostic = "could not persist IR summary"};
+  }
+
+  if (ids.empty()) {
+    if (!transaction.commit(error)) return {.diagnostic = "could not finish empty IR summary read"};
+    return outcome;
+  }
+  // LIMIT alone permits a scan/sort of the entire cache on the first page.
+  // Constrain every join to the validated integer IDs already selected above.
+  std::string pageIds;
+  for (const auto &[id, missing] : ids) {
+    if (!pageIds.empty()) pageIds += ',';
+    pageIds += std::to_string(id);
+  }
+  // No authenticated payloads are fetched here. Live delivery metadata can
+  // hide queued/submitted rows, but it never authorizes an upload.
+  const std::string query =
+      "SELECT r.id,r.attempt_id,r.chart_title,r.chart_artist,r.score,r.max_score,"
+      "r.max_combo,r.clear_type,r.final_gauge,r.key_mode,r.adopted_gauge_type,"
+      "c.valid,c.eligible,c.player_option,c.assist_option,receipt.id,"
+      "o.state,o.last_error_message,o.local_result_ready,o.chart_sha256,r.chart_sha256,"
+      "o.chart_md5,r.chart_md5 "
+      "FROM modern_chart_results r "
+      "JOIN ir_submission_snapshots s ON s.modern_chart_result_id=r.id "
+      "JOIN ir_candidate_summary_v1 c ON c.result_id=r.id AND c.provider_id=? "
+      "LEFT JOIN ir_submission_receipts receipt ON receipt.modern_chart_result_id=r.id "
+      "AND receipt.provider_id=c.provider_id AND receipt.server_origin=? "
+      "LEFT JOIN ir_outbox o ON o.attempt_id=r.attempt_id AND o.provider_id=c.provider_id "
+      "WHERE r.id IN (" + pageIds + ") ORDER BY r.id DESC";
+  SqliteStatementHandle rows;
+  if (prepareSqliteStatement(database, query, rows) != SQLITE_OK ||
+      !bindText(rows.get(), 1, providerId) || !bindText(rows.get(), 2, serverOrigin))
+    return {.diagnostic = "could not prepare IR summary display"};
+  while ((rc = sqlite3_step(rows.get())) == SQLITE_ROW) {
+    auto *row = rows.get();
+    if (!sqlite3_column_int(row, 11)) { ++outcome.omittedRows; continue; }
+    if (!sqlite3_column_int(row, 12)) continue;
+    std::optional<ir::IrOutboxState> outboxState;
+    if (sqlite3_column_type(row, 16) != SQLITE_NULL) {
+      const int state = sqlite3_column_int(row, 16);
+      if (!ir::isKnownIrOutboxState(state) || sqlite3_column_int(row, 18) != 1 ||
+          sqliteColumnString(row, 19) != sqliteColumnString(row, 20) ||
+          (!sqliteColumnString(row, 21).empty() && !sqliteColumnString(row, 22).empty() &&
+           sqliteColumnString(row, 21) != sqliteColumnString(row, 22))) {
+        ++outcome.omittedRows; continue;
+      }
+      outboxState = static_cast<ir::IrOutboxState>(state);
+    }
+    const auto state = ir::resolveIrRecordState({.eligible = true,
+        .hasReceipt = sqlite3_column_type(row, 15) != SQLITE_NULL, .outboxState = outboxState});
+    if (state != ir::IrRecordState::Eligible && state != ir::IrRecordState::Failed) continue;
+    ir::IrUploadCandidateSummary summary;
+    summary.modernChartResultId = summary.result.resultId = sqlite3_column_int(row, 0);
+    summary.result.attemptId = sqliteColumnString(row, 1);
+    auto &score = summary.result.score;
+    score.chartTitle = sqliteColumnString(row, 2);
+    score.chartArtist = sqliteColumnString(row, 3);
+    score.chartSha256 = sqliteColumnString(row, 20);
+    score.score = sqlite3_column_int(row, 4);
+    score.maxScore = sqlite3_column_int(row, 5);
+    score.maxCombo = sqlite3_column_int(row, 6);
+    score.clearType = normalizeClearLamp(sqlite3_column_int(row, 7));
+    score.finalGauge = static_cast<float>(sqlite3_column_double(row, 8));
+    summary.result.keyMode = sqlite3_column_int(row, 9);
+    summary.result.adoptedGaugeType = static_cast<GaugeType>(sqlite3_column_int(row, 10));
+    score.provenance.player1.option = sqliteColumnString(row, 13);
+    score.provenance.assistOption = sqliteColumnString(row, 14);
+    summary.state = state;
+    if (state == ir::IrRecordState::Failed) summary.failureReason = ir::sanitizeDiagnostic(sqliteColumnString(row, 17));
+    outcome.candidates.push_back(std::move(summary));
+  }
+  if (rc != SQLITE_DONE || !transaction.commit(error)) return {.diagnostic = "could not finish IR summary read"};
+  if (outcome.omittedRows) outcome.diagnostic = ir::sanitizeDiagnostic(
+      std::to_string(outcome.omittedRows) + " modern IR rows were omitted because durable facts disagreed.");
+  return outcome;
+}
+
+ir::IrUploadCandidateReadOutcome ReplayRepository::LoadIrUploadCandidate(
+    std::string_view providerId, std::string_view serverOrigin,
+    int resultId, std::string_view attemptId) {
+  profile_database_activity::ReadGuard operation;
+  if (resultId <= 0 || !uuid::isCanonicalLowerV4(attemptId))
+    return {.status = ir::IrUploadCandidateReadStatus::Invalid, .diagnostic = "invalid selected IR identity"};
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) return {.diagnostic = "replay storage is unavailable"};
+  std::string error;
+  SqliteTransactionHandle transaction(impl_->sessionDatabase, "BEGIN TRANSACTION", error);
+  if (!transaction.active()) return {.diagnostic = "could not begin selected IR read"};
+  auto source = loadIrSourcesOnConnection(impl_->sessionDatabase, providerId, serverOrigin, {}, 1, {}, resultId);
+  if (source.status != IrSourceReadStatus::Loaded) return {.diagnostic = std::move(source.diagnostic)};
+  auto projected = ir::projectIrUploadCandidates(source.sources, providerId, serverOrigin);
+  if (projected.candidates.size() != 1 || projected.candidates.front().attemptId() != attemptId)
+    return {.status = ir::IrUploadCandidateReadStatus::IntegrityConflict,
+            .diagnostic = "selected IR result is changed, unavailable, or no longer eligible"};
+  if (!transaction.commit(error)) return {.diagnostic = "could not finish selected IR read"};
+  return {.status = ir::IrUploadCandidateReadStatus::Loaded, .candidates = std::move(projected.candidates)};
+}
+
 ir::IrUploadCandidateReadOutcome ReplayRepository::ListIrUploadCandidates(
     std::string_view providerId, std::string_view serverOrigin,
     std::optional<int> beforeModernChartResultId, std::size_t limit) {
@@ -3264,7 +3496,16 @@ ReplayRepository::LoadIrReconciliationCandidates(
       .nextBeforeModernChartResultId = loaded.nextBeforeModernChartResultId,
       .diagnostic = loaded.diagnostic};
   outcome.candidates.reserve(loaded.sources.size());
+  std::size_t omittedRows = loaded.omittedRows;
   for (auto &source : loaded.sources) {
+    // Reconciliation does not use the Records/manual-upload projections, so
+    // perform their same agreement check here before exposing receipt facts.
+    std::string diagnostic;
+    if (!ir::validateIrUploadCandidateSource(source, providerId, serverOrigin,
+                                             diagnostic)) {
+      ++omittedRows;
+      continue;
+    }
     ir::IrLocalReceiptCandidate candidate{
         .modernChartResultId = source.modernChartResultId,
         .attemptId = source.result.attemptId,
@@ -3286,6 +3527,10 @@ ReplayRepository::LoadIrReconciliationCandidates(
   if (!transaction.commit(transactionError)) {
     return {.status = Status::StorageFailure,
             .diagnostic = "could not finish modern IR reconciliation read"};
+  }
+  if (omittedRows != 0) {
+    outcome.diagnostic = std::to_string(omittedRows) +
+        " modern IR rows were omitted because durable facts disagreed.";
   }
   outcome.diagnostic = ir::sanitizeDiagnostic(outcome.diagnostic);
   return outcome;

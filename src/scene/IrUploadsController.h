@@ -48,7 +48,7 @@ struct VerificationOutcome {
 };
 
 struct PreparationDependencies {
-  std::function<VerificationOutcome(const ir::IrUploadCandidate &,
+  std::function<VerificationOutcome(const ir::IrUploadCandidateSummary &,
                                     const std::stop_token &)>
       verify;
   std::function<ir::IrSavedResultBatchUploadResult(
@@ -85,26 +85,26 @@ private:
 };
 
 [[nodiscard]] PreparationOutcome prepareSelectedCandidates(
-    std::span<const ir::IrUploadCandidate> candidates,
+    std::span<const ir::IrUploadCandidateSummary> candidates,
     const std::stop_token &stopToken,
     const PreparationDependencies &dependencies,
     std::shared_ptr<DurableEnqueueGate> enqueueGate = {}) noexcept;
 
 class Controller {
 public:
-  void replaceCandidates(std::vector<ir::IrUploadCandidate> candidates);
+  void replaceCandidates(std::vector<ir::IrUploadCandidateSummary> candidates);
   void applyCandidateRefresh(
-      std::optional<std::vector<ir::IrUploadCandidate>> candidates);
+      std::optional<std::vector<ir::IrUploadCandidateSummary>> candidates);
   void toggle(const std::string &attemptId);
   void selectAll();
   void clearSelection();
 
-  [[nodiscard]] std::vector<ir::IrUploadCandidate> beginPreparation();
+  [[nodiscard]] std::vector<ir::IrUploadCandidateSummary> beginPreparation();
   void setPreparationProgress(std::size_t completed, std::size_t total);
   void markCancellationRequested();
   void completePreparation(const PreparationOutcome &outcome);
 
-  [[nodiscard]] const std::vector<ir::IrUploadCandidate> &candidates() const {
+  [[nodiscard]] const std::vector<ir::IrUploadCandidateSummary> &candidates() const {
     return candidates_;
   }
   [[nodiscard]] const std::unordered_set<std::string> &
@@ -128,7 +128,7 @@ public:
 private:
   void applySessionFailureReasons();
 
-  std::vector<ir::IrUploadCandidate> candidates_;
+  std::vector<ir::IrUploadCandidateSummary> candidates_;
   std::unordered_set<std::string> selectedAttemptIds_;
   std::unordered_map<std::string, std::string> sessionFailureReasons_;
   bool preparing_ = false;

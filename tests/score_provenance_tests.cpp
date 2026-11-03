@@ -1144,7 +1144,21 @@ void testTargetScoreOptionUsesPinnedScoreDataEncoding() {
 
 } // namespace
 
+void testRepeatedValidatedSerializationPreservesExactBytes() {
+  std::string error;
+  auto value = makeScoreProvenance(sampleInput("validation-cache"));
+  const auto first = serializeValidatedScoreProvenance(value, error);
+  assert(first && serializeValidatedScoreProvenance(value, error) == first);
+  value.judgeWindowScalePercent = -1;
+  assert(!serializeValidatedScoreProvenance(value, error) && !error.empty());
+  value = makeScoreProvenance(sampleInput("validation-cache-other"));
+  const auto changed = serializeValidatedScoreProvenance(value, error);
+  assert(changed && *changed == serializeScoreProvenance(value));
+  assert(serializeValidatedScoreProvenance(value, error) == changed && error.empty());
+}
+
 int main() {
+  testRepeatedValidatedSerializationPreservesExactBytes();
   testExtendedJudgeRankPercentSurvivesRoundTrip();
   testPreviousLr2ZeroTotalRemainsReadable();
   testPreviousRulesetsCannotRemainVerified();

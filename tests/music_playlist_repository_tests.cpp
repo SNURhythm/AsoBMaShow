@@ -204,6 +204,12 @@ private:
   operator=(const ScopedConnectionOpenCounter &) = delete;
 };
 
+int countSelectPreparation(void *context, int action, const char *, const char *,
+                           const char *, const char *) {
+  if (action == SQLITE_SELECT) ++*static_cast<int *>(context);
+  return SQLITE_OK;
+}
+
 void testRoundTripAndConnectionReuse() {
   TempDirectory temporary;
   const auto playlistPath = temporary.path() / "music_playlist.db";
@@ -255,6 +261,21 @@ void testRoundTripAndConnectionReuse() {
   assert(repository.ReplaceNowPlayingTracks({chartMeta}));
   assert(repository.SaveNowPlayingState({chartMeta}, state));
   assert(repository.SelectNowPlayingTracks().size() == 1);
+  // Query compilation is independent of playlist identity; reset bindings and
+  // reread rows, while retaining the prepared SQL across refreshes.
+  int preparations = 0;
+  auto *owner = lastOpenedConnection;
+  assert(sqlite3_set_authorizer(owner, countSelectPreparation, &preparations) == SQLITE_OK);
+  assert(repository.SelectTracks(playlistId).size() == 1);
+  assert(repository.SelectNowPlayingTracks().size() == 1);
+  preparations = 0;
+  assert(repository.SelectTracks(batchPlaylistId).size() == 1);
+  assert(repository.SelectTracks(playlistId + batchPlaylistId + 1).empty());
+  assert(repository.SelectNowPlayingTracks().size() == 1);
+  std::cout << "Repeated playlist SELECT preparations: " << preparations << std::endl;
+  assert(preparations == 0);
+  assert(sqlite3_set_authorizer(owner, nullptr, nullptr) == SQLITE_OK);
+
   assert(!repository.MoveTrack(playlistId, chartMeta, -1));
   assert(repository.DeleteTrack(playlistId, chartMeta));
   assert(repository.InsertTrack(playlistId, chartMeta));
@@ -266,6 +287,8 @@ void testRoundTripAndConnectionReuse() {
   repository.Shutdown();
   assert(repository.EnsureReady());
   assert(connectionCount.load() > readyConnectionCount);
+  assert(repository.SelectTracks(playlistId).empty());
+  assert(repository.SelectNowPlayingTracks().size() == 1);
   repository.Shutdown();
 }
 
@@ -475,6 +498,16 @@ void testBatchedGroupsUseIndexedReusableStatements() {
   assert(std::filesystem::equivalent(std::filesystem::path(sqlite3_db_filename(owner, "main")), temporary.path() / "music.db"));
   repository_test::StatementTrace trace;
   auto traceStatements = std::make_unique<repository_test::ScopedStatementTrace>(owner, trace);
+  assert(repository.SelectLibraryTracks().size() == 3001);
+  bool measuredLibraryQuery = false;
+  for (auto *stmt = sqlite3_next_stmt(owner, nullptr); stmt;
+       stmt = sqlite3_next_stmt(owner, stmt)) {
+    if (!std::string_view(sqlite3_sql(stmt)).starts_with("WITH folder_groups")) continue;
+    measuredLibraryQuery = true;
+    std::cout << "Library query VM steps: " << sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_VM_STEP, 0) << std::endl;
+    assert(sqlite3_stmt_status(stmt, SQLITE_STMTSTATUS_VM_STEP, 0) < 800000);
+  }
+  assert(measuredLibraryQuery);
   MusicLibraryQueryMetrics first;
   const auto rows = repository.SelectLibraryGroups(groups, &first);
   assert(rows.size() == groups.size());
@@ -497,9 +530,22 @@ void testBatchedGroupsUseIndexedReusableStatements() {
   assert(next.prepared == 0 && next.selects == 1 && next.vmSteps < 1000 && next.fullScanSteps < 10);
   execOrAbort(chartDb.get(), "DELETE FROM chart_meta WHERE folder='/library/1'");
   assert(repository.SelectLibraryGroups({groups.front()}).front().empty()); // No stale result cache.
+  // Multi-chart folders retain their existing representative ordering.
+  execOrAbort(chartDb.get(), "INSERT INTO chart_meta(path,folder,md5,sha256,title,source_priority,source_archive_size) "
+      "VALUES('/library/2/normal.bms','/library/2','','another-hash','Normal',0,0),"
+      "('/standalone.bms','','','standalone-hash','Standalone',0,0)");
+  const auto library = repository.SelectLibraryTracks();
+  const auto multiple = std::ranges::find_if(library, [](const auto &row) {
+    return row.representativeChart.Folder == "/library/2";
+  });
+  assert(multiple != library.end() && multiple->chartCount == 2 &&
+         multiple->representativeChart.BmsPath == "/library/2/normal.bms");
+  assert(std::ranges::any_of(library, [](const auto &row) {
+    return row.chartCount == 1 && row.representativeChart.BmsPath == "/standalone.bms";
+  }));
   traceStatements.reset();
   repository.Shutdown();
-  assert(repository.SelectLibraryGroups({groups[1]}).front().size() == 1); // Statements follow connection lifetime.
+  assert(repository.SelectLibraryGroups({groups[1]}).front().size() == 2); // Statements follow connection lifetime.
 }
 
 } // namespace

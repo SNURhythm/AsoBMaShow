@@ -12,6 +12,8 @@ def main():
     args = parser.parse_args()
     source = (args.root / "src/scene/IrUploadsScene.cpp").read_text()
     methods = [extract(source, signature) for signature in [
+        "void IrUploadsScene::reloadCandidates()",
+        "void IrUploadsScene::applyCandidateLoad()",
         "void IrUploadsScene::startUpload()",
         "void IrUploadsScene::applyPreparationUpdates()",
         "void IrUploadsScene::stopPreparation()",

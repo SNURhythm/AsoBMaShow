@@ -812,7 +812,19 @@ void testReservationReleaseAndModernPendingLifecycle() {
          result_persistence::AcknowledgeStatus::AlreadyAcknowledged);
 }
 
+int irSummaryVmBlocks = 0;
+bool countIrSummaryVm = false;
+int countIrSummaryVmProgress(void *) {
+  if (countIrSummaryVm) ++irSummaryVmBlocks;
+  return 0;
+}
+int installIrSummaryVmCounter(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  sqlite3_progress_handler(db, 100, countIrSummaryVmProgress, nullptr);
+  return SQLITE_OK;
+}
+
 void testIrSourceHistoryOverGlobalBoundReturnsKeysetPages() {
+  assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(installIrSummaryVmCounter)) == SQLITE_OK);
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path / "replay.db";
   ReplayRepository repository(databasePath);
@@ -878,6 +890,208 @@ void testIrSourceHistoryOverGlobalBoundReturnsKeysetPages() {
          reconciliation.candidates.size() == 1 &&
          reconciliation.candidates.front().attemptId == newest.attemptId &&
          reconciliation.nextBeforeModernChartResultId.has_value());
+  database = openDatabase(databasePath);
+  // Reuse the large malformed-source fixture above. Seed negative cache rows
+  // so this check isolates warm query cost rather than validation/backfill.
+  exec(database.get(), "INSERT OR IGNORE INTO ir_candidate_summary_v1 "
+      "SELECT id,'tachi',0,0,'','' FROM modern_chart_results");
+  irSummaryVmBlocks = 0;
+  countIrSummaryVm = true;
+  const auto firstPage = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac", {}, 32);
+  countIrSummaryVm = false;
+  assert(firstPage.status == ir::IrUploadCandidateReadStatus::Loaded && firstPage.nextBeforeModernChartResultId);
+  std::cout << "Warm first IR page VM blocks: " << irSummaryVmBlocks << std::endl;
+  assert(irSummaryVmBlocks < 200 && "first 32-row page must not scan all cached history");
+  sqlite3_cancel_auto_extension(reinterpret_cast<void (*)()>(installIrSummaryVmCounter));
+}
+
+// Count SELECT compilation, not execution, across the repository's own connections.
+int irSelectPreparations = 0;
+bool countIrSelectPreparations = false;
+int countIrSelect(void *, int action, const char *, const char *, const char *, const char *) {
+  if (countIrSelectPreparations && action == SQLITE_SELECT) ++irSelectPreparations;
+  return SQLITE_OK;
+}
+int installIrSelectCounter(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(db, countIrSelect, nullptr);
+}
+
+int irPayloadReads = 0;
+bool trackIrPayloadReads = false;
+int countIrPayload(void *, int action, const char *, const char *column, const char *, const char *) {
+  if (trackIrPayloadReads && action == SQLITE_READ && column &&
+      (std::string_view(column) == "payload_json" ||
+       std::string_view(column) == "provenance_json" ||
+       std::string_view(column) == "gauge_history_json")) ++irPayloadReads;
+  return SQLITE_OK;
+}
+int installIrPayloadCounter(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  return sqlite3_set_authorizer(db, countIrPayload, nullptr);
+}
+
+result_persistence::ModernChartResult verifiedResult(int suffix) {
+  auto value = result(suffix);
+  bms_parser::ChartMeta meta;
+  meta.KeyMode = 7;
+  meta.MD5 = value.score.chartMd5;
+  meta.SHA256 = value.score.chartSha256;
+  meta.Rank = 2;
+  meta.TotalNotes = value.score.maxScore / 2;
+  meta.HasTotal = true;
+  meta.Total = 200.5;
+  const auto judge =
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, meta.Rank);
+  value.score.provenance = makeScoreProvenance({
+      .chartMeta = meta,
+      .longNoteMode = value.score.longNoteMode,
+      .judgeRankSource = JudgeRankSource::Chart,
+      .sourceJudgeRank = meta.Rank,
+      .effectiveJudgeContexts = judge.contexts,
+      .totalNotes = meta.TotalNotes,
+      .authoredGaugeTotal = meta.Total,
+      .effectiveGaugeTotal =
+          resolveEffectiveGaugeTotal(GameplayRuleset::LR2, meta),
+      .candidateSelection = gameplay::CandidateSelectionMode::LR2,
+      .gaugeType = GaugeType::Hard,
+      .inputDevices = {InputDeviceCategory::Keyboard},
+      .ruleset = RulesetDescriptor::For(GameplayRuleset::LR2),
+  });
+  value.adoptedGaugeType = GaugeType::Hard;
+  value.resultFingerprint = result_persistence::modernResultFingerprint(value);
+  return value;
+}
+
+void testIrSummaryLiveStateAndSelectedValidation() {
+  TemporaryDirectory temporary;
+  ReplayRepository repository(temporary.path / "replay.db");
+  assert(repository.EnsureSchema());
+  const auto value = verifiedResult(1);
+  const auto staged = repository.StageModernChartResult(value, snapshot(value), std::nullopt, {});
+  assert(staged.status == ModernChartStageStatus::Staged);
+  const int id = staged.receipt->resultId;
+  auto db = openDatabase(temporary.path / "replay.db");
+  // Simulate an existing profile requiring bounded backfill.
+  exec(db.get(), "DELETE FROM ir_candidate_summary_v1");
+  const auto page = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac", {}, 1);
+  assert(page.status == ir::IrUploadCandidateReadStatus::Loaded && page.candidates.size() == 1);
+  assert(page.candidates[0].result.score.chartTitle == "Title" &&
+         page.candidates[0].result.score.score == 7 &&
+         page.candidates[0].result.score.chartSha256 == value.score.chartSha256);
+  assert(repository.LoadIrUploadCandidate("tachi", "https://boku.tachi.ac", id, value.attemptId).candidates.size() == 1);
+  assert(repository.LoadIrUploadCandidate("tachi", "https://boku.tachi.ac", id, attemptId(2)).candidates.empty());
+  auto queued = draft(snapshot(value));
+  queued.providerId = "tachi";
+  assert(repository.EnqueueReadyIrOutboxDraft(queued, true).status == ir::IrOutboxInsertStatus::Inserted);
+  assert(repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac").candidates.empty());
+  assert(repository.LoadIrUploadCandidate("tachi", "https://boku.tachi.ac", id, value.attemptId).candidates.empty());
+  exec(db.get(), "UPDATE ir_outbox SET state=4,last_error_message='rejected'");
+  const auto failed = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac");
+  assert(failed.candidates.size() == 1 && failed.candidates[0].state == ir::IrRecordState::Failed &&
+         failed.candidates[0].failureReason == "rejected");
+  exec(db.get(), "INSERT INTO ir_submission_receipts(provider_id,server_origin,modern_chart_result_id,"
+      "attempt_id,chart_md5,chart_sha256,confirmation_source,confirmed_at_ms) VALUES('tachi','https://other.example'," +
+      std::to_string(id) + ",'" + value.attemptId + "','" + value.score.chartMd5 + "','" + value.score.chartSha256 + "',0,1700000000000)");
+  assert(repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac").candidates.size() == 1);
+  assert(repository.ListIrUploadCandidateSummaries("tachi", "https://other.example").candidates.empty());
+  assert(repository.ListIrUploadCandidateSummaries("other", "https://boku.tachi.ac").candidates.size() == 1);
+  exec(db.get(), "UPDATE modern_chart_results SET chart_title='tampered'");
+  const auto corrupt = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac");
+  assert(corrupt.candidates.empty() && corrupt.omittedRows == 1);
+  assert(repository.LoadIrUploadCandidate("tachi", "https://boku.tachi.ac", id, value.attemptId).candidates.empty());
+}
+
+void testIrSummaryPersistsAndInvalidates() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(installIrPayloadCounter)) == SQLITE_OK);
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    const auto value = result(1);
+    assert(repository.StageModernChartResult(value, snapshot(value), std::nullopt, {}).status ==
+           ModernChartStageStatus::Staged);
+    const auto first = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac");
+    assert(first.status == ir::IrUploadCandidateReadStatus::Loaded && first.omittedRows == 0);
+    repository.Shutdown();
+    assert(repository.EnsureSchema());
+    irPayloadReads = 0;
+    trackIrPayloadReads = true;
+    const auto warm = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac");
+    trackIrPayloadReads = false;
+    assert(warm.status == ir::IrUploadCandidateReadStatus::Loaded && warm.omittedRows == 0);
+    assert(irPayloadReads == 0 && "warm summary must not read historical JSON after reopen");
+    auto db = openDatabase(path);
+    exec(db.get(), "UPDATE ir_submission_snapshots SET payload_json='invalid'");
+    const auto invalid = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac");
+    assert(invalid.status == ir::IrUploadCandidateReadStatus::Loaded && invalid.omittedRows == 1);
+    irPayloadReads = 0;
+    trackIrPayloadReads = true;
+    const auto invalidAgain = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac");
+    trackIrPayloadReads = false;
+    assert(invalidAgain.omittedRows == 1 && irPayloadReads == 0);
+    exec(db.get(), "DELETE FROM ir_submission_snapshots");
+    const auto removed = repository.ListIrUploadCandidateSummaries("tachi", "https://boku.tachi.ac");
+    assert(removed.omittedRows == 0 && removed.candidates.empty());
+  }
+  sqlite3_cancel_auto_extension(reinterpret_cast<void (*)()>(installIrPayloadCounter));
+}
+
+void testIrPageReusesLookupStatements() {
+  TemporaryDirectory temporary;
+  assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(installIrSelectCounter)) == SQLITE_OK);
+  {
+    ReplayRepository repository(temporary.path / "replay.db");
+    assert(repository.EnsureSchema());
+    for (int i = 1; i <= 8; ++i) {
+      const auto value = result(i);
+      assert(repository.StageModernChartResult(value, snapshot(value), std::nullopt, {}).status ==
+             ModernChartStageStatus::Staged);
+    }
+    irSelectPreparations = 0;
+    countIrSelectPreparations = true;
+    const auto page = repository.ListIrUploadCandidates("tachi", "https://boku.tachi.ac");
+    countIrSelectPreparations = false;
+    assert(page.status == ir::IrUploadCandidateReadStatus::Loaded && page.candidates.empty());
+    std::cout << "IR page SELECT preparations: " << irSelectPreparations << std::endl;
+    assert(irSelectPreparations <= 6); // Page/schema reads + four reusable lookups.
+    const auto records = repository.ListIrUploadRecords("tachi", "https://boku.tachi.ac");
+    assert(records.records.size() == 8);
+    for (std::size_t i = 0; i < records.records.size(); ++i)
+      assert(records.records[i].attemptId == result(8 - static_cast<int>(i)).attemptId);
+    auto database = openDatabase(temporary.path / "replay.db");
+    // Individually authenticated facts must still agree with their owner at
+    // every projection boundary, including reconciliation (which has no UI projection).
+    auto differentOwner = result(5);
+    ++differentOwner.playedAtUnixMillis;
+    differentOwner.resultFingerprint = result_persistence::modernResultFingerprint(differentOwner);
+    const auto mismatchedSnapshot = snapshot(differentOwner);
+    std::string diagnostic;
+    const auto payload = ir::serializeIrSubmissionSnapshot(mismatchedSnapshot, diagnostic);
+    assert(payload);
+    SqliteStatementHandle replaceSnapshot;
+    assert(prepareSqliteStatement(database.get(),
+        "UPDATE ir_submission_snapshots SET payload_json=?,fingerprint=? WHERE attempt_id=?",
+        replaceSnapshot) == SQLITE_OK);
+    bindSqliteText(replaceSnapshot, 1, *payload);
+    bindSqliteText(replaceSnapshot, 2, mismatchedSnapshot.fingerprint);
+    bindSqliteText(replaceSnapshot, 3, differentOwner.attemptId);
+    assert(sqlite3_step(replaceSnapshot) == SQLITE_DONE);
+    replaceSnapshot.reset();
+    const auto mismatched = repository.ListIrUploadCandidates("tachi", "https://boku.tachi.ac");
+    assert(mismatched.status == ir::IrUploadCandidateReadStatus::Loaded && mismatched.omittedRows == 1);
+    const auto reconciled = repository.LoadIrReconciliationCandidates("tachi", "https://boku.tachi.ac");
+    assert(reconciled.status == ir::IrReconciliationReadOutcome::Status::Loaded &&
+           reconciled.candidates.size() == 7 && !reconciled.diagnostic.empty());
+    for (const auto &candidate : reconciled.candidates)
+      assert(candidate.attemptId != differentOwner.attemptId);
+    exec(database.get(), "UPDATE ir_submission_snapshots SET payload_json='invalid' WHERE attempt_id='" +
+         result(4).attemptId + "'");
+    const auto afterCorruption = repository.ListIrUploadRecords("tachi", "https://boku.tachi.ac");
+    assert(afterCorruption.records.size() == 6 && afterCorruption.omittedRows == 2);
+    assert(afterCorruption.records.back().attemptId == result(1).attemptId);
+
+  }
+  sqlite3_cancel_auto_extension(reinterpret_cast<void (*)()>(installIrSelectCounter));
 }
 
 void testChartScopedIrRecordsIgnoreUnrelatedHistory() {
@@ -1082,6 +1296,9 @@ void testExactRetryAttachesOnlyMissingReplayAtomically() {
 } // namespace
 
 int main() {
+  testIrSummaryPersistsAndInvalidates();
+  testIrSummaryLiveStateAndSelectedValidation();
+  testIrPageReusesLookupStatements();
   testCurrentVersionRemoteLampUpgrade();
   testLegacyLightAssistMigrationPreservesAuthenticatedResults();
   testPendingGaugeEvidenceRecoveryAndCleanup();

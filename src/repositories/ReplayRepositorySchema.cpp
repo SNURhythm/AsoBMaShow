@@ -2977,6 +2977,32 @@ bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
   return true;
 }
 
+namespace {
+bool ensureIrCandidateSummaryCache(sqlite3 *database) {
+  // Derived data only. Bump this name whenever eligibility policy or the
+  // authenticated source contract changes; old summaries must not be reused.
+  if (!execSql(database,
+      "CREATE TABLE IF NOT EXISTS ir_candidate_summary_v1("
+      "result_id INTEGER NOT NULL,provider_id TEXT NOT NULL,"
+      "valid INTEGER NOT NULL,eligible INTEGER NOT NULL,"
+      "player_option TEXT NOT NULL,assist_option TEXT NOT NULL,"
+      "PRIMARY KEY(result_id,provider_id))",
+      "creating IR candidate summary cache")) return false;
+  for (const std::string table : {"modern_chart_results", "ir_submission_snapshots"}) {
+    const std::string key = table == "modern_chart_results" ? "id" : "modern_chart_result_id";
+    for (const std::string event : {"INSERT", "UPDATE", "DELETE"}) {
+      std::string sql = "CREATE TRIGGER IF NOT EXISTS ir_candidate_v1_" + table + "_" + event +
+          " AFTER " + event + " ON " + table + " BEGIN ";
+      if (event != "INSERT") sql += "DELETE FROM ir_candidate_summary_v1 WHERE result_id=OLD." + key + ";";
+      if (event != "DELETE") sql += "DELETE FROM ir_candidate_summary_v1 WHERE result_id=NEW." + key + ";";
+      sql += " END";
+      if (!execSql(database, sql.c_str(), "creating IR candidate invalidation")) return false;
+    }
+  }
+  return true;
+}
+} // namespace
+
 bool replay_repository_detail::PrepareReplayDatabaseOnConnection(
     sqlite3 *database, const std::filesystem::path &path) {
   if (database == nullptr || rejectFutureReplayDatabase(database)) {
@@ -2994,12 +3020,12 @@ bool replay_repository_detail::PrepareReplayDatabaseOnConnection(
     return false;
   }
   if (*version == 0 && !hasSchema) {
-    return CreateReplayTablesOnConnection(database);
+    return CreateReplayTablesOnConnection(database) && ensureIrCandidateSummaryCache(database);
   }
   if (*version >= 19) {
-    return MigrateSchema(database);
+    return MigrateSchema(database) && ensureIrCandidateSummaryCache(database);
   }
-  return prepareReplayDatabaseWithCompaction(database, path);
+  return prepareReplayDatabaseWithCompaction(database, path) && ensureIrCandidateSummaryCache(database);
 }
 
 sqlite3 *

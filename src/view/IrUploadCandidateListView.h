@@ -9,15 +9,17 @@
 
 #include <functional>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 class IrUploadCandidateListItemView final : public View {
 public:
   IrUploadCandidateListItemView();
 
-  void setCandidate(const ir::IrUploadCandidate &candidate, bool selected,
+  void setCandidate(const ir::IrUploadCandidateSummary &candidate, bool selected,
                     bool selectionLocked,
-                    std::function<void(std::string)> selectionToggle);
+                    std::function<void(std::string)> selectionToggle,
+                    const std::filesystem::path &artwork);
   [[nodiscard]] bool hasClearLamp() const noexcept { return hasClearLamp_; }
 
 private:
@@ -40,19 +42,22 @@ private:
   bool hasClearLamp_ = false;
 };
 
-class IrUploadCandidateListView : public RecyclerView<ir::IrUploadCandidate> {
+class IrUploadCandidateListView : public RecyclerView<ir::IrUploadCandidateSummary> {
 public:
   IrUploadCandidateListView();
 
-  void setCandidates(const std::vector<ir::IrUploadCandidate> &candidates,
+  void setCandidates(const std::vector<ir::IrUploadCandidateSummary> &candidates,
                      const std::unordered_set<std::string> &selectedAttemptIds);
   void setSelectedAttemptIds(
       const std::unordered_set<std::string> &selectedAttemptIds);
   void setSelectionLocked(bool locked);
 
+  // Called only for bound rows; image payload loading stays asynchronous.
+  std::function<std::filesystem::path(const std::string &chartSha256)> resolveArtwork;
   std::function<void(std::string attemptId)> onSelectionToggle;
 
 private:
+  std::unordered_map<std::string, std::filesystem::path> artworkPaths_;
   std::unordered_set<std::string> selectedAttemptIds_;
   bool selectionLocked_ = false;
 };

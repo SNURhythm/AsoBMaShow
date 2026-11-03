@@ -1077,6 +1077,12 @@ bool MainMenuScene::canPrepareForStorageMaintenance(std::string &error) {
     error = "A chart download, preparation, or export is active.";
     return false;
   }
+  if (irTab_) {
+    if (auto reason = irTab_->profileSwitchBlocker()) {
+      error = *reason;
+      return false;
+    }
+  }
   return !musicTab_ || musicTab_->canPrepareForStorageMaintenance(error);
 }
 

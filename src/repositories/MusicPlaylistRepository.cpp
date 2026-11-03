@@ -920,6 +920,7 @@ struct MusicPlaylistRepository::Impl {
   sqlite3 *database = nullptr;
   sqlite3 *schemaDatabase = nullptr;
   SqliteStatementHandle libraryTracks, folderTracks, pathTracks;
+  SqliteStatementHandle storedPlaylistTracks, storedNowPlayingTracks;
   SqliteStatementHandle requestedGroupInsert, requestedGroupClear, requestedGroupSelect;
 };
 
@@ -948,6 +949,7 @@ bool MusicPlaylistRepository::Impl::EnsureDatabase() {
 
 void MusicPlaylistRepository::Impl::Shutdown() {
   libraryTracks.reset(); folderTracks.reset(); pathTracks.reset();
+  storedPlaylistTracks.reset(); storedNowPlayingTracks.reset();
   requestedGroupInsert.reset(); requestedGroupClear.reset(); requestedGroupSelect.reset();
   sqlite3 *connection = database;
   database = nullptr;
@@ -1678,16 +1680,18 @@ void MusicPlaylistRepository::Impl::SelectLibraryTracks(
   representativeOrder += chartSourceOrderBy("rep");
   representativeOrder += ", rep.title COLLATE NOCASE, rep.path";
 
+  // A singleton already identifies its representative; avoid another indexed
+  // lookup, source-preference check and title/artwork sort for those folders.
   std::string query =
       "WITH folder_groups AS ("
       "SELECT cm.folder AS music_key, COUNT(*) AS music_chart_count, "
-      "(SELECT rep.path FROM ";
+      "CASE WHEN COUNT(*) = 1 THEN MIN(cm.path) ELSE (SELECT rep.path FROM ";
   query += kChartMetaTable;
   query += " rep WHERE rep.folder = cm.folder AND ";
   query += preferredRepresentative;
   query += " ORDER BY ";
   query += representativeOrder;
-  query += " LIMIT 1) AS representative_path FROM ";
+  query += " LIMIT 1) END AS representative_path FROM ";
   query += kChartMetaTable;
   query += " cm WHERE cm.folder IS NOT NULL AND cm.folder != '' AND ";
   query += preferredChart;
@@ -1787,15 +1791,21 @@ void MusicPlaylistRepository::Impl::SelectNowPlayingTracks(
     return;
   }
 
-  const std::string query = storedMusicTrackSelectQuery(
-      {"music_now_playing_items", "mnp", "queue_position",
-       "queue_music_key_type", ""});
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "selecting now playing tracks",
-                                    logSqlErrorText)) {
-    return;
+  auto &stmt = storedNowPlayingTracks;
+  if (!stmt) {
+    const std::string query = storedMusicTrackSelectQuery(
+        {"music_now_playing_items", "mnp", "queue_position",
+         "queue_music_key_type", ""});
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "selecting now playing tracks",
+                                      logSqlErrorText)) {
+      return;
+    }
   }
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+  });
   readStoredMusicTrackRows(stmt, tracks);
 }
 
@@ -1805,15 +1815,21 @@ void MusicPlaylistRepository::Impl::SelectTracks(sqlite3 *db, int playlistId,
     return;
   }
 
-  const std::string query = storedMusicTrackSelectQuery(
-      {"music_playlist_items", "mpi", "playlist_position",
-       "playlist_music_key_type", "mpi.playlist_id = ?1 AND "});
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
-                                    "selecting music playlist tracks",
-                                    logSqlErrorText)) {
-    return;
+  auto &stmt = storedPlaylistTracks;
+  if (!stmt) {
+    const std::string query = storedMusicTrackSelectQuery(
+        {"music_playlist_items", "mpi", "playlist_position",
+         "playlist_music_key_type", "mpi.playlist_id = ?1 AND "});
+    if (!prepareSqliteStatementLogged(db, query, stmt,
+                                      "selecting music playlist tracks",
+                                      logSqlErrorText)) {
+      return;
+    }
   }
+  const auto resetStatement = makeScopeExit([&] {
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+  });
   sqlite3_bind_int(stmt, 1, playlistId);
   readStoredMusicTrackRows(stmt, tracks);
 }

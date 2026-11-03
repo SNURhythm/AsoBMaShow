@@ -82,7 +82,7 @@ DurableEnqueueGate::enqueueUnlessCancelled(
 }
 
 PreparationOutcome prepareSelectedCandidates(
-    std::span<const ir::IrUploadCandidate> candidates,
+    std::span<const ir::IrUploadCandidateSummary> candidates,
     const std::stop_token &stopToken,
     const PreparationDependencies &dependencies,
     std::shared_ptr<DurableEnqueueGate> enqueueGate) noexcept {
@@ -271,7 +271,7 @@ PreparationOutcome prepareSelectedCandidates(
 }
 
 void Controller::replaceCandidates(
-    std::vector<ir::IrUploadCandidate> candidates) {
+    std::vector<ir::IrUploadCandidateSummary> candidates) {
   candidates_ = std::move(candidates);
   ir::detail::intersectIrUploadSelectionIndexed(selectedAttemptIds_,
                                                 candidates_);
@@ -295,7 +295,7 @@ void Controller::applySessionFailureReasons() {
 }
 
 void Controller::applyCandidateRefresh(
-    std::optional<std::vector<ir::IrUploadCandidate>> candidates) {
+    std::optional<std::vector<ir::IrUploadCandidateSummary>> candidates) {
   if (candidates.has_value()) {
     replaceCandidates(std::move(*candidates));
   }
@@ -306,7 +306,7 @@ void Controller::toggle(const std::string &attemptId) {
     return;
   }
   const auto found = std::ranges::find_if(
-      candidates_, [&attemptId](const ir::IrUploadCandidate &candidate) {
+      candidates_, [&attemptId](const ir::IrUploadCandidateSummary &candidate) {
         return candidate.attemptId() == attemptId;
       });
   if (found == candidates_.end()) {
@@ -333,11 +333,11 @@ void Controller::clearSelection() {
   }
 }
 
-std::vector<ir::IrUploadCandidate> Controller::beginPreparation() {
+std::vector<ir::IrUploadCandidateSummary> Controller::beginPreparation() {
   if (preparing_ || selectedAttemptIds_.empty()) {
     return {};
   }
-  std::vector<ir::IrUploadCandidate> snapshot;
+  std::vector<ir::IrUploadCandidateSummary> snapshot;
   snapshot.reserve(selectedAttemptIds_.size());
   for (const auto &candidate : candidates_) {
     if (selectedAttemptIds_.contains(candidate.result.attemptId)) {

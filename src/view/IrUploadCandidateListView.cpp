@@ -37,7 +37,7 @@ std::string keyModeDescription(int keyMode) {
 }
 
 i18n::Text attemptDetail(
-    const result_persistence::ModernChartResult &result) {
+    const ir::IrUploadCandidateSummary::DisplayResult &result) {
   auto detail = i18n::message("ir.upload.candidate.detail",
       {{"attempt", result.attemptId.substr(0, 8)},
        {"combo", std::to_string(result.score.maxCombo)},
@@ -108,6 +108,7 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
       ->setBorderWidth(1)
       ->setCornerRadius(app_theme::controlRadius());
   jacketImage_->setName("irUploadJacket");
+  jacketImage_->setContentMode(ImageView::ContentMode::Contain);
   jacketImage_->setWidth(78)->setHeight(78);
   jacketImage_->setCornerRadius(
       app_theme::childRadiusForInset(app_theme::controlRadius(), 1.0F, 2.0F));
@@ -181,8 +182,9 @@ IrUploadCandidateListItemView::IrUploadCandidateListItemView() {
 }
 
 void IrUploadCandidateListItemView::setCandidate(
-    const ir::IrUploadCandidate &candidate, bool selected, bool selectionLocked,
-    std::function<void(std::string)> selectionToggle) {
+    const ir::IrUploadCandidateSummary &candidate, bool selected, bool selectionLocked,
+    std::function<void(std::string)> selectionToggle,
+    const std::filesystem::path &artwork) {
   const auto &result = candidate.result;
   const auto &score = result.score;
   const std::string attemptId = result.attemptId;
@@ -235,7 +237,8 @@ void IrUploadCandidateListItemView::setCandidate(
     hasClearLamp_ = false;
   }
 
-  jacketImage_->freeImage();
+  if (artwork.empty()) jacketImage_->freeImage();
+  else jacketImage_->setImageAsync(fspath_to_path_t(artwork));
 
   const bool failed = candidate.state == ir::IrRecordState::Failed;
   statusText_->setLocalizedText(i18n::message(
@@ -255,16 +258,16 @@ void IrUploadCandidateListItemView::setCandidate(
 }
 
 IrUploadCandidateListView::IrUploadCandidateListView()
-    : RecyclerView<ir::IrUploadCandidate>(
-          [](const ir::IrUploadCandidate &left,
-             const ir::IrUploadCandidate &right) {
+    : RecyclerView<ir::IrUploadCandidateSummary>(
+          [](const ir::IrUploadCandidateSummary &left,
+             const ir::IrUploadCandidateSummary &right) {
             return left.attemptId() == right.attemptId();
           }) {
   itemHeight = 108;
-  onCreateView = [](const ir::IrUploadCandidate &) {
+  onCreateView = [](const ir::IrUploadCandidateSummary &) {
     return new IrUploadCandidateListItemView();
   };
-  onBind = [this](View *view, const ir::IrUploadCandidate &candidate, int,
+  onBind = [this](View *view, const ir::IrUploadCandidateSummary &candidate, int,
                   bool) {
     auto *itemView = dynamic_cast<IrUploadCandidateListItemView *>(view);
     if (itemView == nullptr) {
@@ -272,24 +275,38 @@ IrUploadCandidateListView::IrUploadCandidateListView()
     }
     const bool selected =
         selectedAttemptIds_.contains(candidate.result.attemptId);
+    std::filesystem::path artwork;
+    const auto &hash = candidate.result.score.chartSha256;
+    if (resolveArtwork && !hash.empty()) {
+      auto found = artworkPaths_.find(hash);
+      if (found == artworkPaths_.end()) {
+        // Bound metadata memory while reusing lookups across selection rebinds
+        // and repeated plays of the same chart. Never decode image bytes here.
+        if (artworkPaths_.size() >= 128) artworkPaths_.clear();
+        found = artworkPaths_.emplace(hash, resolveArtwork(hash)).first;
+      }
+      artwork = found->second;
+    }
     itemView->setCandidate(candidate, selected, selectionLocked_,
                            [this](std::string attemptId) {
                              if (onSelectionToggle) {
                                onSelectionToggle(std::move(attemptId));
                              }
-                           });
+                           }, artwork);
   };
 }
 
 void IrUploadCandidateListView::setCandidates(
-    const std::vector<ir::IrUploadCandidate> &candidates,
+    const std::vector<ir::IrUploadCandidateSummary> &candidates,
     const std::unordered_set<std::string> &selectedAttemptIds) {
+  artworkPaths_.clear();
   selectedAttemptIds_ = selectedAttemptIds;
   setItems(candidates);
 }
 
 void IrUploadCandidateListView::setSelectedAttemptIds(
     const std::unordered_set<std::string> &selectedAttemptIds) {
+  if (selectedAttemptIds_ == selectedAttemptIds) return;
   selectedAttemptIds_ = selectedAttemptIds;
   rebindVisibleItems();
 }

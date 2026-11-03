@@ -14,6 +14,7 @@ add_executable(ir_uploads_controller_tests
     ${ir_upload_scene_methods}
     src/ir/IrSavedResultBatchUpload.cpp
     src/scene/IrUploadPreparationTask.cpp
+    src/scene/IrCandidateLoadTask.cpp
     src/scene/IrUploadsController.cpp
     src/ir/IrOutboxModels.cpp
     src/ScoreProvenance.cpp
