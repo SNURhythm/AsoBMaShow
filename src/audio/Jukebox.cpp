@@ -1,3 +1,4 @@
+#include "AudioPreparationBudget.h"
 #include "BmsonAudio.h"
 #include "Jukebox.h"
 #include "ChartVisualAssetResolver.h"
@@ -3047,6 +3048,28 @@ Jukebox::reconcileChartResources(
       }
     }
   }
+  std::unordered_set<path_t> sliceOnlyPaths;
+  for (const auto &[path, slices] : slicesByPath) sliceOnlyPaths.insert(path);
+  if (sounds && !sliceOnlyPaths.empty()) {
+    std::unordered_set<int> sourceIds;
+    std::unordered_set<int> directIds;
+    for (const auto &[id, slices] : chart.WavSlices)
+      for (const auto &slice : slices) sourceIds.insert(slice.SourceWav);
+    for (const auto *measure : chart.Measures) {
+      for (const auto *timeline : measure->TimeLines) {
+        const auto collect = [&](const auto &notes) {
+          for (const auto *note : notes)
+            if (note && !chart.WavSlices.contains(note->Wav)) directIds.insert(note->Wav);
+        };
+        collect(timeline->Notes);
+        collect(timeline->InvisibleNotes);
+        collect(timeline->BackgroundNotes);
+      }
+    }
+    for (const auto &asset : *sounds)
+      if (!sourceIds.contains(asset.id) || directIds.contains(asset.id))
+        sliceOnlyPaths.erase(asset.key);
+  }
   std::atomic_bool sliceFailed{false};
   std::mutex soundMapMutex;
   const auto consumerFor = [&](const path_t &path) -> AudioWrapper::NativeSoundConsumer {
@@ -3131,7 +3154,7 @@ Jukebox::reconcileChartResources(
                     previous != soundArchiveIdentities.end() &&
                     previous->second == identity->second;
       }
-      reusable = reusable && unchanged;
+      reusable = reusable && unchanged && !sliceOnlyPaths.contains(asset.key);
       const auto recipes = slicesByPath.find(asset.key);
       if (unchanged && recipes != slicesByPath.end()) {
         std::erase_if(recipes->second, [&](const auto &slice) {
@@ -3148,6 +3171,7 @@ Jukebox::reconcileChartResources(
         });
       }
       const bool needsSlices = recipes != slicesByPath.end() && !recipes->second.empty();
+      if (sliceOnlyPaths.contains(asset.key) && !needsSlices) continue;
       // A ready source alone is insufficient: every required slice must either
       // be retained above or populated by the synchronous native consumer.
       // Resolve cached archive sounds once against a shared source snapshot.
@@ -3237,14 +3261,17 @@ Jukebox::reconcileChartResources(
         preparedSounds.erase(found);
       }
     }
+    audio::AudioPreparationScope preparation(isCancelled, audio.runtimeState().effectiveSampleRate);
+    if (prepared && !preparation.reserve(prepared->pcm.size(), prepared->info.channels,
+                                         prepared->info.samplerate)) return;
     const auto consumeNative = consumerFor(path);
     const bool loaded = prepared
         ? ((!consumeNative || consumeNative(prepared)) &&
-           audio.loadPreparedSound(path, *prepared, isCancelled))
-        : audio.loadSound(path, isCancelled, consumeNative);
+           (sliceOnlyPaths.contains(path) || audio.loadPreparedSound(path, *prepared, isCancelled)))
+        : audio.loadSound(path, isCancelled, consumeNative, !sliceOnlyPaths.contains(path));
     if (prepared && decodedCache) decodedCache->ReleaseNativePcm(std::filesystem::path(path), prepared);
     prepared.reset();
-    if (!loaded) return;
+    if (!loaded || sliceOnlyPaths.contains(path)) return;
     std::lock_guard<std::mutex> lock(soundMapMutex);
     for (const int id : regularSoundIds.at(path)) {
       wavTableAbs[id] = path;
@@ -3277,7 +3304,8 @@ Jukebox::reconcileChartResources(
       const auto key = fspath_to_path_t(virtualPath);
       if (const auto ids = batch.soundIdsByPath.find(key);
           ids != batch.soundIdsByPath.end()) {
-        if (audio.loadSoundFromMemory(key, file.bytes, isCancelled, consumerFor(key))) {
+        if (audio.loadSoundFromMemory(key, file.bytes, isCancelled, consumerFor(key),
+                                      !sliceOnlyPaths.contains(key)) && !sliceOnlyPaths.contains(key)) {
           std::lock_guard<std::mutex> lock(soundMapMutex);
           for (const int id : ids->second) {
             wavTableAbs[id] = key;

@@ -1,3 +1,4 @@
+#include "AudioPreparationBudget.h"
 #define MINIAUDIO_IMPLEMENTATION
 #include "AudioWrapper.h"
 #include "AudioFrameTiming.h"
@@ -1047,7 +1048,8 @@ bool AudioWrapper::loadSoundGroup(const path_t &path, const std::vector<path_t> 
 
 bool AudioWrapper::loadSound(const path_t &path,
                              std::atomic<bool> &isCancelled,
-                             const NativeSoundConsumer &consumeNative) {
+                             const NativeSoundConsumer &consumeNative, bool retainSource) {
+  audio::AudioPreparationScope preparation(isCancelled, currentSampleRate.load());
   std::shared_ptr<audio::DecodedAssetCache> cache;
   {
     std::lock_guard lock(soundDataListMutex);
@@ -1065,9 +1067,10 @@ bool AudioWrapper::loadSound(const path_t &path,
     decoded->pcm = std::move(pcm);
     sound = std::move(decoded);
   }
-  if (!sound) return false;
+  if (!sound || !preparation.reserve(sound->pcm.size(), sound->info.channels,
+                                      sound->info.samplerate)) return false;
   const bool loaded = (!consumeNative || consumeNative(sound)) &&
-      loadPreparedSound(path, *sound, isCancelled);
+      (!retainSource || loadPreparedSound(path, *sound, isCancelled));
   if (cache) cache->ReleaseNativePcm(std::filesystem::path(path), sound);
   return loaded;
 }
@@ -1075,7 +1078,8 @@ bool AudioWrapper::loadSound(const path_t &path,
 bool AudioWrapper::loadSoundFromMemory(const path_t &path,
                                        const std::vector<unsigned char> &bytes,
                                        std::atomic<bool> &isCancelled,
-                                       const NativeSoundConsumer &consumeNative) {
+                                       const NativeSoundConsumer &consumeNative, bool retainSource) {
+  audio::AudioPreparationScope preparation(isCancelled, currentSampleRate.load());
   std::shared_ptr<audio::DecodedAssetCache> cache;
   {
     std::lock_guard lock(soundDataListMutex);
@@ -1093,9 +1097,10 @@ bool AudioWrapper::loadSoundFromMemory(const path_t &path,
     decoded->pcm = std::move(pcm);
     sound = std::move(decoded);
   }
-  if (!sound) return false;
+  if (!sound || !preparation.reserve(sound->pcm.size(), sound->info.channels,
+                                      sound->info.samplerate)) return false;
   const bool loaded = (!consumeNative || consumeNative(sound)) &&
-      loadPreparedSound(path, *sound, isCancelled);
+      (!retainSource || loadPreparedSound(path, *sound, isCancelled));
   if (cache) cache->ReleaseNativePcm(std::filesystem::path(path), sound);
   return loaded;
 }
@@ -1129,6 +1134,8 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
     return false;
   }
 
+  audio::AudioPreparationScope preparation(isCancelled, currentSampleRate.load());
+  if (!preparation.reserve(pcmData.size(), channels, sampleRate)) return false;
   auto soundData = std::make_shared<SoundData>();
 
   soundData->currentFrame = 0;
@@ -1297,6 +1304,16 @@ void AudioWrapper::cleanupRetiredSkinSoundsLocked() noexcept {
   }
 }
 
+void AudioWrapper::refreshSkinSoundDecodedBytesLocked() noexcept {
+  skinSoundDecodedBytes = 0;
+  const auto account = [&](auto &record) {
+    record.decodedBytes = record.soundData ? record.soundData->outputData.size() * sizeof(short) : 0;
+    skinSoundDecodedBytes += record.decodedBytes;
+  };
+  for (auto &[identity, record] : skinSounds) account(record);
+  for (auto &record : retiredSkinSounds) account(record);
+}
+
 audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
     const path_t &path, std::atomic<bool> &isCancelled,
     std::size_t maximumEncodedBytes,
@@ -1306,6 +1323,7 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
       return {};
     }
 
+    audio::AudioPreparationScope preparation(isCancelled, currentSampleRate.load(), stop);
     std::shared_ptr<SoundData> privateSound;
     std::size_t remainingDecodedSamples = 0;
     int preparedSampleRate = 0;
@@ -1319,6 +1337,7 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
       }
       remainingDecodedSamples =
           (maximumTotalDecodedBytes - skinSoundDecodedBytes) / sizeof(short);
+      if (remainingDecodedSamples == 0) return {};
       if (skinSounds.size() + retiredSkinSounds.size() >=
           kOwnerControlCommandQueueSize) {
         return {};
@@ -1326,14 +1345,8 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
       if (const auto shared = soundDataIndexMap.find(path);
           shared != soundDataIndexMap.end()) {
         const auto &source = soundDataList[shared->second];
-        if (source == nullptr ||
-            source->sourceData.size() >
-                std::numeric_limits<std::size_t>::max() -
-                    source->outputData.size()) {
-          return {};
-        }
-        const std::size_t samples =
-            source->sourceData.size() + source->outputData.size();
+        if (source == nullptr) return {};
+        const std::size_t samples = source->outputData.size();
         if (samples > std::numeric_limits<std::size_t>::max() / sizeof(short)) {
           return {};
         }
@@ -1363,7 +1376,9 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
       if (!decodeSkinSoundBundleAware(
               path, pcmData, sfInfo, isCancelled,
               {.maximumEncodedBytes = maximumEncodedBytes,
-               .maximumPcmSamples = remainingDecodedSamples},
+               .maximumPcmSamples = audio::DecodedAssetCache::kMaximumPcmAssetBytes / sizeof(short),
+               .maximumOutputSamples = remainingDecodedSamples,
+               .outputSampleRate = currentSampleRate.load(std::memory_order_acquire)},
               stop) ||
           isCancelled || sfInfo.channels <= 0 || sfInfo.samplerate <= 0 ||
           pcmData.size() % static_cast<std::size_t>(sfInfo.channels) != 0) {
@@ -1379,16 +1394,19 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
       const int targetSampleRate =
           currentSampleRate.load(std::memory_order_acquire);
       preparedSampleRate = targetSampleRate;
-      if (!audio::ResampledPcmFitsSampleBudget(
-              privateSound->sourceData.size(), privateSound->channels,
-              privateSound->sourceSampleRate, targetSampleRate,
-              remainingDecodedSamples)) {
+      const auto outputSamples = audio::ProjectedResampledPcmSampleCount(
+          privateSound->sourceData.size(), privateSound->channels,
+          privateSound->sourceSampleRate, targetSampleRate);
+      if (!outputSamples || *outputSamples > remainingDecodedSamples) {
         return {};
       }
-      privateSound->outputData = audio::ResamplePcm(
+      if (!preparation.reserve(privateSound->sourceData.size(), privateSound->channels,
+                               privateSound->sourceSampleRate)) return {};
+      privateSound->outputData = privateSound->sourceSampleRate == targetSampleRate
+          ? privateSound->sourceData : audio::SharedPcmBuffer(audio::ResamplePcm(
           privateSound->sourceData, privateSound->channels,
-          privateSound->sourceSampleRate, targetSampleRate, nullptr,
-          privateSound->durationFrameCount, privateSound->durationSampleRate);
+          privateSound->sourceSampleRate, targetSampleRate, &isCancelled,
+          privateSound->durationFrameCount, privateSound->durationSampleRate));
       if ((!privateSound->sourceData.empty() &&
            privateSound->outputData.empty()) ||
           isCancelled) {
@@ -1404,27 +1422,25 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
       // prepared for the rate that is still current under the owner lock.
       const int targetSampleRate = currentSampleRate.load(std::memory_order_acquire);
       if (preparedSampleRate != targetSampleRate) {
-        if (!audio::ResampledPcmFitsSampleBudget(
-                privateSound->sourceData.size(), privateSound->channels,
-                privateSound->sourceSampleRate, targetSampleRate,
-                remainingDecodedSamples)) return {};
-        privateSound->outputData = audio::ResamplePcm(
+        const auto outputSamples = audio::ProjectedResampledPcmSampleCount(
+            privateSound->sourceData.size(), privateSound->channels,
+            privateSound->sourceSampleRate, targetSampleRate);
+        if (!outputSamples || *outputSamples > remainingDecodedSamples) return {};
+        if (!preparation.reserve(privateSound->sourceData.size(), privateSound->channels,
+                                 privateSound->sourceSampleRate)) return {};
+        privateSound->outputData = privateSound->sourceSampleRate == targetSampleRate
+            ? privateSound->sourceData : audio::SharedPcmBuffer(audio::ResamplePcm(
             privateSound->sourceData, privateSound->channels,
             privateSound->sourceSampleRate, targetSampleRate, &isCancelled,
-            privateSound->durationFrameCount, privateSound->durationSampleRate);
+            privateSound->durationFrameCount, privateSound->durationSampleRate));
         if ((!privateSound->sourceData.empty() && privateSound->outputData.empty()) ||
             isCancelled || stop.stop_requested()) return {};
         privateSound->outputFrameCount =
             privateSound->outputData.size() / static_cast<std::size_t>(privateSound->channels);
         preparedSampleRate = targetSampleRate;
       }
-      if (privateSound->sourceData.size() >
-          std::numeric_limits<std::size_t>::max() -
-              privateSound->outputData.size()) {
-        return {};
-      }
-      const std::size_t sampleCount = privateSound->sourceData.size() +
-                                      privateSound->outputData.size();
+      // Publication discards the native buffer and aliases both handles to output.
+      const std::size_t sampleCount = privateSound->outputData.size();
       if (sampleCount >
           std::numeric_limits<std::size_t>::max() / sizeof(short)) {
         return {};
@@ -1989,6 +2005,7 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
   auto result = audio::playback::EnsureBackendStartedAtOutputRate(
       *backend, sounds, callbackState, targetSampleRate, currentSampleRate,
       audioClockFrameCursor, backendState);
+  refreshSkinSoundDecodedBytesLocked();
   if (result.success) {
     openRealtimeSoundGate();
     if (const auto *configurable =
@@ -2241,6 +2258,7 @@ bool AudioWrapper::restartWithLifecycleLocked(const audio::StreamRequest &reques
   if (transition.has_value()) {
     audio::playback::CommitOutputRateTransition(std::move(*transition),
                                                 callbackState);
+    refreshSkinSoundDecodedBytesLocked();
     const auto previousClockFrame =
         audioClockFrameCursor.load(std::memory_order_acquire);
     if (previousClockFrame > 0) {

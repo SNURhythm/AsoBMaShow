@@ -1,3 +1,4 @@
+#include "AudioPreparationBudget.h"
 #include "BmsonAudio.h"
 #include "PagedPreviewSource.h"
 
@@ -263,6 +264,9 @@ struct PagedPreviewSource::Impl {
   void publishDecoded(std::size_t index,
       const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native) {
     checkpoint();
+    AudioPreparationScope preparation(cancelled, outputRate);
+    if (native && !preparation.reserve(native->pcm.size(), native->info.channels,
+                                       native->info.samplerate)) { checkpoint(); return; }
     auto &outputSound = *assets[index].sound->pagedOutput;
     bool releaseNative = false;
     if (const auto found = sourceSlices.find(index); found != sourceSlices.end()) {
@@ -310,6 +314,7 @@ struct PagedPreviewSource::Impl {
   void publishAsset(std::size_t index, const std::vector<unsigned char> *bytes = nullptr,
                      const DecodedAssetCache::ArchiveBatch *batch = nullptr) {
     checkpoint();
+    AudioPreparationScope preparation(cancelled, outputRate);
     if (const auto &source = assets[index].probedSource; source && !cache->ArchiveBatchUnchanged(*source))
       throw std::runtime_error("Audio source changed after duration probing.");
     DecodedAssetCache::FailureKind failure{};

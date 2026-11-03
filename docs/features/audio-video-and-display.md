@@ -48,6 +48,19 @@ shares ready output instead of holding another native copy. Rare device-rate
 changes resample retained output; repeated changes may accumulate interpolation
 loss, while original duration metadata prevents rounded tail frames accumulating.
 The audio callback still reads ready PCM without decoding, resampling or file I/O.
+Slice-only BMSON sources have no full-track playback owner or full-track
+resampling pass. Sources also referenced directly by notes retain that owner.
+Same-rate slices share their native backing allocation; converted slices retain
+only their individual outputs. Skin sounds also share same-rate PCM and charge
+their decoded-memory budget once for retained output, including after rate changes.
+
+Gameplay, preview and skin preparation share a 128 MiB scheduling budget for
+estimated transient PCM and decoder scratch. Admission uses the bounded frame
+count from the decoder header and holds the reservation through all dependent
+slice conversions and source release. Small assets can prepare concurrently;
+one oversized asset runs alone. Waiting honors cancellation. This controls
+concurrent preparation rather than total resident playback memory; encoded
+archive queues and retained caches have separate budgets.
 A submix stop closes its render gate and waits on the control thread for an
 already admitted callback; the callback never waits on that gate.
 

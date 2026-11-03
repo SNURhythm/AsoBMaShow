@@ -688,6 +688,9 @@ void testBmsonReusesSlicesAndPreparesEveryMissingKeysound() {
     const auto firstPcm = jukebox.audioRuntime().decodedSoundSnapshot(firstKey);
     const auto decoded = cache->GetStatistics().decoderOpens;
     require(first && firstPcm && decoded == 1, "first source decoded once");
+    require(!jukebox.audioRuntime().resolveRealtimeSound(fspath_to_path_t(path)) &&
+                cache->GetStatistics().retainedBytes == 0,
+            "slice-only stems retain no full playback buffer or native cache entry");
     require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success &&
                 first->valid() && cache->GetStatistics().decoderOpens == decoded &&
                 jukebox.audioRuntime().decodedSoundSnapshot(firstKey)->pcm.data() == firstPcm->pcm.data(),
@@ -721,6 +724,19 @@ void testBmsonReusesSlicesAndPreparesEveryMissingKeysound() {
                 jukebox.audioRuntime().decodedSoundSnapshot(firstKey)->pcm[0] < 0 &&
                 cache->GetStatistics().decoderOpens == decoded + 3,
             "source replacement invalidates every dependent slice");
+    auto *measure = new bms_parser::Measure();
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->AddBackgroundNote(new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+    chart.Measures.push_back(measure);
+    require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success &&
+                jukebox.audioRuntime().resolveRealtimeSound(fspath_to_path_t(path)),
+            "a stem used directly as BGM retains full playback alongside its slices");
+    chart.Measures.clear();
+    delete measure;
+    require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success &&
+                !jukebox.audioRuntime().resolveRealtimeSound(fspath_to_path_t(path)),
+            "removing direct playback prunes the full stem while retaining slices");
   }
 }
 
@@ -734,6 +750,8 @@ void testCancelledBmsonSlicesArePrunedOnNextChart() {
   chart.ReferencedWavTable = {{1, "cancel-stem.wav"}};
   chart.WavSlices[2] = {{.SourceWav = 1, .StartMicros = 0,
                          .DurationMicros = 100000, .SliceId = 101}};
+  chart.WavSlices[2].push_back({.SourceWav = 1, .StartMicros = 100000,
+                               .DurationMicros = 150000, .SliceId = 102});
   Stopwatch stopwatch;
   auto control = std::make_shared<BackendControl>();
   Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
@@ -743,8 +761,8 @@ void testCancelledBmsonSlicesArePrunedOnNextChart() {
           "select a rate that requires conversion");
   std::atomic_bool cancelled = false;
   {
-    // Slice output is already published before converting the full source.
-    test_support::CancelOnAllocationSize cancelAtStem(cancelled, 48002 * sizeof(short));
+    // The first slice is published before the second slice conversion.
+    test_support::CancelOnAllocationSize cancelAtStem(cancelled, 7200 * sizeof(short));
     (void)jukebox.loadChartPreservingDevice(chart, false, cancelled);
   }
   const auto key = PATH("@bmson/cancelled-slices/slice/101");

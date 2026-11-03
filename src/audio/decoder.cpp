@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include "AudioPreparationBudget.h"
 #include "AudioDecodeProfiling.h"
 #include "../ArchiveFile.h"
 #include "../FileExtensionResolver.h"
@@ -91,7 +92,7 @@ sf_count_t memoryFileTell(void *userData) {
 bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
                      std::vector<short> &buffer, SF_INFO &fileInfo,
                      std::atomic<bool> &isCancelled,
-                     std::size_t maximumPcmSamples) {
+                     AudioDecodeLimits limits) {
   UniqueResource<SNDFILE, sf_close> fileHandle(file);
   if (!file) {
     SDL_Log("Failed to open audio file %s, error: %s",
@@ -102,13 +103,29 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
   if (isCancelled) {
     return false;
   }
-  if (fileInfo.frames < 0 || fileInfo.channels <= 0) {
+  if (fileInfo.frames < 0 || fileInfo.channels <= 0 || fileInfo.samplerate <= 0) {
     return false;
   }
   const auto channels = static_cast<std::size_t>(fileInfo.channels);
+  auto maximumNativeFrames = static_cast<std::uintmax_t>(limits.maximumPcmSamples / channels);
+  if (limits.outputSampleRate > 0) {
+    // ceil(nativeFrames * outputRate / nativeRate) must fit whole output frames.
+    // Divide first so even an unlimited caller allowance cannot overflow.
+    const auto outputFrames = limits.maximumOutputSamples / channels;
+    const auto rate = static_cast<std::uintmax_t>(fileInfo.samplerate);
+    const auto outputRate = static_cast<std::uintmax_t>(limits.outputSampleRate);
+    const auto whole = outputFrames / outputRate;
+    const auto fraction = (outputFrames % outputRate) * rate / outputRate;
+    if (whole <= maximumNativeFrames / rate) {
+      const auto base = whole * rate;
+      maximumNativeFrames = base + std::min(fraction, maximumNativeFrames - base);
+    }
+  }
   const auto maximumFrames = static_cast<sf_count_t>(std::min<std::uintmax_t>(
-      fileInfo.frames, maximumPcmSamples / channels));
+      fileInfo.frames, maximumNativeFrames));
   const std::size_t sampleCount = static_cast<std::size_t>(maximumFrames) * channels;
+  audio::AudioPreparationScope preparation(isCancelled);
+  if (!preparation.reserve(sampleCount, fileInfo.channels, fileInfo.samplerate)) return false;
   // Header frame counts are untrusted (for example FLAC STREAMINFO). Grow
   // alongside decoding instead of zero-filling the entire declared duration.
   buffer.clear();
@@ -277,11 +294,11 @@ bool decodeAudioBytesToPCM(const path_t &displayPath,
       std::numeric_limits<std::size_t>::max());
 }
 
-bool decodeAudioBytesToPCMBounded(const path_t &displayPath,
+static bool decodeAudioBytesWithLimits(const path_t &displayPath,
                                   const std::vector<unsigned char> &bytes,
                                   std::vector<short> &buffer, SF_INFO &fileInfo,
                                   std::atomic<bool> &isCancelled,
-                                  std::size_t maximumPcmSamples) {
+                                  AudioDecodeLimits limits) {
   fileInfo = {};
   MemoryAudioFile memoryFile{
       .data = bytes.data(),
@@ -298,7 +315,16 @@ bool decodeAudioBytesToPCMBounded(const path_t &displayPath,
   SNDFILE *file = ASOBM_AUDIO_MEASURE(open,
       sf_open_virtual(&io, SFM_READ, &fileInfo, &memoryFile));
   return decodeAudioFile(file, displayPath, buffer, fileInfo, isCancelled,
-                         maximumPcmSamples);
+                         limits);
+}
+
+bool decodeAudioBytesToPCMBounded(const path_t &displayPath,
+                                  const std::vector<unsigned char> &bytes,
+                                  std::vector<short> &buffer, SF_INFO &fileInfo,
+                                  std::atomic<bool> &isCancelled,
+                                  std::size_t maximumPcmSamples) {
+  return decodeAudioBytesWithLimits(displayPath, bytes, buffer, fileInfo,
+                                    isCancelled, {.maximumPcmSamples = maximumPcmSamples});
 }
 
 bool decodeSkinSoundBundleAware(const path_t &displayPath,
@@ -316,9 +342,9 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
   if (!archive_file::isVirtualPath(fsPath)) {
     if (auto bytes =
             readBundleAwareAudioBytes(displayPath, limits.maximumEncodedBytes)) {
-      if (decodeAudioBytesToPCMBounded(displayPath, *bytes, buffer, fileInfo,
+      if (decodeAudioBytesWithLimits(displayPath, *bytes, buffer, fileInfo,
                                        isCancelled,
-                                       limits.maximumPcmSamples) &&
+                                       limits) &&
           !stop.stop_requested() && !isCancelled) {
         return true;
       }
@@ -336,9 +362,9 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
                                       limits.maximumEncodedBytes,
                                       nullptr, stop) &&
         !bytes.empty() &&
-        decodeAudioBytesToPCMBounded(displayPath, bytes, buffer, fileInfo,
+        decodeAudioBytesWithLimits(displayPath, bytes, buffer, fileInfo,
                                      isCancelled,
-                                     limits.maximumPcmSamples) &&
+                                     limits) &&
         !stop.stop_requested() && !isCancelled) {
       return true;
     }
@@ -374,8 +400,8 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
               path_t_to_utf8(filePath).c_str(), errorMessage.c_str());
       return false;
     }
-    return decodeAudioBytesToPCMBounded(filePath, bytes, buffer, fileInfo,
-                                        isCancelled, limits.maximumPcmSamples);
+    return decodeAudioBytesWithLimits(filePath, bytes, buffer, fileInfo,
+                                        isCancelled, limits);
   }
 
   const auto resolvedPath = resolveAudioFilePath(fsPath);
@@ -394,7 +420,7 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
         sf_open_fd(*descriptor, SFM_READ, &fileInfo, SF_TRUE));
     if (!file) close(*descriptor);
     return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
-                           limits.maximumPcmSamples);
+                           limits);
   }
 #endif
   std::error_code sizeError;
@@ -409,5 +435,5 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
   SNDFILE *file = ASOBM_AUDIO_MEASURE(open,
       asobmashow::audio::openSoundFile(resolvedPath, SFM_READ, fileInfo));
   return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
-                         limits.maximumPcmSamples);
+                         limits);
 }

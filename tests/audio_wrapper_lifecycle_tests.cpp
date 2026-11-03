@@ -1,4 +1,5 @@
 #include "audio/AudioWrapper.h"
+#include "audio/AudioPreparationBudget.h"
 #include "audio/ApplicationAudio.h"
 #include "audio/MusicSelectPreviewFilePlayer.h"
 #include "audio/Jukebox.h"
@@ -52,12 +53,15 @@ struct AllocationGate {
 thread_local AllocationGate *allocationGate = nullptr;
 thread_local bool decodeMemoryFixture = false;
 thread_local std::size_t failAllocationBytes = 0;
+thread_local std::size_t countedAllocationBytes = 0;
+thread_local std::size_t matchingAllocations = 0;
 thread_local bool countRenderAllocations = false;
 thread_local std::size_t renderAllocations = 0;
 
 }
 
 void *operator new(std::size_t bytes) {
+  if (bytes == resampling_test::countedAllocationBytes) ++resampling_test::matchingAllocations;
   if (resampling_test::countRenderAllocations) ++resampling_test::renderAllocations;
   if (resampling_test::failAllocationBytes != 0 &&
       bytes == resampling_test::failAllocationBytes) {
@@ -2659,7 +2663,7 @@ void testLuaSkinRetirementWaitsForCallbackWhileChartClockContinues() {
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 2,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 256});
+       .maximumDecodedBytes = 128});
   const auto identity = backend->load(std::filesystem::path(sharedPath), {});
   require(identity.has_value() &&
               wrapper.playSound(sharedPath, audio::Bus::Bgm),
@@ -2708,7 +2712,7 @@ void testLuaSkinDisposeRetriesAfterCommandQueueCapacityReturns() {
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 1,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 256});
+       .maximumDecodedBytes = 128});
   const auto identity = backend->load(std::filesystem::path(sharedPath), {});
   require(identity.has_value() &&
               wrapper.playSound(sharedPath, audio::Bus::Bgm),
@@ -2756,7 +2760,7 @@ void testLuaSkinDisposeAcknowledgesWhileCallbackIsStopped() {
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 1,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 256});
+       .maximumDecodedBytes = 128});
   const auto identity = backend->load(std::filesystem::path(sharedPath), {});
   require(identity.has_value() &&
               wrapper.playSound(sharedPath, audio::Bus::Bgm),
@@ -2795,7 +2799,7 @@ void testLuaSkinBackendTeardownRetriesQueueFullRetirement() {
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 1,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 256});
+       .maximumDecodedBytes = 128});
   const auto identity = backend->load(std::filesystem::path(sharedPath), {});
   require(identity.has_value() &&
               wrapper.playSound(sharedPath, audio::Bus::Bgm),
@@ -2823,7 +2827,7 @@ void testLuaSkinBackendTeardownRetriesQueueFullRetirement() {
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 1,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 256});
+       .maximumDecodedBytes = 128});
   require(!replacementBackend->load(std::filesystem::path(sharedPath), {})
                .has_value(),
           "transferred teardown retains private PCM until callback acknowledgement");
@@ -2947,7 +2951,7 @@ void testLuaSkinOwnerControlPressureNeverInterruptsSharedDevice(
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 1,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 272});
+       .maximumDecodedBytes = 136});
   const auto identity = backend->load(std::filesystem::path(sharedPath), {});
   std::atomic_bool cancelled = false;
   const auto filler = wrapper.loadSkinSound(
@@ -2996,7 +3000,7 @@ void testLuaSkinOwnerControlPressureNeverInterruptsSharedDevice(
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 1,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 272});
+       .maximumDecodedBytes = 136});
   if (teardownState != audio::playback::BackendRunState::Stopped) {
     require(!replacement->load(std::filesystem::path(sharedPath), {})
                  .has_value(),
@@ -3035,7 +3039,7 @@ void testLuaSkinUnknownBackendTeardownTransfersOwnerWithoutSpinning() {
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 1,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 256});
+       .maximumDecodedBytes = 128});
   const auto identity = backend->load(std::filesystem::path(sharedPath), {});
   require(identity.has_value() &&
               wrapper.playSound(sharedPath, audio::Bus::Keysound),
@@ -3071,7 +3075,7 @@ void testLuaSkinUnknownBackendTeardownTransfersOwnerWithoutSpinning() {
       wrapper, [] { return 1.0F; },
       {.maximumIdentities = 1,
        .maximumEncodedBytes = 1024,
-       .maximumDecodedBytes = 256});
+       .maximumDecodedBytes = 128});
   require(!replacementBackend->load(std::filesystem::path(sharedPath), {})
                .has_value(),
           "unknown teardown retains decoded storage until callback ownership "
@@ -3604,6 +3608,77 @@ void testSystemLoadRevalidatesRateAfterConcurrentOutputChange() {
           "late system load retains one-second duration at the new output sample rate");
 }
 
+void testAudioPreparationBudgetAdmissionAndCancellation() {
+  audio::AudioPreparationBudget budget(100);
+  audio::AudioPreparationBudget::Reservation first(budget), second(budget);
+  std::atomic_bool cancelled{false};
+  require(first.acquire(70, cancelled) && second.acquire(30, cancelled),
+          "small sources can fill the shared preparation budget concurrently");
+  std::promise<void> started;
+  auto waiting = std::async(std::launch::async, [&] {
+    audio::AudioPreparationBudget::Reservation next(budget);
+    started.set_value();
+    return next.acquire(1, cancelled);
+  });
+  started.get_future().wait();
+  const bool blocked = waiting.wait_for(20ms) == std::future_status::timeout;
+  cancelled = true;
+  const bool rejected = !waiting.get();
+  first.release();
+  second.release();
+  require(blocked && rejected, "queued preparation exits on cancellation without admission");
+  cancelled = false;
+  require(first.acquire(1000, cancelled), "one oversized source is admitted when idle");
+  std::stop_source stop;
+  auto stopped = std::async(std::launch::async, [&] {
+    audio::AudioPreparationBudget::Reservation next(budget);
+    return next.acquire(1, cancelled, stop.get_token());
+  });
+  const bool exclusive = stopped.wait_for(20ms) == std::future_status::timeout;
+  stop.request_stop();
+  const bool stopRejected = !stopped.get();
+  first.release();
+  require(exclusive && stopRejected && second.acquire(100, cancelled),
+          "oversized sources run alone; stop and release return all admission capacity");
+
+  audio::AudioPreparationScope source(cancelled, 48000);
+  require(source.reserve(100000000, 2, 44100), "source reserves exclusive preparation");
+  audio::AudioPreparationScope slice(cancelled, 48000);
+  require(slice.reserve(100, 2, 44100), "nested slices reuse their source reservation");
+}
+
+void testSkinBudgetCountsOnlyRetainedOutput() {
+  Stopwatch clock;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&clock, std::make_unique<FakeConfigurableFactory>(control));
+  std::atomic_bool cancelled{false};
+  const auto key = PATH("skin-shared-budget");
+  require(wrapper.loadGeneratedSound(key, std::vector<short>(32, 1000), 1, 44100),
+          "prepare shared skin sound");
+  const auto shared = wrapper.loadSkinSound(key, cancelled, 1024, 64);
+  require(shared.handle && shared.decodedBytes == 64,
+          "aliased source and output count as one retained allocation");
+  resampling_test::decodeMemoryFixture = true;
+  const auto converted = wrapper.loadSkinSound(PATH("skin-decoded-budget"),
+      cancelled, 1024 * 1024, 64 + 44100 * sizeof(short));
+  resampling_test::decodeMemoryFixture = false;
+  require(converted.handle && converted.decodedBytes == 44100 * sizeof(short),
+          "converted skin sound budget counts retained output, not discarded native PCM");
+  std::string error;
+  require(wrapper.stopSounds().success && wrapper.restart({.sampleRate = 22050}, error),
+          "select decoder fixture native rate");
+  resampling_test::decodeMemoryFixture = true;
+  resampling_test::countedAllocationBytes = 22050 * sizeof(short);
+  resampling_test::matchingAllocations = 0;
+  const auto native = wrapper.loadSkinSound(PATH("skin-native-budget"), cancelled,
+      1024 * 1024, (16 + 22050 + 22050) * sizeof(short));
+  const auto allocations = resampling_test::matchingAllocations;
+  resampling_test::countedAllocationBytes = 0;
+  resampling_test::decodeMemoryFixture = false;
+  require(native.handle && native.decodedBytes == 22050 * sizeof(short) && allocations == 1,
+          "same-rate skin loading retains the decoder allocation without a PCM copy");
+}
+
 void testSubmixStopWaitsForItsActiveCallbackWithoutStoppingDevice() {
   auto control = std::make_shared<FactoryControl>();
   audio::SharedAudioOutput output(std::make_unique<FakeConfigurableFactory>(control));
@@ -3800,6 +3875,8 @@ int main(int argc, char **argv) {
     testSharedUnknownTimingKeepsNativeCallbackClockOrigin();
     testApplicationAudioRecoversInitialDeviceStartFailure();
     testSharedGameplayMatchesStandaloneSamplesAndTimeline();
+    testAudioPreparationBudgetAdmissionAndCancellation();
+    testSkinBudgetCountsOnlyRetainedOutput();
     testSystemLoadRevalidatesRateAfterConcurrentOutputChange();
     testSubmixStopWaitsForItsActiveCallbackWithoutStoppingDevice();
     testChartUnloadLeavesSystemPlaybackRunning();

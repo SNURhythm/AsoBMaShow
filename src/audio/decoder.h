@@ -17,6 +17,10 @@ inline short audioSampleToPcm16(double sample) {
 struct AudioDecodeLimits {
   std::size_t maximumEncodedBytes = std::numeric_limits<std::size_t>::max();
   std::size_t maximumPcmSamples = std::numeric_limits<std::size_t>::max();
+  // Optional retained-output allowance. Apply its rate ratio to the native
+  // decode limit after reading the header, before allocating PCM.
+  std::size_t maximumOutputSamples = std::numeric_limits<std::size_t>::max();
+  int outputSampleRate = 0;
 };
 
 bool decodeAudioToPCM(const path_t &filePath, std::vector<short> &buffer,

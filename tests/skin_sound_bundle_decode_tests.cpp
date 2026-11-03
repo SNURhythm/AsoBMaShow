@@ -158,6 +158,26 @@ bool writeAudioFixture(const std::filesystem::path &path, int format,
   return true;
 }
 
+void testSkinDecodeUsesOutputRateBudget() {
+  SoundSandbox sandbox;
+  const auto path = sandbox.root() / "output-budget.wav";
+  if (!writeAudioFixture(path, SF_FORMAT_WAV | SF_FORMAT_PCM_16, 2, 20000)) return;
+  std::atomic_bool cancelled{false};
+  SF_INFO info{};
+  std::vector<short> pcm;
+  expect(decodeSkinSoundBundleAware(fspath_to_path_t(path), pcm, info, cancelled,
+             {.maximumOutputSamples = 20000, .outputSampleRate = 22050}),
+         "downsampling admits native PCM larger than the retained output allowance");
+  std::vector<short>().swap(pcm);
+  expect(!decodeSkinSoundBundleAware(fspath_to_path_t(path), pcm, info, cancelled,
+              {.maximumOutputSamples = 20, .outputSampleRate = 48000}) && pcm.capacity() <= 20,
+         "insufficient output allowance stops native decoding before a full allocation");
+  std::vector<short>().swap(pcm);
+  expect(!decodeAudioToPCMBounded(fspath_to_path_t(path), pcm, info, cancelled,
+              {.maximumOutputSamples = 0, .outputSampleRate = 44100}) && pcm.capacity() == 0,
+         "exhausted output allowance cannot allocate native PCM");
+}
+
 void testChunkedDecodeMatchesOneShot() {
   SoundSandbox sandbox;
   for (const int channels : {1, 2, 3}) {
@@ -715,6 +735,7 @@ int main(int argc, char **argv) {
   testBundleOnlyPreviewExtensionFallback(argv[0]);
 #endif
   testForgedFrameCountDoesNotAllocateDeclaredPcm();
+  testSkinDecodeUsesOutputRateBudget();
   testChunkedDecodeMatchesOneShot();
   testPcm16DecodeWithoutFloatingScratch();
   testLongDecodeUsesBoundedScratch();

@@ -201,14 +201,15 @@ public:
                        std::atomic<bool> &isCancelled);
   // Loader-only callback prepares dependent BMSON slices before native PCM is
   // released. It must finish synchronously and must not retain the source.
+  // Slice-only sources pass retainSource=false to omit full-track playback PCM.
   using NativeSoundConsumer = std::function<bool(
       const std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> &)>;
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled,
-                 const NativeSoundConsumer &consumeNative = {});
+                 const NativeSoundConsumer &consumeNative = {}, bool retainSource = true);
   bool loadSoundFromMemory(const path_t &path,
                            const std::vector<unsigned char> &bytes,
                            std::atomic<bool> &isCancelled,
-                           const NativeSoundConsumer &consumeNative = {});
+                           const NativeSoundConsumer &consumeNative = {}, bool retainSource = true);
   bool loadGeneratedSound(const path_t &path, std::vector<short> pcmData,
                           int channels, int sampleRate);
   void preloadSounds(const std::vector<path_t> &paths,
@@ -365,6 +366,7 @@ private:
                         const audio::DecodedAssetCache::DecodedSound *prepared = nullptr,
                          bool monophonic = false);
   void cleanupRetiredSkinSoundsLocked() noexcept;
+  void refreshSkinSoundDecodedBytesLocked() noexcept;
   bool retireSkinSound(audio::SkinSoundHandle handle) noexcept;
   void initializeUserData();
   void invalidateNativePresentationHistory();
