@@ -48,3 +48,18 @@ rate changes; BMSON original-data requirements; cancellation and failed restart.
 - `cmake --build cmake-build-debug --target tests_audio -j 6` succeeded.
 - `ctest --test-dir cmake-build-debug -L '^area_audio$' --output-on-failure --no-tests=error -j 6`: 35/35 passed.
 - `cmake --build cmake-build-debug --target main -j 6` succeeded (existing third-party warnings only).
+
+## Slice reuse follow-up
+
+Reuse completed BMSON output by source identity and exact start/duration, checking
+every required slice before skipping a decode. Preserve ready slices when adding
+keysounds; the existing synchronous native consumer fills all missing slices from
+one decode before release. Empty results are tracked without retaining PCM.
+
+The new loose/archive regression first failed on repeated source decoding and now
+covers unchanged ownership/storage, two added keysounds from one decode, changed
+recipes under the same chart key, out-of-range slices, and source replacement.
+A fresh review found no actionable issues.
+
+Follow-up validation: `tests_audio` built successfully and the audio CTest group
+passed 35/35 tests at `-j 6` (12.61 seconds).

@@ -120,8 +120,10 @@ preview resampling unless the sample plays later.
 Custom selectors reuse preloaded output PCM, including sounds retained when
 changing difficulty, and drain previews before gameplay. Converted source buffers
 are released per asset. BMSON cuts all dependent slices from one original source
-before releasing it; a later preparation of new slices may decode that source
-again through the existing archive batch path.
+before releasing it. Repeated gameplay preparation reuses each slice whose source
+identity and cut definition are unchanged. Only missing or changed slices require
+another original-source decode through the existing archive batch path; all
+required keysounds from that source are populated before releasing its PCM.
 
 Temporary media writes and cleanup share one mutation lock. Cleanup uses the
 current platform path normalizer to protect active top-level cache entries;

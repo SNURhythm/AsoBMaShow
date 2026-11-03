@@ -25,3 +25,14 @@ original. New BMSON preparation can decode originals again using the existing
 archive batch path. Unconverted hidden/expired sounds keep their sole PCM copy.
 Preview deferred workers drop source references after each item. Retain original
 duration as integer metadata to prevent frame-count growth on repeated changes.
+
+## Reuse follow-up
+
+Repeated preparation reuses each existing BMSON slice whose source identity,
+resolved source path, start and duration still match. Validate all required
+slices before skipping a source decode. Decode only sources with missing/changed
+slices, retain their existing valid slices, and hold original PCM synchronously
+until every missing dependent keysound has been prepared. Group owners may be
+rebuilt without copying their sample storage. Cancellation must leave all
+published paths tracked for later pruning; incomplete recipes are never marked
+ready. Empty/out-of-range slices may be recorded as completed silent results.

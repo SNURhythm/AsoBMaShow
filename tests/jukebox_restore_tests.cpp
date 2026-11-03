@@ -656,6 +656,74 @@ void testBmsonSharedBackgroundSliceBus() {
   }
 }
 
+void testBmsonReusesSlicesAndPreparesEveryMissingKeysound() {
+  for (const bool archived : {false, true}) {
+    TemporaryArchivedVisualFixture fixture;
+    const auto bytes = shortWave(44101);
+    const auto path = archived ? fixture.archivePath / "stem.wav" : fixture.directory / "stem.wav";
+    if (archived) writeChartArchive(fixture.archivePath, {{"stem.wav", bytes}});
+    else { std::ofstream file(path, std::ios::binary); file << bytes; }
+    bms_parser::Chart chart;
+    chart.Meta.Folder = archived ? fixture.archivePath : fixture.directory;
+    chart.Meta.SHA256 = "reuse-slices";
+    chart.ReferencedWavTable = {{1, "stem.wav"}};
+    chart.WavSlices[2] = {{.SourceWav = 1, .StartMicros = 0,
+                           .DurationMicros = 100000, .SliceId = 101}};
+    chart.WavSlices[5] = {{.SourceWav = 1, .StartMicros = 2000000,
+                           .DurationMicros = 100000, .SliceId = 104}};
+    Stopwatch stopwatch;
+    auto control = std::make_shared<BackendControl>();
+    Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+    auto cache = std::make_shared<audio::DecodedAssetCache>();
+    jukebox.setDecodedAssetCache(cache);
+    std::string error;
+    require(jukebox.stop().success && jukebox.audioRuntime().restart(
+                {.deviceId = "usb", .sampleRate = 48000, .bufferFrames = 64}, error),
+            "prepare reuse fixture at a non-native rate");
+    std::atomic_bool cancelled = false;
+    require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success,
+            "first slice preparation succeeds");
+    const auto firstKey = PATH("@bmson/reuse-slices/slice/101");
+    const auto first = jukebox.audioRuntime().resolveRealtimeSound(firstKey);
+    const auto firstPcm = jukebox.audioRuntime().decodedSoundSnapshot(firstKey);
+    const auto decoded = cache->GetStatistics().decoderOpens;
+    require(first && firstPcm && decoded == 1, "first source decoded once");
+    require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success &&
+                first->valid() && cache->GetStatistics().decoderOpens == decoded &&
+                jukebox.audioRuntime().decodedSoundSnapshot(firstKey)->pcm.data() == firstPcm->pcm.data(),
+            "unchanged slices reuse their owners and PCM without reopening the source");
+
+    // A ready stem and one ready slice do not prove every requested keysound is ready.
+    chart.WavSlices[3] = {{.SourceWav = 1, .StartMicros = 200000,
+                           .DurationMicros = 100000, .SliceId = 102}};
+    chart.WavSlices[4] = {{.SourceWav = 1, .StartMicros = 400000,
+                           .DurationMicros = 100000, .SliceId = 103}};
+    require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success && first->valid() &&
+                cache->GetStatistics().decoderOpens == decoded + 1,
+            "one original decode fills all missing slices while preserving existing output");
+    for (const auto id : {102, 103}) {
+      const auto key = utf8_to_path_t("@bmson/reuse-slices/slice/" + std::to_string(id));
+      const auto pcm = jukebox.audioRuntime().decodedSoundSnapshot(key);
+      require(pcm && pcm->pcm.size() == 4800 && pcm->info.samplerate == 48000,
+              "all required keysounds are populated before the original is discarded");
+    }
+    require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success &&
+                cache->GetStatistics().decoderOpens == decoded + 1,
+            "completed expanded recipe set reuses without another decode");
+    chart.WavSlices[2][0].DurationMicros = 200000;
+    require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success && !first->valid() &&
+                jukebox.audioRuntime().decodedSoundSnapshot(firstKey)->pcm.size() == 9600 &&
+                cache->GetStatistics().decoderOpens == decoded + 2,
+            "a changed slice recipe is rebuilt even when the chart key is unchanged");
+    if (archived) writeChartArchive(fixture.archivePath, {{"stem.wav", shortWave(44101, -1000)}});
+    else { std::ofstream file(path, std::ios::binary); file << shortWave(44101, -1000); }
+    require(jukebox.loadChartPreservingDevice(chart, false, cancelled).success &&
+                jukebox.audioRuntime().decodedSoundSnapshot(firstKey)->pcm[0] < 0 &&
+                cache->GetStatistics().decoderOpens == decoded + 3,
+            "source replacement invalidates every dependent slice");
+  }
+}
+
 void testCancelledBmsonSlicesArePrunedOnNextChart() {
   TemporaryArchivedVisualFixture fixture;
   const auto path = fixture.directory / "cancel-stem.wav";
@@ -1699,6 +1767,7 @@ int main(int argc, char **argv) {
     }
     testArchivedHandoffRejectsSourceChangeDuringPreparation();
     testGameplaySharesPreparedPcm();
+    testBmsonReusesSlicesAndPreparesEveryMissingKeysound();
     testCancelledBmsonSlicesArePrunedOnNextChart();
     testBmsonGameplaySlicesAndVisualTransitions();
     testBmsonSharedBackgroundSliceBus();
