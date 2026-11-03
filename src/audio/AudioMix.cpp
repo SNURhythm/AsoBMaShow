@@ -227,17 +227,25 @@ bool ResampledPcmFitsSampleBudget(
 
 std::vector<short> ResamplePcm(std::span<const short> source, int channels,
                                int sourceRate, int targetRate,
-                               const std::atomic_bool *cancelled) {
+                               const std::atomic_bool *cancelled,
+                               std::size_t durationFrames, int durationSampleRate) {
   const auto projectedSamples = ProjectedResampledPcmSampleCount(
       source.size(), channels, sourceRate, targetRate);
   if (!projectedSamples || source.empty()) return {};
   if (cancelled && cancelled->load(std::memory_order_relaxed)) return {};
-  if (sourceRate == targetRate && !cancelled) return {source.begin(), source.end()};
+  if (sourceRate == targetRate && !cancelled && durationSampleRate == 0)
+    return {source.begin(), source.end()};
 
   const size_t channelCount = static_cast<size_t>(channels);
   const size_t sourceFrames = source.size() / channelCount;
-  const size_t targetFrames = *projectedSamples / channelCount;
-  std::vector<short> output(*projectedSamples);
+  size_t targetFrames = *projectedSamples / channelCount;
+  if (durationSampleRate > 0) {
+    const pcm_resampling::Ratio durationRatio(durationSampleRate, targetRate);
+    const auto exactFrames = durationRatio.outputFrames(durationFrames, targetFrames);
+    if (!exactFrames) return {};
+    targetFrames = *exactFrames;
+  }
+  std::vector<short> output(targetFrames * channelCount);
 
   pcm_resampling::Cursor cursor(
       pcm_resampling::Ratio(sourceRate, targetRate), sourceFrames);
@@ -473,15 +481,8 @@ PrepareOutputRateTransition(std::span<SoundData *const> sounds,
     SharedPcmBuffer outputData = soundData->sourceData;
     if (targetSampleRate != soundData->sourceSampleRate) {
       auto samples = ResamplePcm(soundData->sourceData, soundData->channels,
-                                soundData->sourceSampleRate, targetSampleRate);
-      if (soundData->durationSampleRate > 0) {
-        const pcm_resampling::Ratio durationRatio(soundData->durationSampleRate, targetSampleRate);
-        const auto frames = durationRatio.outputFrames(soundData->durationFrameCount,
-                                                       kQ32MaximumWholeFrame);
-        if (!frames || *frames > samples.size() / static_cast<size_t>(soundData->channels))
-          return std::nullopt;
-        samples.resize(*frames * static_cast<size_t>(soundData->channels));
-      }
+                                soundData->sourceSampleRate, targetSampleRate, nullptr,
+                                soundData->durationFrameCount, soundData->durationSampleRate);
       outputData = std::move(samples);
     }
     if (!soundData->sourceData.empty() && outputData.empty()) {

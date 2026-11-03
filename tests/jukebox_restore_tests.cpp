@@ -656,6 +656,41 @@ void testBmsonSharedBackgroundSliceBus() {
   }
 }
 
+void testCancelledBmsonSlicesArePrunedOnNextChart() {
+  TemporaryArchivedVisualFixture fixture;
+  const auto path = fixture.directory / "cancel-stem.wav";
+  { std::ofstream file(path, std::ios::binary); file << shortWave(44101); }
+  bms_parser::Chart chart;
+  chart.Meta.Folder = fixture.directory;
+  chart.Meta.SHA256 = "cancelled-slices";
+  chart.ReferencedWavTable = {{1, "cancel-stem.wav"}};
+  chart.WavSlices[2] = {{.SourceWav = 1, .StartMicros = 0,
+                         .DurationMicros = 100000, .SliceId = 101}};
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  std::string error;
+  require(jukebox.stop().success && jukebox.audioRuntime().restart(
+              {.deviceId = "usb", .sampleRate = 48000, .bufferFrames = 64}, error),
+          "select a rate that requires conversion");
+  std::atomic_bool cancelled = false;
+  {
+    // Slice output is already published before converting the full source.
+    test_support::CancelOnAllocationSize cancelAtStem(cancelled, 48002 * sizeof(short));
+    (void)jukebox.loadChartPreservingDevice(chart, false, cancelled);
+  }
+  const auto key = PATH("@bmson/cancelled-slices/slice/101");
+  auto handle = jukebox.audioRuntime().resolveRealtimeSound(key);
+  require(cancelled && handle && handle->valid(),
+          "cancel fixture leaves a published slice before source preparation finishes");
+  cancelled = false;
+  bms_parser::Chart next;
+  require(jukebox.loadChartPreservingDevice(next, false, cancelled).success,
+          "switch away from cancelled preparation");
+  require(!handle->valid() && !jukebox.audioRuntime().resolveRealtimeSound(key),
+          "next chart prunes slices published by a cancelled load");
+}
+
 void testBmsonGameplaySlicesAndVisualTransitions() {
   const auto originalDirectory = std::filesystem::current_path();
   const auto restoreDirectory = makeScopeExit([&] {
@@ -1664,6 +1699,7 @@ int main(int argc, char **argv) {
     }
     testArchivedHandoffRejectsSourceChangeDuringPreparation();
     testGameplaySharesPreparedPcm();
+    testCancelledBmsonSlicesArePrunedOnNextChart();
     testBmsonGameplaySlicesAndVisualTransitions();
     testBmsonSharedBackgroundSliceBus();
     testPreviewGameplayPreparationRetainsVisuals();

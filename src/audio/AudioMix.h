@@ -38,7 +38,9 @@ bool ResampledPcmFitsSampleBudget(std::size_t sourceSamples, int channels,
 // Cancellation discards the output; no partial PCM is returned.
 std::vector<short> ResamplePcm(std::span<const short> source, int channels,
                                int sourceRate, int targetRate,
-                               const std::atomic_bool *cancelled = nullptr);
+                               const std::atomic_bool *cancelled = nullptr,
+                               std::size_t durationFrames = 0,
+                               int durationSampleRate = 0);
 
 } // namespace audio
 

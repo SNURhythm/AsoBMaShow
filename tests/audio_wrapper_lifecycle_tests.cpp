@@ -2519,6 +2519,27 @@ void testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork() {
           "lock-free reservation still commits the matching keysound");
 }
 
+void testConvertedCacheHandoffPreservesOriginalDuration() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch, std::make_unique<FakeConfigurableFactory>(control));
+  audio::DecodedAssetCache::DecodedSound converted;
+  converted.info.channels = 1;
+  converted.info.samplerate = 48000;
+  converted.info.frames = 5;
+  converted.pcm = {100, 200, 300, 400, 400};
+  converted.originalPcm = false;
+  converted.durationFrames = 4;
+  converted.durationSampleRate = 44100;
+  std::atomic_bool cancelled = false;
+  require(wrapper.loadPreparedSound(PATH("converted-cache"), converted, cancelled),
+          "load output-only cached PCM at another rate");
+  const auto retained = wrapper.decodedSoundSnapshot(PATH("converted-cache"));
+  require(retained && retained->info.samplerate == 44100 && retained->pcm.size() == 4 &&
+              retained->durationFrames == 4 && retained->durationSampleRate == 44100,
+          "cross-rate cache handoff must not add a rounded tail frame");
+}
+
 void testPreviewFileMetersAudibleOutputAndRetiresOldSelection() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -3775,6 +3796,7 @@ int runRenderBenchmark() {
 int main(int argc, char **argv) {
   try {
     if (argc == 2 && std::string_view(argv[1]) == "--benchmark") return runRenderBenchmark();
+    testConvertedCacheHandoffPreservesOriginalDuration();
     testSharedUnknownTimingKeepsNativeCallbackClockOrigin();
     testApplicationAudioRecoversInitialDeviceStartFailure();
     testSharedGameplayMatchesStandaloneSamplesAndTimeline();

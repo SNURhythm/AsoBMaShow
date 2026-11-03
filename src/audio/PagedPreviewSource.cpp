@@ -250,7 +250,8 @@ struct PagedPreviewSource::Impl {
       const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native) {
     if (native->info.channels > 0 && native->info.samplerate > 0)
       publishPastDuration(index, duration_bound::Duration{
-          native->pcm.size() / native->info.channels, native->info.samplerate});
+          native->durationSampleRate > 0 ? native->durationFrames : native->pcm.size() / native->info.channels,
+          native->durationSampleRate > 0 ? native->durationSampleRate : native->info.samplerate});
   }
   void fail(std::string error) {
     { std::lock_guard lock(mutex);
@@ -292,7 +293,8 @@ struct PagedPreviewSource::Impl {
       auto output = native->FindPreparedOutput(outputRate);
       if (output.empty() && !native->pcm.empty()) {
         output = ResamplePcm(native->pcm, native->info.channels,
-                             native->info.samplerate, outputRate, &cancelled);
+                             native->info.samplerate, outputRate, &cancelled,
+                             native->durationFrames, native->durationSampleRate);
       }
       checkpoint();
       native->RememberPreparedOutput(outputRate, output);

@@ -1165,7 +1165,8 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
         prepared ? prepared->FindPreparedOutput(targetSampleRate) : audio::SharedPcmBuffer{};
     if (soundData->outputData.empty() && !soundData->sourceData.empty()) {
       soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
-                                                 sampleRate, targetSampleRate, &isCancelled);
+                                                 sampleRate, targetSampleRate, &isCancelled,
+                                                 soundData->durationFrameCount, soundData->durationSampleRate);
     }
     if ((!soundData->sourceData.empty() && soundData->outputData.empty()) ||
         isCancelled) {
@@ -1386,7 +1387,8 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
       }
       privateSound->outputData = audio::ResamplePcm(
           privateSound->sourceData, privateSound->channels,
-          privateSound->sourceSampleRate, targetSampleRate);
+          privateSound->sourceSampleRate, targetSampleRate, nullptr,
+          privateSound->durationFrameCount, privateSound->durationSampleRate);
       if ((!privateSound->sourceData.empty() &&
            privateSound->outputData.empty()) ||
           isCancelled) {
@@ -1408,7 +1410,8 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
                 remainingDecodedSamples)) return {};
         privateSound->outputData = audio::ResamplePcm(
             privateSound->sourceData, privateSound->channels,
-            privateSound->sourceSampleRate, targetSampleRate, &isCancelled);
+            privateSound->sourceSampleRate, targetSampleRate, &isCancelled,
+            privateSound->durationFrameCount, privateSound->durationSampleRate);
         if ((!privateSound->sourceData.empty() && privateSound->outputData.empty()) ||
             isCancelled || stop.stop_requested()) return {};
         privateSound->outputFrameCount =

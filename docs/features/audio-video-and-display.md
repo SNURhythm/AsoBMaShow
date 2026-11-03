@@ -42,6 +42,12 @@ presentation timestamp use one fallback wall-clock origin plus each chunk's
 frame offset; this fallback never becomes native presentation history.
 Device reconfiguration suspends both
 processors, converts retained PCM before restarting output, and supports rollback.
+Loaded sounds keep only output-rate PCM: each native buffer is released after
+that source and its dependent BMSON slices are prepared. The preparation cache
+shares ready output instead of holding another native copy. Rare device-rate
+changes resample retained output; repeated changes may accumulate interpolation
+loss, while original duration metadata prevents rounded tail frames accumulating.
+The audio callback still reads ready PCM without decoding, resampling or file I/O.
 A submix stop closes its render gate and waits on the control thread for an
 already admitted callback; the callback never waits on that gate.
 
