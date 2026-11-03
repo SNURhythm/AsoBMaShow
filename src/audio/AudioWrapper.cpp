@@ -1076,9 +1076,10 @@ bool AudioWrapper::loadSound(const path_t &path,
 }
 
 bool AudioWrapper::loadSoundFromMemory(const path_t &path,
-                                       const std::vector<unsigned char> &bytes,
+                                       std::vector<unsigned char> bytes,
                                        std::atomic<bool> &isCancelled,
-                                       const NativeSoundConsumer &consumeNative, bool retainSource) {
+                                       const NativeSoundConsumer &consumeNative, bool retainSource,
+                                       const audio::DecodedAssetCache::ArchiveBatch *batch) {
   audio::AudioPreparationScope preparation(isCancelled, currentSampleRate.load());
   std::shared_ptr<audio::DecodedAssetCache> cache;
   {
@@ -1088,8 +1089,11 @@ bool AudioWrapper::loadSoundFromMemory(const path_t &path,
   }
   std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> sound;
   if (cache) {
-    sound = cache->LoadBytes(std::filesystem::path(path), bytes, isCancelled, {},
-                             nullptr, nullptr, bool(consumeNative));
+    sound = batch
+        ? cache->LoadArchiveBytes(*batch, std::filesystem::path(path), bytes, isCancelled, {},
+                                  nullptr, nullptr, bool(consumeNative))
+        : cache->LoadBytes(std::filesystem::path(path), bytes, isCancelled, {},
+                           nullptr, nullptr, bool(consumeNative));
   } else {
     auto decoded = std::make_shared<audio::DecodedAssetCache::DecodedSound>();
     std::vector<short> pcm;
@@ -1097,6 +1101,9 @@ bool AudioWrapper::loadSoundFromMemory(const path_t &path,
     decoded->pcm = std::move(pcm);
     sound = std::move(decoded);
   }
+  // No decoder references encoded bytes after Load returns. Release them
+  // before slicing/resampling, including cache hits and failed decodes.
+  std::vector<unsigned char>().swap(bytes);
   if (!sound || !preparation.reserve(sound->pcm.size(), sound->info.channels,
                                       sound->info.samplerate)) return false;
   const bool loaded = (!consumeNative || consumeNative(sound)) &&

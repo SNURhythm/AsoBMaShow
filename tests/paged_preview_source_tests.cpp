@@ -1258,8 +1258,12 @@ void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::files
     }
   }
   require(archive_write_close(writer.get()) == ARCHIVE_OK, "cannot finish archived preview fixture");
+  // Distinct chart paths can resolve to one entry through extension fallback.
+  body += "#WAV0H sound-1.ogg\n#00001:0H\n";
   auto parsed = chart(root, body);
   parsed->Meta.Folder = archivePath;
+  parsed->WavSlices[1] = {{.SourceWav = 1, .StartMicros = 0,
+                          .DurationMicros = 500000, .SliceId = 101}};
   parsed->ReferencedWavTable.emplace(15, "sound-15.wav");
   parsed->ReferencedWavTable.emplace(16, "sound-16.wav");
   auto cache = std::make_shared<audio::DecodedAssetCache>(
@@ -1271,7 +1275,7 @@ void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::files
   });
   const auto resetNormalizer = makeScopeExit([] { archive_file::setCachePathNormalizer({}); });
   auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
-  require(source->Begin(44100), "cannot start archived preview");
+  require(source->Begin(48000), "cannot start archived preview");
   waitPrepared(source);
   require(cache->GetStatistics().decodedFrames == 16 * 22050,
           "archive batching must warm opening, future and referenced native PCM");
@@ -1280,8 +1284,11 @@ void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::files
   std::cerr << "Archive preview metadata checks: " << archiveChecks.load() << '\n';
   require(archiveChecks.load() <= 64,
           "preview must validate archive metadata per batch, not repeatedly per keysound");
+  const auto retained = cache->Find(archivePath / "sound-1.wav");
+  require(retained && retained->info.samplerate == 48000,
+          "slice-first and whole-file aliases retain prepared output for gameplay handoff");
   const auto samples = renderAll(source);
-  require(!samples.empty() && std::abs(samples.front() - 12 * 8191.0f * 0.9f / 32768) < 0.00001f,
+  require(!samples.empty() && std::abs(samples.front() - 13 * 8191.0f * 0.9f / 32768) < 0.00001f,
           "archive loading must preserve overlapping preview PCM");
 }
 

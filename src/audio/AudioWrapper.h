@@ -207,9 +207,10 @@ public:
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled,
                  const NativeSoundConsumer &consumeNative = {}, bool retainSource = true);
   bool loadSoundFromMemory(const path_t &path,
-                           const std::vector<unsigned char> &bytes,
+                           std::vector<unsigned char> bytes,
                            std::atomic<bool> &isCancelled,
-                           const NativeSoundConsumer &consumeNative = {}, bool retainSource = true);
+                           const NativeSoundConsumer &consumeNative = {}, bool retainSource = true,
+                           const audio::DecodedAssetCache::ArchiveBatch *batch = nullptr);
   bool loadGeneratedSound(const path_t &path, std::vector<short> pcmData,
                           int channels, int sampleRate);
   void preloadSounds(const std::vector<path_t> &paths,

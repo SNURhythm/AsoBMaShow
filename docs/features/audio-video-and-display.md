@@ -61,6 +61,14 @@ slice conversions and source release. Small assets can prepare concurrently;
 one oversized asset runs alone. Waiting honors cancellation. This controls
 concurrent preparation rather than total resident playback memory; encoded
 archive queues and retained caches have separate budgets.
+Archive audio consumers release encoded buffers as soon as decoding finishes,
+before preparing playback PCM. Gameplay uses the existing validated archive
+snapshot for each entry, and resolved PCM handoff does not repeat file lookup.
+Preview aliases share one native decode and hand off the cache after all aliases
+are prepared. Decode and resampling append finished samples without first
+zero-filling output PCM. Small keysounds reserve once; longer PCM16 WAVs can
+also reserve once when the allocation is bounded by their actual encoded size.
+Other long decodes grow with produced samples rather than trusting header duration.
 A submix stop closes its render gate and waits on the control thread for an
 already admitted callback; the callback never waits on that gate.
 

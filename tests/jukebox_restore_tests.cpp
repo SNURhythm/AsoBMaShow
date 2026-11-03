@@ -558,6 +558,29 @@ void testArchivedChartLoadsAudioAboveSchedulingBudget(bool sevenZip,
   }
 }
 
+void testGameplayArchiveBytesUseValidatedBatch() {
+  TemporaryArchivedVisualFixture fixture;
+  const auto wave = shortWave(128);
+  writeChartArchive(fixture.archivePath, {{"tone.wav", wave}});
+  auto cache = std::make_shared<audio::DecodedAssetCache>();
+  const auto batch = cache->BeginArchiveBatch(fixture.archivePath);
+  require(bool(batch), "capture resolved archive source before extraction");
+  Stopwatch stopwatch;
+  AudioWrapper wrapper(&stopwatch, std::make_unique<TestFactory>(std::make_shared<BackendControl>()));
+  wrapper.setDecodedAssetCache(cache);
+  std::atomic_bool cancelled{false};
+  std::atomic_uint checks{0};
+  archive_file::setCachePathNormalizer([&](std::filesystem::path &) { ++checks; });
+  const auto reset = makeScopeExit([] { archive_file::setCachePathNormalizer({}); });
+  require(wrapper.loadSoundFromMemory(fspath_to_path_t(fixture.archivePath / "tone.wav"),
+              {wave.begin(), wave.end()}, cancelled, {}, true, &*batch),
+          "load extracted gameplay bytes under the validated archive snapshot");
+  require(checks == 0 && cache->GetStatistics().decoderOpens == 1 &&
+              cache->GetStatistics().archiveReads == 0,
+          "archive byte decode and PCM handoff perform no per-entry path or metadata lookup");
+  require(cache->ArchiveBatchUnchanged(*batch), "caller still validates the batch after preparation");
+}
+
 void testGameplaySharesPreparedPcm() {
   for (const bool archived : {false, true}) {
     for (const std::uint32_t rate : {44100U, 48000U}) {
@@ -1784,6 +1807,7 @@ int main(int argc, char **argv) {
       return 0;
     }
     testArchivedHandoffRejectsSourceChangeDuringPreparation();
+    testGameplayArchiveBytesUseValidatedBatch();
     testGameplaySharesPreparedPcm();
     testBmsonReusesSlicesAndPreparesEveryMissingKeysound();
     testCancelledBmsonSlicesArePrunedOnNextChart();

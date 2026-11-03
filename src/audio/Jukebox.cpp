@@ -2526,7 +2526,7 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
       if (isCancelled) {
         return;
       }
-      const auto &file = files[i];
+      auto &file = files[i];
       const std::filesystem::path virtualPath =
           archive_file::makeVirtualPath(batch.archivePath, file.path);
       const path_t soundPath = fspath_to_path_t(virtualPath);
@@ -2535,7 +2535,7 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
         return;
       }
 
-      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+      if (!audio.loadSoundFromMemory(soundPath, std::move(file.bytes), isCancelled)) {
         return;
       }
 
@@ -3292,6 +3292,9 @@ Jukebox::reconcileChartResources(
       return {.success = true};
     }
     const auto &batch = archiveBatches.at(archiveKey);
+    const auto cachedBatch = cacheBatches.find(archiveKey);
+    const auto *cacheBatch = cachedBatch != cacheBatches.end() && cachedBatch->second
+        ? &*cachedBatch->second : nullptr;
     std::mutex visualLoadMutex;
     std::unordered_set<path_t> consumedPaths;
     std::mutex consumedMutex;
@@ -3304,8 +3307,11 @@ Jukebox::reconcileChartResources(
       const auto key = fspath_to_path_t(virtualPath);
       if (const auto ids = batch.soundIdsByPath.find(key);
           ids != batch.soundIdsByPath.end()) {
-        if (audio.loadSoundFromMemory(key, file.bytes, isCancelled, consumerFor(key),
-                                      !sliceOnlyPaths.contains(key)) && !sliceOnlyPaths.contains(key)) {
+        // A rare mixed audio/visual reference still needs its encoded bytes.
+        const bool keepEncoded = batch.videoIdsByPath.contains(key) || batch.imageIdsByPath.contains(key);
+        if (audio.loadSoundFromMemory(key, keepEncoded ? file.bytes : std::move(file.bytes),
+                                      isCancelled, consumerFor(key), !sliceOnlyPaths.contains(key),
+                                      cacheBatch) && !sliceOnlyPaths.contains(key)) {
           std::lock_guard<std::mutex> lock(soundMapMutex);
           for (const int id : ids->second) {
             wavTableAbs[id] = key;

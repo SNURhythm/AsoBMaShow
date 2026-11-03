@@ -339,9 +339,17 @@ void DecodedAssetCache::ReleaseNativePcm(const std::filesystem::path &path,
     const std::shared_ptr<const DecodedSound> &sound) {
   if (!sound) return;
   const auto prepared = sound->PreparedSnapshot();
-  const auto resolved = resolvedPath(path);
-  std::lock_guard lock(impl->mutex);
-  const auto found = impl->entries.find(resolved);
+  // Gameplay and preview already hold resolved keys. Only legacy/unresolved
+  // callers need another filesystem/extension lookup. Pointer identity below
+  // prevents a handoff from replacing another generation or decoded owner.
+  std::unique_lock lock(impl->mutex);
+  auto found = impl->entries.find(path);
+  if (found == impl->entries.end()) {
+    lock.unlock();
+    const auto resolved = resolvedPath(path);
+    lock.lock();
+    found = impl->entries.find(resolved);
+  }
   if (found == impl->entries.end() || found->second->sound != sound) return;
   const auto entry = found->second;
   impl->forget(*entry);

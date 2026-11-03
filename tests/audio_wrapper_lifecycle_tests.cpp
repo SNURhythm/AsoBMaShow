@@ -55,6 +55,8 @@ thread_local bool decodeMemoryFixture = false;
 thread_local std::size_t failAllocationBytes = 0;
 thread_local std::size_t countedAllocationBytes = 0;
 thread_local std::size_t matchingAllocations = 0;
+thread_local const void *watchedEncodedAllocation = nullptr;
+thread_local bool encodedAllocationFreed = false;
 thread_local bool countRenderAllocations = false;
 thread_local std::size_t renderAllocations = 0;
 
@@ -82,8 +84,12 @@ void *operator new(std::size_t bytes) {
   throw std::bad_alloc();
 }
 
-void operator delete(void *memory) noexcept { std::free(memory); }
-void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete(void *memory) noexcept {
+  if (memory == resampling_test::watchedEncodedAllocation)
+    resampling_test::encodedAllocationFreed = true;
+  std::free(memory);
+}
+void operator delete(void *memory, std::size_t) noexcept { ::operator delete(memory); }
 
 // These lifecycle tests replace decoder I/O; cache decoding is exercised by
 // decoded_asset_cache_tests with real files and archive entries.
@@ -97,6 +103,12 @@ std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> audio::DecodedAsse
 }
 std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> audio::DecodedAssetCache::LoadBytes(
     const std::filesystem::path &, const std::vector<unsigned char> &,
+    const std::atomic_bool &, std::stop_token, std::string *, FailureKind *, bool) {
+  return {};
+}
+
+std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> audio::DecodedAssetCache::LoadArchiveBytes(
+    const ArchiveBatch &, const std::filesystem::path &, const std::vector<unsigned char> &,
     const std::atomic_bool &, std::stop_token, std::string *, FailureKind *, bool) {
   return {};
 }
@@ -3608,6 +3620,27 @@ void testSystemLoadRevalidatesRateAfterConcurrentOutputChange() {
           "late system load retains one-second duration at the new output sample rate");
 }
 
+void testEncodedAudioReleasedBeforePreparation() {
+  Stopwatch clock;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&clock, std::make_unique<FakeConfigurableFactory>(control));
+  std::atomic_bool cancelled{false};
+  std::vector<unsigned char> bytes(177, 1);
+  resampling_test::watchedEncodedAllocation = bytes.data();
+  resampling_test::encodedAllocationFreed = false;
+  resampling_test::decodeMemoryFixture = true;
+  bool releasedBeforePreparation = false;
+  const bool loaded = wrapper.loadSoundFromMemory(PATH("owned-encoded.wav"), std::move(bytes), cancelled,
+      [&](const auto &) {
+        releasedBeforePreparation = resampling_test::encodedAllocationFreed;
+        return true;
+      });
+  resampling_test::watchedEncodedAllocation = nullptr;
+  resampling_test::decodeMemoryFixture = false;
+  require(loaded && releasedBeforePreparation,
+          "encoded allocation is freed before dependent preparation or output resampling");
+}
+
 void testAudioPreparationBudgetAdmissionAndCancellation() {
   audio::AudioPreparationBudget budget(100);
   audio::AudioPreparationBudget::Reservation first(budget), second(budget);
@@ -3875,6 +3908,7 @@ int main(int argc, char **argv) {
     testSharedUnknownTimingKeepsNativeCallbackClockOrigin();
     testApplicationAudioRecoversInitialDeviceStartFailure();
     testSharedGameplayMatchesStandaloneSamplesAndTimeline();
+    testEncodedAudioReleasedBeforePreparation();
     testAudioPreparationBudgetAdmissionAndCancellation();
     testSkinBudgetCountsOnlyRetainedOutput();
     testSystemLoadRevalidatesRateAfterConcurrentOutputChange();

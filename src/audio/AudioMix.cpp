@@ -245,7 +245,8 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
     if (!exactFrames) return {};
     targetFrames = *exactFrames;
   }
-  std::vector<short> output(targetFrames * channelCount);
+  std::vector<short> output;
+  output.reserve(targetFrames * channelCount);
 
   pcm_resampling::Cursor cursor(
       pcm_resampling::Ratio(sourceRate, targetRate), sourceFrames);
@@ -257,7 +258,8 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
     const size_t chunkEnd = targetFrame + chunkFrames;
     if (sourceRate == targetRate) {
       const size_t offset = targetFrame * channelCount;
-      std::copy_n(source.data() + offset, chunkFrames * channelCount, output.data() + offset);
+      output.insert(output.end(), source.data() + offset,
+                    source.data() + offset + chunkFrames * channelCount);
       targetFrame = chunkEnd;
       continue;
     }
@@ -265,8 +267,8 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
       const size_t leftIndex = cursor.left() * channelCount;
       const size_t rightIndex = cursor.right() * channelCount;
       for (size_t channel = 0; channel < channelCount; ++channel) {
-        output[targetFrame * channelCount + channel] = cursor.interpolate(
-            source[leftIndex + channel], source[rightIndex + channel]);
+        output.push_back(cursor.interpolate(
+            source[leftIndex + channel], source[rightIndex + channel]));
       }
       cursor.advance();
     }

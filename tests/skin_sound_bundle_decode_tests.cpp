@@ -158,6 +158,30 @@ bool writeAudioFixture(const std::filesystem::path &path, int format,
   return true;
 }
 
+void testKeysoundDecodeAvoidsRepeatedGrowth() {
+  SoundSandbox sandbox;
+  const auto path = sandbox.root() / "short-key.wav";
+  for (const auto frames : {44100, 441000}) {
+    if (!writeAudioFixture(path, SF_FORMAT_WAV | SF_FORMAT_PCM_16, 2, frames)) return;
+    const auto reference = readOneShotPcm(path);
+    std::atomic_bool cancelled{false};
+    SF_INFO info{};
+    std::vector<short> pcm;
+    std::ifstream stream(path, std::ios::binary);
+    const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(stream)), {});
+    std::size_t allocated = 0;
+    {
+      test_support::AllocationSizeObserver observer;
+      expect(decodeAudioBytesToPCM(fspath_to_path_t(path), bytes, pcm, info, cancelled),
+             "decode short ordinary keysound");
+      allocated = observer.totalBytes();
+    }
+    expect(pcm == reference.samples, "single-reservation decoding preserves every sample");
+    expect(allocated < pcm.size() * sizeof(short) + 4096,
+           "small keysounds and physically bounded WAVs allocate PCM without growth copies");
+  }
+}
+
 void testSkinDecodeUsesOutputRateBudget() {
   SoundSandbox sandbox;
   const auto path = sandbox.root() / "output-budget.wav";
@@ -735,6 +759,7 @@ int main(int argc, char **argv) {
   testBundleOnlyPreviewExtensionFallback(argv[0]);
 #endif
   testForgedFrameCountDoesNotAllocateDeclaredPcm();
+  testKeysoundDecodeAvoidsRepeatedGrowth();
   testSkinDecodeUsesOutputRateBudget();
   testChunkedDecodeMatchesOneShot();
   testPcm16DecodeWithoutFloatingScratch();
