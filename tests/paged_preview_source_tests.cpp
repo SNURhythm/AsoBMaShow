@@ -1040,9 +1040,10 @@ void testLeadingSilenceIsSkippedWithoutChangingLaterAudio(const std::filesystem:
       const auto before = cache->GetStatistics();
       std::atomic_bool cancelled{false};
       const auto native = cache->Load(root / "first.wav", cancelled);
-      require(native && native->pcm.size() == samples.size() &&
+      require(native && native->pcm.size() == static_cast<std::size_t>(rate) * 3 * 2 &&
+                  native->info.samplerate == rate &&
                   cache->GetStatistics().decodedFrames == before.decodedFrames,
-              "skipping preview silence must retain the full native audio for gameplay");
+              "skipping preview silence retains full output PCM for gameplay without decoding again");
     }
   }
 }
@@ -1598,9 +1599,9 @@ void testBmsonExpiredSlicesDoNotBlockHighlight(const std::filesystem::path &root
     require(!preparationBlocked && state.preparationComplete,
             "cached source bounds must skip resampling expired slices");
     waitPrepared(reused);
-    require(cache->GetStatistics().decoderOpens == 2 && cache->GetStatistics().decodedFrames == 16064 &&
+    require(cache->GetStatistics().decoderOpens == 4 && cache->GetStatistics().decodedFrames == 32128 &&
                 cache->GetStatistics().archiveReads == 0,
-            "slice duration probing and reuse must not add decodes or individual archive extraction");
+            "new slices reload released original PCM once per source through archive batching");
   }
 }
 

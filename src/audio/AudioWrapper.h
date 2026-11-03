@@ -190,19 +190,25 @@ public:
   void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> cache);
   [[nodiscard]] bool hasCachedDecodedAsset(const path_t &path) const;
   [[nodiscard]] std::shared_ptr<audio::DecodedAssetCache> decodedAssetCacheSnapshot() const;
-  // Loader-only snapshot; shares immutable native and converted PCM without copying.
+  // Loader-only snapshot of retained output PCM, including rate and duration.
   [[nodiscard]] std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>
   decodedSoundSnapshot(const path_t &path) const;
-  // Loader has validated the archive batch; retain the same native/output PCM.
+  // Loader has validated the archive batch; retain only the ready output PCM.
   bool loadPreparedSound(const path_t &path,
                          const audio::DecodedAssetCache::DecodedSound &sound,
                          std::atomic<bool> &isCancelled, bool monophonic = false);
   bool loadSoundGroup(const path_t &path, const std::vector<path_t> &layers,
                        std::atomic<bool> &isCancelled);
-  bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
+  // Loader-only callback prepares dependent BMSON slices before native PCM is
+  // released. It must finish synchronously and must not retain the source.
+  using NativeSoundConsumer = std::function<bool(
+      const std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> &)>;
+  bool loadSound(const path_t &path, std::atomic<bool> &isCancelled,
+                 const NativeSoundConsumer &consumeNative = {});
   bool loadSoundFromMemory(const path_t &path,
                            const std::vector<unsigned char> &bytes,
-                           std::atomic<bool> &isCancelled);
+                           std::atomic<bool> &isCancelled,
+                           const NativeSoundConsumer &consumeNative = {});
   bool loadGeneratedSound(const path_t &path, std::vector<short> pcmData,
                           int channels, int sampleRate);
   void preloadSounds(const std::vector<path_t> &paths,

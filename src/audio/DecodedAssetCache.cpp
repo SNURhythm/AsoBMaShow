@@ -150,8 +150,9 @@ struct DecodedAssetCache::Impl {
     entry.retained = false;
   }
 
-  std::shared_ptr<const DecodedSound> cached(const std::shared_ptr<Entry> &entry) {
+  std::shared_ptr<const DecodedSound> cached(const std::shared_ptr<Entry> &entry, bool requireOriginal = false) {
     std::lock_guard lock(mutex);
+    if (requireOriginal && entry->sound && !entry->sound->originalPcm) forget(*entry);
     return cachedLocked(entry);
   }
 
@@ -165,7 +166,7 @@ struct DecodedAssetCache::Impl {
   std::shared_ptr<const DecodedSound> load(const std::filesystem::path &path,
       const std::vector<unsigned char> *encoded, const std::atomic_bool &cancel,
       std::stop_token stop, std::string *error, FailureKind *failure,
-      const ArchiveBatch *batch = nullptr) {
+      const ArchiveBatch *batch = nullptr, bool requireOriginal = false) {
     if (error) error->clear();
     if (failure) *failure = FailureKind::None;
     try {
@@ -188,11 +189,11 @@ struct DecodedAssetCache::Impl {
         }
         entry = current;
       }
-      if (auto ready = cached(entry)) return ready;
+      if (auto ready = cached(entry, requireOriginal)) return ready;
       std::unique_lock entryLock(entry->decodeMutex, std::defer_lock);
       while (!entryLock.try_lock_for(std::chrono::milliseconds(10))) checkpoint(cancel, stop);
       checkpoint(cancel, stop);
-      if (auto ready = cached(entry)) return ready;
+      if (auto ready = cached(entry, requireOriginal)) return ready;
       auto sound = std::make_shared<DecodedSound>();
       {
         std::lock_guard lock(mutex);
@@ -253,14 +254,14 @@ DecodedAssetCache::DecodedAssetCache(std::size_t maximum)
 DecodedAssetCache::~DecodedAssetCache() = default;
 std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::Load(
     const std::filesystem::path &path, const std::atomic_bool &cancel,
-    std::stop_token stop, std::string *error, FailureKind *failure) {
-  return impl->load(path, nullptr, cancel, stop, error, failure);
+    std::stop_token stop, std::string *error, FailureKind *failure, bool requireOriginal) {
+  return impl->load(path, nullptr, cancel, stop, error, failure, nullptr, requireOriginal);
 }
 std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::LoadBytes(
     const std::filesystem::path &path, const std::vector<unsigned char> &bytes,
     const std::atomic_bool &cancel, std::stop_token stop, std::string *error,
-    FailureKind *failure) {
-  return impl->load(path, &bytes, cancel, stop, error, failure);
+    FailureKind *failure, bool requireOriginal) {
+  return impl->load(path, &bytes, cancel, stop, error, failure, nullptr, requireOriginal);
 }
 std::optional<DecodedAssetCache::SourceSnapshot> DecodedAssetCache::CaptureSource(
     const std::filesystem::path &path) const {
@@ -313,8 +314,8 @@ std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::FindAr
 std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::LoadArchiveBytes(
     const ArchiveBatch &batch, const std::filesystem::path &path,
     const std::vector<unsigned char> &bytes, const std::atomic_bool &cancel,
-    std::stop_token stop, std::string *error, FailureKind *failure) {
-  return impl->load(path, &bytes, cancel, stop, error, failure, &batch);
+    std::stop_token stop, std::string *error, FailureKind *failure, bool requireOriginal) {
+  return impl->load(path, &bytes, cancel, stop, error, failure, &batch, requireOriginal);
 }
 bool DecodedAssetCache::Contains(const std::filesystem::path &path) const {
   const auto resolved = resolvedPath(path);
@@ -334,6 +335,28 @@ std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::Find(
     return {};
   return impl->cachedLocked(found->second);
 }
+void DecodedAssetCache::ReleaseNativePcm(const std::filesystem::path &path,
+    const std::shared_ptr<const DecodedSound> &sound) {
+  if (!sound) return;
+  const auto prepared = sound->PreparedSnapshot();
+  const auto resolved = resolvedPath(path);
+  std::lock_guard lock(impl->mutex);
+  const auto found = impl->entries.find(resolved);
+  if (found == impl->entries.end() || found->second->sound != sound) return;
+  const auto entry = found->second;
+  impl->forget(*entry);
+  if (!prepared) return;
+  const auto bytes = prepared->pcm.size() * sizeof(short);
+  if (bytes > impl->maximumBytes) return;
+  while (impl->statistics.retainedBytes > impl->maximumBytes - bytes && !impl->lru.empty())
+    impl->forget(*impl->lru.front());
+  impl->lru.push_back(entry);
+  entry->sound = prepared;
+  entry->lru = std::prev(impl->lru.end());
+  entry->retained = true;
+  impl->statistics.retainedBytes += bytes;
+}
+
 void DecodedAssetCache::Clear() {
   std::lock_guard lock(impl->mutex);
   while (!impl->lru.empty()) impl->forget(*impl->lru.front());

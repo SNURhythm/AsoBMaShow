@@ -29,6 +29,7 @@ inline std::shared_ptr<const Decoded> prepare(
   if (range.count == 0) return {};
   auto result = std::make_shared<Decoded>();
   result->info = source->info;
+  result->originalPcm = source->originalPcm;
   result->info.frames = range.count;
   result->pcm = source->pcm.subspan(range.start * source->info.channels,
                                    range.count * source->info.channels);

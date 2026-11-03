@@ -57,6 +57,13 @@ struct SoundData {
   // Callback-owned (or accessed with the backend stopped). Monotonic for this
   // owner's lifetime: false proves no scheduled entry can refer to this owner.
   bool hasBeenScheduled = false;
+  // During loading this may hold native PCM. Published owners alias outputData;
+  // subsequent device-rate changes resample the retained output, not the file.
+  bool sourceIsOriginal = true;
+  // Keep the original duration as integers so repeated device-rate changes do
+  // not accumulate ceil-rounding frames after the original samples are freed.
+  size_t durationFrameCount = 0;
+  int durationSampleRate = 0;
   audio::SharedPcmBuffer sourceData;
   audio::SharedPcmBuffer outputData;
   // Install before callbacks start; producer publishes through this fixed owner.
@@ -64,6 +71,18 @@ struct SoundData {
   std::shared_ptr<audio::PagedPcmSound> pagedOutput;
   size_t sourceFrameCount = 0;
   size_t outputFrameCount = 0;
+  // Loader/confirmed-stopped-backend only. Does not touch callback playback state.
+  void retainOutputPcm(int rate) {
+    if (!layers.empty() || pagedOutput) return;
+    if (durationSampleRate == 0 && channels > 0) {
+      durationFrameCount = sourceData.size() / static_cast<size_t>(channels);
+      durationSampleRate = sourceSampleRate;
+    }
+    sourceIsOriginal = sourceIsOriginal && sourceSampleRate == rate;
+    sourceData = outputData;
+    sourceSampleRate = rate;
+    sourceFrameCount = outputFrameCount;
+  }
   std::atomic_bool retired{false};
   std::atomic<std::uint64_t> ownerControlAcknowledgedSequence{0};
 };

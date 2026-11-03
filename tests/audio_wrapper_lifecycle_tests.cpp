@@ -88,14 +88,17 @@ bool audio::DecodedAssetCache::Contains(const std::filesystem::path &) const {
 }
 std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> audio::DecodedAssetCache::Load(
     const std::filesystem::path &, const std::atomic_bool &, std::stop_token,
-    std::string *, FailureKind *) {
+    std::string *, FailureKind *, bool) {
   return {};
 }
 std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> audio::DecodedAssetCache::LoadBytes(
     const std::filesystem::path &, const std::vector<unsigned char> &,
-    const std::atomic_bool &, std::stop_token, std::string *, FailureKind *) {
+    const std::atomic_bool &, std::stop_token, std::string *, FailureKind *, bool) {
   return {};
 }
+
+void audio::DecodedAssetCache::ReleaseNativePcm(const std::filesystem::path &,
+    const std::shared_ptr<const DecodedSound> &) {}
 
 bool decodeAudioToPCM(const path_t &, std::vector<short> &, SF_INFO &,
                       std::atomic<bool> &) {

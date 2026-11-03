@@ -599,19 +599,27 @@ void testGameplaySharesPreparedPcm() {
       const auto &state = *static_cast<UserData *>(control->renderUserData)->callbackState;
       require(state.playingSoundCount == 1, "shared sound reaches the callback");
       const auto *sound = state.playingSounds[0].soundData;
-      require(sound->sourceData.data() == native->pcm.data(),
-              "gameplay must share preview native PCM without materializing a copy");
+      require(sound->sourceData.data() == prepared.data(),
+              "gameplay retains prepared output as its only resampling source");
       require(sound->outputData.data() == prepared.data(),
               "gameplay must share the prepared output at both native and converted rates");
+      native.reset();
+      require(nativeStorage.expired() == (rate != 44100),
+              "native allocation releases per sound even while its preparation cache stays alive");
+      auto retained = cache->Find(path);
+      require(retained && retained->pcm.data() == prepared.data() &&
+                  retained->info.samplerate == static_cast<int>(rate),
+              "preparation cache aliases output PCM with the retained rate");
       wrapper.setDecodedAssetCache(nullptr);
       cache->Clear();
       require(cache->GetStatistics().retainedBytes == 0 && !cache->Contains(path),
               "handoff releases cache ownership");
       cache.reset();
+      retained.reset();
       native.reset();
       prepared = {};
-      require(!nativeStorage.expired() && !outputStorage.expired(),
-              "gameplay retains PCM after all preparation owners are released");
+      require(nativeStorage.expired() == (rate != 44100) && !outputStorage.expired(),
+              "gameplay retains only prepared output after preparation owners release native PCM");
       control->renderCallback(output.data(), 64, 2, control->renderUserData);
       require(std::any_of(output.begin(), output.end(), [](auto sample) { return sample > 0; }),
               "gameplay PCM stays playable after preparation cache release");

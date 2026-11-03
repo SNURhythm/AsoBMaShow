@@ -470,10 +470,20 @@ PrepareOutputRateTransition(std::span<SoundData *const> sounds,
       return std::nullopt;
     }
 
-    SharedPcmBuffer outputData = targetSampleRate == soundData->sourceSampleRate
-        ? soundData->sourceData
-        : SharedPcmBuffer(ResamplePcm(soundData->sourceData, soundData->channels,
-                                      soundData->sourceSampleRate, targetSampleRate));
+    SharedPcmBuffer outputData = soundData->sourceData;
+    if (targetSampleRate != soundData->sourceSampleRate) {
+      auto samples = ResamplePcm(soundData->sourceData, soundData->channels,
+                                soundData->sourceSampleRate, targetSampleRate);
+      if (soundData->durationSampleRate > 0) {
+        const pcm_resampling::Ratio durationRatio(soundData->durationSampleRate, targetSampleRate);
+        const auto frames = durationRatio.outputFrames(soundData->durationFrameCount,
+                                                       kQ32MaximumWholeFrame);
+        if (!frames || *frames > samples.size() / static_cast<size_t>(soundData->channels))
+          return std::nullopt;
+        samples.resize(*frames * static_cast<size_t>(soundData->channels));
+      }
+      outputData = std::move(samples);
+    }
     if (!soundData->sourceData.empty() && outputData.empty()) {
       return std::nullopt;
     }
@@ -502,6 +512,7 @@ void CommitOutputRateTransition(OutputRateTransition transition,
   for (auto &candidate : transition.candidates) {
     candidate.soundData->outputData = std::move(candidate.outputData);
     candidate.soundData->outputFrameCount = candidate.outputFrameCount;
+    candidate.soundData->retainOutputPcm(transition.targetSampleRate);
     candidate.soundData->currentFrame =
         clampFrameToSound(RemapFramePosition(candidate.soundData->currentFrame,
                                              transition.previousSampleRate,
