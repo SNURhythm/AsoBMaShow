@@ -1,6 +1,6 @@
 # Play recap
 
-Open **Play recap** in the standard selector's chart-details tools or the skinned selector's **More** menu.
+Open **Play recap** near **Goals** at the top of the **Kombo** dashboard. Use the standard selector's Kombo tab or the skinned selector's flame button. It is available even before creating a Kombo routine, and Back returns to the same dashboard.
 
 Choose **Session**, **Daily**, **Weekly**, or **Custom**. Previous/Next selects older/newer periods; Latest returns to the current period. Sessions group local chart results less than 60 minutes apart, including across app restarts. The most recent session remains available after an idle gap. Days use local midnight; weeks start Monday. Custom dates use `YYYY-MM-DD` and include both dates.
 

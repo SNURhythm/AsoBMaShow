@@ -17,7 +17,7 @@ public:
               std::function<void()> openGoals = {});
   void configureTab(float topInset, std::function<void()> onClose,
                     std::function<void(const std::string &)> openAssignment = {},
-              std::function<void()> openGoals = {});
+                    std::function<void()> openGoals = {}, Scene *returnOwner = nullptr);
   void setTabTopInset(float topInset);
   void onPause() override;
   void onResume() override;
@@ -38,6 +38,7 @@ private:
   void layout();
   void later(std::function<void()> action);
   void back();
+  void openRecap();
   void dashboard(View *);
   void resetChallengeModal();
   std::string pendingResetAssignment_;
@@ -58,6 +59,7 @@ private:
   void saveRoutine();
   SceneReturnTarget returnTarget_;
   bool embeddedTab_ = false;
+  Scene *tabReturnOwner_ = nullptr;
   float tabTopInset_ = 0;
   std::function<void()> tabClose_;
   std::function<void(const std::string &)> openAssignment_;

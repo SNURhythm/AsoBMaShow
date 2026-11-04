@@ -4,6 +4,10 @@
 #include <set>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <functional>
+#include <memory>
+#include "scene/SceneReturnTarget.h"
 namespace i18n { std::string tr(const char *key) { return key; } }
 struct View {
   bool visible=false;
@@ -70,6 +74,31 @@ struct MusicSelectScene {
   void openKomboAssignment(const std::string &);
 };
 CUSTOM_NAVIGATION
+struct Scene {};
+struct PlayRecapScene {
+  SceneReturnTarget target;
+  PlayRecapScene(auto &, SceneReturnTarget value) : target(value) {}
+};
+struct RecapManager {
+  std::unique_ptr<PlayRecapScene> opened;
+  bool retained=false;
+  void changeScene(std::unique_ptr<PlayRecapScene> scene, bool keep) {
+    opened=std::move(scene); retained=keep;
+  }
+};
+struct KomboScene : Scene {
+  RecapManager manager;
+  struct Context {
+    std::atomic<bool> storageMaintenanceActive=false;
+    RecapManager *sceneManager;
+  } context{false,&manager};
+  bool embeddedTab_=false;
+  Scene *tabReturnOwner_=nullptr;
+  std::function<bool()> pending;
+  void defer(std::function<bool()> action,int,bool) { pending=std::move(action); }
+  void openRecap();
+};
+RECAP_NAVIGATION
 int main() {
   MainMenuScene native;
   native.openKomboAssignment("second");
@@ -84,4 +113,19 @@ int main() {
   assert((custom.opened==std::vector<std::string>{"container:assignments"}));
   custom.opened.clear();custom.bars_.rootAvailable=false;custom.openKomboAssignment("second");
   assert(custom.opened.empty());
+  KomboScene standalone;
+  standalone.openRecap();
+  assert(!standalone.manager.opened); // Navigate after button dispatch.
+  assert(standalone.pending());
+  assert(standalone.manager.retained && standalone.manager.opened->target.retained==&standalone);
+  Scene selector;
+  KomboScene embedded;
+  embedded.embeddedTab_=true; embedded.tabReturnOwner_=&selector;
+  embedded.openRecap();
+  assert(embedded.pending());
+  assert(embedded.manager.retained && embedded.manager.opened->target.retained==&selector);
+  embedded.manager.opened.reset();
+  embedded.context.storageMaintenanceActive=true;
+  embedded.openRecap();
+  assert(embedded.pending() && !embedded.manager.opened);
 }

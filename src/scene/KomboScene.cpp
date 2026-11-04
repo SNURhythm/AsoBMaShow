@@ -1,4 +1,5 @@
 #include "KomboScene.h"
+#include "PlayRecapScene.h"
 #include "SceneManager.h"
 #include "../Uuid.h"
 #include "../LongNoteModeUtils.h"
@@ -270,8 +271,9 @@ KomboScene::KomboScene(ApplicationContext &context, SceneReturnTarget target,
       openGoals_(std::move(openGoals)) {}
 void KomboScene::configureTab(float topInset, std::function<void()> onClose,
                                std::function<void(const std::string &)> openAssignment,
-                               std::function<void()> openGoals) {
+                               std::function<void()> openGoals, Scene *returnOwner) {
   embeddedTab_ = true;
+  tabReturnOwner_ = returnOwner;
   tabClose_ = std::move(onClose);
   openAssignment_ = std::move(openAssignment);
   openGoals_ = std::move(openGoals);
@@ -414,6 +416,8 @@ void KomboScene::dashboard(View *body) {
       navigate(); return keepAlive;
     }, 0, true);
   });
+  action(body, i18n::tr("recap.ui.title"), [this] { openRecap(); },
+         app_theme::ActionCategory::Information);
   if constexpr (reminders::supported)
     action(body, i18n::tr("kombo.reminders.settings"), [this] {
       later([this] { reminders::refreshPermission(); page_ = Page::Reminders; });
@@ -989,6 +993,18 @@ void KomboScene::reminderSettings(View *body) {
   if (state_.days.empty()) label(panel, i18n::tr("kombo.reminders.need_routine"), 19);
 }
 
+void KomboScene::openRecap() {
+  defer([this] {
+    if (context.storageMaintenanceActive.load()) return true;
+    // The embedded tab is owned by the selector; retain that scene so Back
+    // restores the selected Kombo tab, not an unregistered child scene.
+    Scene *owner = embeddedTab_ ? tabReturnOwner_ : this;
+    if (!owner) return true;
+    context.sceneManager->changeScene(std::make_unique<PlayRecapScene>(
+        context, SceneReturnTarget::Retained(owner)), true);
+    return true;
+  }, 0, true);
+}
 void KomboScene::back() {
   if (page_ == Page::Assignment) { later([this] { page_ = adjustingToday_ ? Page::Dashboard : Page::Routine; adjustingToday_ = false; fieldErrors_.clear(); message_.clear(); }); return; }
   if (page_ == Page::Routine || page_ == Page::Reminders || page_ == Page::ReminderPrompt) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
