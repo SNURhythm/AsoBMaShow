@@ -471,6 +471,15 @@ private:
   size_t bmpLayerCursor = 0;
   long long lastVisualTimelineMicros = -1;
   std::unordered_map<int, path_t> wavTableAbs;
+  // Includes partially prepared sources/slices before wavTableAbs is assembled.
+  std::unordered_set<path_t> bmsonSoundPaths;
+  struct BmsonSliceState {
+    path_t sourcePath;
+    long long startMicros = 0;
+    long long durationMicros = 0;
+    bool empty = false;
+  };
+  std::unordered_map<path_t, BmsonSliceState> bmsonSliceStates;
   std::unordered_map<path_t, std::string> soundArchiveIdentities;
   std::unordered_map<int, std::shared_ptr<VideoPlayer>> videoPlayerTable;
   std::unordered_map<int, std::filesystem::path> videoMaterializedPathTable;

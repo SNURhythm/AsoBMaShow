@@ -1,3 +1,4 @@
+#include "AudioPreparationBudget.h"
 #include "BmsonAudio.h"
 #include "Jukebox.h"
 #include "ChartVisualAssetResolver.h"
@@ -2525,7 +2526,7 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
       if (isCancelled) {
         return;
       }
-      const auto &file = files[i];
+      auto &file = files[i];
       const std::filesystem::path virtualPath =
           archive_file::makeVirtualPath(batch.archivePath, file.path);
       const path_t soundPath = fspath_to_path_t(virtualPath);
@@ -2534,7 +2535,7 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
         return;
       }
 
-      if (!audio.loadSoundFromMemory(soundPath, file.bytes, isCancelled)) {
+      if (!audio.loadSoundFromMemory(soundPath, std::move(file.bytes), isCancelled)) {
         return;
       }
 
@@ -2994,33 +2995,22 @@ audio::playback::BackendOperationResult Jukebox::loadResolvedChartResources(
   }
   auto result = reconcileChartResources(chart, &sounds, visuals, isCancelled, preserveVisuals);
   if (!result.success || isCancelled || chart.WavSlices.empty()) return result;
-  std::unordered_map<int, std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>> sources;
-  for (const auto &[id, path] : wavTableAbs) sources[id] = audio.decodedSoundSnapshot(path);
-  std::unordered_map<int, path_t> preparedSlices;
+  // Slices were cut and converted per source in reconcileChartResources.
+  // Only assemble lightweight playback groups here; no native PCM is retained.
   for (const auto &[id, slices] : chart.WavSlices) {
     if (isCancelled) break;
     std::vector<path_t> layers;
     for (const auto &slice : slices) {
-      auto prepared = preparedSlices.find(slice.SliceId);
-      if (prepared == preparedSlices.end()) {
-        const auto source = sources.find(slice.SourceWav);
-        const auto sound = audio::bmson::prepare(slice,
-            source == sources.end() ? nullptr : source->second, isCancelled);
-        if (!sound) continue;
-        const auto key = utf8_to_path_t("@bmson/" + chart.Meta.SHA256 + "/slice/" + std::to_string(slice.SliceId));
-        if (!audio.loadPreparedSound(key, *sound, isCancelled, true)) {
-          if (isCancelled) break;
-          return {.success = false, .diagnostic = "Could not prepare bmson keysound slice."};
-        }
-        prepared = preparedSlices.emplace(slice.SliceId, key).first;
-        wavTableAbs[slice.SliceId] = key;
-      }
-      layers.push_back(prepared->second);
+      const auto key = utf8_to_path_t("@bmson/" + chart.Meta.SHA256 + "/slice/" + std::to_string(slice.SliceId));
+      if (!audio.resolveRealtimeSound(key)) continue;
+      wavTableAbs[slice.SliceId] = key;
+      layers.push_back(key);
     }
-    if (layers.empty() || isCancelled) continue;
+    if (layers.empty()) continue;
     if (layers.size() == 1) wavTableAbs[id] = layers.front();
     else {
       const auto key = utf8_to_path_t("@bmson/" + chart.Meta.SHA256 + "/group/" + std::to_string(id));
+      bmsonSoundPaths.insert(key);
       if (!audio.loadSoundGroup(key, layers, isCancelled)) {
         if (isCancelled) break;
         return {.success = false, .diagnostic = "Could not prepare bmson keysound layers."};
@@ -3045,20 +3035,92 @@ Jukebox::reconcileChartResources(
   std::unordered_map<path_t, std::optional<audio::DecodedAssetCache::ArchiveBatch>> cacheBatches;
   std::unordered_map<path_t, std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>> preparedSounds;
 
+  std::unordered_map<path_t, std::vector<bms_parser::WavSlice>> slicesByPath;
+  if (sounds && !chart.WavSlices.empty()) {
+    std::unordered_map<int, path_t> pathsById;
+    for (const auto &asset : *sounds) pathsById[asset.id] = asset.key;
+    std::unordered_set<int> seenSlices;
+    for (const auto &[id, slices] : chart.WavSlices) {
+      for (const auto &slice : slices) {
+        const auto path = pathsById.find(slice.SourceWav);
+        if (path != pathsById.end() && seenSlices.insert(slice.SliceId).second)
+          slicesByPath[path->second].push_back(slice);
+      }
+    }
+  }
+  std::unordered_set<path_t> sliceOnlyPaths;
+  for (const auto &[path, slices] : slicesByPath) sliceOnlyPaths.insert(path);
+  if (sounds && !sliceOnlyPaths.empty()) {
+    std::unordered_set<int> sourceIds;
+    std::unordered_set<int> directIds;
+    for (const auto &[id, slices] : chart.WavSlices)
+      for (const auto &slice : slices) sourceIds.insert(slice.SourceWav);
+    for (const auto *measure : chart.Measures) {
+      for (const auto *timeline : measure->TimeLines) {
+        const auto collect = [&](const auto &notes) {
+          for (const auto *note : notes)
+            if (note && !chart.WavSlices.contains(note->Wav)) directIds.insert(note->Wav);
+        };
+        collect(timeline->Notes);
+        collect(timeline->InvisibleNotes);
+        collect(timeline->BackgroundNotes);
+      }
+    }
+    for (const auto &asset : *sounds)
+      if (!sourceIds.contains(asset.id) || directIds.contains(asset.id))
+        sliceOnlyPaths.erase(asset.key);
+  }
+  std::atomic_bool sliceFailed{false};
+  std::mutex soundMapMutex;
+  const auto consumerFor = [&](const path_t &path) -> AudioWrapper::NativeSoundConsumer {
+    const auto found = slicesByPath.find(path);
+    if (found == slicesByPath.end() || found->second.empty()) return {};
+    return [&, path, recipes = &found->second](const auto &source) {
+      {
+        std::lock_guard lock(soundMapMutex);
+        bmsonSoundPaths.insert(path);
+      }
+      for (const auto &slice : *recipes) {
+        if (isCancelled) return false;
+        const auto prepared = audio::bmson::prepare(slice, source, isCancelled);
+        if (isCancelled) return false;
+        const auto key = utf8_to_path_t("@bmson/" + chart.Meta.SHA256 + "/slice/" + std::to_string(slice.SliceId));
+        {
+          // Register before publication so cancellation or an allocation failure
+          // cannot leave a generated owner outside the next pruning pass.
+          std::lock_guard lock(soundMapMutex);
+          bmsonSoundPaths.insert(key);
+        }
+        if (prepared && !audio.loadPreparedSound(key, *prepared, isCancelled, true)) {
+          sliceFailed.store(true, std::memory_order_relaxed);
+          return false;
+        }
+        {
+          std::lock_guard lock(soundMapMutex);
+          bmsonSliceStates[key] = {path, slice.StartMicros, slice.DurationMicros, !prepared};
+        }
+      }
+      return true;
+    };
+  };
+
   if (sounds != nullptr) {
-    std::unordered_set<path_t> oldPaths;
+    std::unordered_set<path_t> oldPaths = bmsonSoundPaths;
     for (const auto &[id, path] : wavTableAbs) {
       (void)id;
       oldPaths.insert(path);
     }
     std::unordered_set<path_t> retainedPaths;
+    std::unordered_set<path_t> retainedBmsonPaths;
     std::unordered_map<int, path_t> retainedSounds;
     std::unordered_map<path_t, std::string> currentIdentities;
     for (const auto &asset : *sounds) {
       if (isCancelled) {
         return {.success = true};
       }
-      bool reusable = oldPaths.contains(asset.key);
+      const auto owner = audio.resolveRealtimeSound(asset.key);
+      bool reusable = oldPaths.contains(asset.key) && owner && owner->valid();
+      bool unchanged = false;
       std::filesystem::path archivePath;
       std::filesystem::path innerPath;
       const bool archived = archive_file::splitVirtualPath(asset.path, archivePath, innerPath);
@@ -3079,40 +3141,64 @@ Jukebox::reconcileChartResources(
           identity->second = archive_source_identity::KeyForPath(archivePath);
         }
         const auto previous = soundArchiveIdentities.find(archiveKey);
-        reusable = reusable && !identity->second.empty() &&
-                   previous != soundArchiveIdentities.end() &&
-                   previous->second == identity->second;
+        unchanged = !identity->second.empty() &&
+                    previous != soundArchiveIdentities.end() &&
+                    previous->second == identity->second;
       } else {
         auto [identity, inserted] = currentIdentities.try_emplace(asset.key);
         if (inserted) {
           identity->second = archive_source_identity::KeyForPath(asset.path);
         }
         const auto previous = soundArchiveIdentities.find(asset.key);
-        reusable = reusable && !identity->second.empty() &&
-                   previous != soundArchiveIdentities.end() &&
-                   previous->second == identity->second;
+        unchanged = !identity->second.empty() &&
+                    previous != soundArchiveIdentities.end() &&
+                    previous->second == identity->second;
       }
+      reusable = reusable && unchanged && !sliceOnlyPaths.contains(asset.key);
+      const auto recipes = slicesByPath.find(asset.key);
+      if (unchanged && recipes != slicesByPath.end()) {
+        std::erase_if(recipes->second, [&](const auto &slice) {
+          const auto key = utf8_to_path_t("@bmson/" + chart.Meta.SHA256 + "/slice/" + std::to_string(slice.SliceId));
+          const auto previous = bmsonSliceStates.find(key);
+          if (previous == bmsonSliceStates.end() || previous->second.sourcePath != asset.key ||
+              previous->second.startMicros != slice.StartMicros ||
+              previous->second.durationMicros != slice.DurationMicros) return false;
+          const auto sliceOwner = audio.resolveRealtimeSound(key);
+          if (!previous->second.empty && (!sliceOwner || !sliceOwner->valid())) return false;
+          retainedPaths.insert(key);
+          retainedBmsonPaths.insert(key);
+          return true;
+        });
+      }
+      const bool needsSlices = recipes != slicesByPath.end() && !recipes->second.empty();
+      if (sliceOnlyPaths.contains(asset.key) && !needsSlices) continue;
+      // A ready source alone is insufficient: every required slice must either
+      // be retained above or populated by the synchronous native consumer.
       // Resolve cached archive sounds once against a shared source snapshot.
       // Repeating Contains + Load would re-resolve the indexed filename and
       // revalidate the same archive for every keysound. Check the batch again
       // before returning success, after all sound/visual preparation has joined.
       std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> prepared;
-      if (!reusable && cacheBatch) {
+      if ((!reusable || needsSlices) && cacheBatch) {
         prepared = decodedCache->FindArchiveAsset(*cacheBatch, asset.path);
+        if (prepared && needsSlices && !prepared->originalPcm)
+          prepared.reset();
         if (prepared) preparedSounds.emplace(asset.key, prepared);
       }
       if (reusable) {
         retainedSounds[asset.id] = asset.key;
+        if (recipes != slicesByPath.end()) retainedBmsonPaths.insert(asset.key);
         if (retainedPaths.insert(asset.key).second && decodedCache) {
           const auto *source = cacheBatch ? cacheBatch :
               fileCacheSource ? &*fileCacheSource : nullptr;
           if (source) decodedCache->RememberLoadedSound(*source, asset.path,
                                                        audio.decodedSoundSnapshot(asset.key));
         }
-      } else if (!archived || prepared ||
+      }
+      if ((!reusable || needsSlices) && (!archived || prepared ||
                  !addArchiveChartAssetTarget(
                      archiveBatches, archiveBatchOrder, asset.path, asset.id,
-                     ArchiveChartAssetKind::Sound)) {
+                     ArchiveChartAssetKind::Sound))) {
         auto [ids, inserted] = regularSoundIds.try_emplace(asset.key);
         if (inserted) {
           regularSoundPaths.push_back(asset.key);
@@ -3132,6 +3218,10 @@ Jukebox::reconcileChartResources(
       return jukebox_lifecycle::ContextualizeFailure(
           std::move(committed), "Jukebox::reconcileChartResources", "unload");
     }
+    bmsonSoundPaths = std::move(retainedBmsonPaths);
+    std::erase_if(bmsonSliceStates, [&](const auto &entry) {
+      return !retainedPaths.contains(entry.first);
+    });
     soundArchiveIdentities = std::move(currentIdentities);
   }
 
@@ -3160,15 +3250,28 @@ Jukebox::reconcileChartResources(
     }
   }
 
-  std::mutex soundMapMutex;
   parallel_for_each_index(regularSoundPaths.size(), [&](size_t index) {
     const auto &path = regularSoundPaths[index];
     if (isCancelled) return;
-    const auto prepared = preparedSounds.find(path);
-    const bool loaded = prepared != preparedSounds.end()
-        ? audio.loadPreparedSound(path, *prepared->second, isCancelled)
-        : audio.loadSound(path, isCancelled);
-    if (!loaded) return;
+    std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> prepared;
+    {
+      std::lock_guard lock(soundMapMutex);
+      if (const auto found = preparedSounds.find(path); found != preparedSounds.end()) {
+        prepared = std::move(found->second);
+        preparedSounds.erase(found);
+      }
+    }
+    audio::AudioPreparationScope preparation(isCancelled, audio.runtimeState().effectiveSampleRate);
+    if (prepared && !preparation.reserve(prepared->pcm.size(), prepared->info.channels,
+                                         prepared->info.samplerate)) return;
+    const auto consumeNative = consumerFor(path);
+    const bool loaded = prepared
+        ? ((!consumeNative || consumeNative(prepared)) &&
+           (sliceOnlyPaths.contains(path) || audio.loadPreparedSound(path, *prepared, isCancelled)))
+        : audio.loadSound(path, isCancelled, consumeNative, !sliceOnlyPaths.contains(path));
+    if (prepared && decodedCache) decodedCache->ReleaseNativePcm(std::filesystem::path(path), prepared);
+    prepared.reset();
+    if (!loaded || sliceOnlyPaths.contains(path)) return;
     std::lock_guard<std::mutex> lock(soundMapMutex);
     for (const int id : regularSoundIds.at(path)) {
       wavTableAbs[id] = path;
@@ -3189,6 +3292,9 @@ Jukebox::reconcileChartResources(
       return {.success = true};
     }
     const auto &batch = archiveBatches.at(archiveKey);
+    const auto cachedBatch = cacheBatches.find(archiveKey);
+    const auto *cacheBatch = cachedBatch != cacheBatches.end() && cachedBatch->second
+        ? &*cachedBatch->second : nullptr;
     std::mutex visualLoadMutex;
     std::unordered_set<path_t> consumedPaths;
     std::mutex consumedMutex;
@@ -3201,7 +3307,11 @@ Jukebox::reconcileChartResources(
       const auto key = fspath_to_path_t(virtualPath);
       if (const auto ids = batch.soundIdsByPath.find(key);
           ids != batch.soundIdsByPath.end()) {
-        if (audio.loadSoundFromMemory(key, file.bytes, isCancelled)) {
+        // A rare mixed audio/visual reference still needs its encoded bytes.
+        const bool keepEncoded = batch.videoIdsByPath.contains(key) || batch.imageIdsByPath.contains(key);
+        if (audio.loadSoundFromMemory(key, keepEncoded ? file.bytes : std::move(file.bytes),
+                                      isCancelled, consumerFor(key), !sliceOnlyPaths.contains(key),
+                                      cacheBatch) && !sliceOnlyPaths.contains(key)) {
           std::lock_guard<std::mutex> lock(soundMapMutex);
           for (const int id : ids->second) {
             wavTableAbs[id] = key;
@@ -3280,11 +3390,15 @@ Jukebox::reconcileChartResources(
       const auto unloaded = audio.unloadSounds();
       if (!unloaded.success) return unloaded;
       wavTableAbs.clear();
+      bmsonSoundPaths.clear();
+      bmsonSliceStates.clear();
       soundArchiveIdentities.clear();
       return {.success = false,
               .diagnostic = "Jukebox::reconcileChartResources: audio archive changed during preparation"};
     }
   }
+  if (sliceFailed.load(std::memory_order_relaxed) && !isCancelled)
+    return {.success = false, .diagnostic = "Could not prepare bmson keysound slice."};
   return {.success = true};
 }
 
@@ -3444,6 +3558,8 @@ audio::playback::BackendOperationResult Jukebox::discardLoadedMedia(
   result = audio.unloadSounds(beforeDiscard);
   if (!result.success) return result;
   wavTableAbs.clear();
+  bmsonSoundPaths.clear();
+  bmsonSliceStates.clear();
   audioList.clear();
   bmpList.clear();
   bmpLayerList.clear();
@@ -3566,7 +3682,7 @@ Jukebox::prepareGameplayAudioFromPreview(bms_parser::Chart &chart,
 }
 
 bool Jukebox::hasLoadedResources() const {
-  if (!wavTableAbs.empty() || !visualPathTable.empty()) {
+  if (!wavTableAbs.empty() || !bmsonSoundPaths.empty() || !visualPathTable.empty()) {
     return true;
   }
   {

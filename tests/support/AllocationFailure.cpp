@@ -13,6 +13,8 @@ thread_local std::size_t largestAllocation = 0;
 thread_local std::size_t allocationCount = 0;
 thread_local std::size_t allocationBytes = 0;
 thread_local std::atomic_bool *cancelTarget = nullptr;
+thread_local std::atomic_bool *sizeCancelTarget = nullptr;
+thread_local std::size_t cancellationSize = 0;
 thread_local std::size_t cancelCountdown = 0, allocationsAfterCancellation = 0;
 }
 
@@ -63,7 +65,15 @@ std::size_t test_support::CancelAfterAllocations::afterCancellation() const noex
   return allocationsAfterCancellation;
 }
 
+test_support::CancelOnAllocationSize::CancelOnAllocationSize(
+    std::atomic_bool &cancelled, std::size_t bytes) noexcept {
+  sizeCancelTarget = &cancelled;
+  cancellationSize = bytes;
+}
+test_support::CancelOnAllocationSize::~CancelOnAllocationSize() { sizeCancelTarget = nullptr; }
+
 void *operator new(std::size_t size) {
+  if (sizeCancelTarget && size == cancellationSize) *sizeCancelTarget = true;
   if (cancelTarget) {
     if (cancelCountdown == 0) { *cancelTarget = true; ++allocationsAfterCancellation; }
     else --cancelCountdown;

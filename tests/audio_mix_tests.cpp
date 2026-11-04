@@ -659,7 +659,7 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
   audio::playback::CommitOutputRateTransition(std::move(*restored), state);
   require(
       sound.outputFrameCount == 88200 && sound.outputData == sound.sourceData,
-      "returning to the source rate regenerates from source, not prior output");
+      "returning to the original rate preserves duration and retains one PCM allocation");
   require(state.playingSounds[0].sourceFrameQ32 == 44100ULL << 32 &&
               state.playingSounds[0].outputOffsetFrames == 441 &&
               state.scheduledSounds[0].startFrame == 22050 &&
@@ -1568,22 +1568,29 @@ void testPcmBuffersShareOwnershipAcrossRateTransitions() {
   sound.sourceFrameCount = 4;
   sound.outputData = sound.sourceData;
   sound.outputFrameCount = 4;
-  const auto retained = sound.sourceData;
-  require(sound.outputData.data() == retained.data(),
-          "native and matching output PCM must share immutable storage");
+  auto retained = sound.sourceData;
+  std::weak_ptr<const std::vector<short>> original = retained.storage();
   AudioCallbackState state;
   const std::array<SoundData *, 1> sounds{&sound};
   auto changed = audio::playback::PrepareOutputRateTransition(sounds, 44100, 48000);
   require(changed.has_value(), "prepare a different output rate");
+  const auto expected = audio::ResamplePcm(retained, 1, 44100, 48000);
   audio::playback::CommitOutputRateTransition(std::move(*changed), state);
-  require(sound.sourceData.data() == retained.data() &&
-              sound.outputData.data() != retained.data() && retained[1] == 200,
-          "rate changes must preserve shared native PCM");
+  retained = {};
+  require(original.expired() && sound.outputData == expected &&
+              sound.sourceData.data() == sound.outputData.data() &&
+              sound.sourceSampleRate == 48000 &&
+              sound.sourceFrameCount == sound.outputFrameCount,
+          "committed rate changes retain only the exact prepared output");
+  auto expectedReturn = audio::ResamplePcm(sound.outputData, 1, 48000, 44100);
+  expectedReturn.resize(4);
   auto restored = audio::playback::PrepareOutputRateTransition(sounds, 48000, 44100);
-  require(restored.has_value(), "restore native output rate");
+  require(restored.has_value(), "restore original device rate from retained output");
   audio::playback::CommitOutputRateTransition(std::move(*restored), state);
-  require(sound.outputData.data() == retained.data(),
-          "returning to native rate must reuse native PCM without a copy");
+  require(sound.outputData == expectedReturn &&
+              sound.sourceData.data() == sound.outputData.data() &&
+              sound.sourceSampleRate == 44100,
+          "later rate changes resample retained output without needing the original");
 }
 
 void testRetriggerTransfersGainControlWithoutStoppingPolyphony() {

@@ -42,6 +42,33 @@ presentation timestamp use one fallback wall-clock origin plus each chunk's
 frame offset; this fallback never becomes native presentation history.
 Device reconfiguration suspends both
 processors, converts retained PCM before restarting output, and supports rollback.
+Loaded sounds keep only output-rate PCM: each native buffer is released after
+that source and its dependent BMSON slices are prepared. The preparation cache
+shares ready output instead of holding another native copy. Rare device-rate
+changes resample retained output; repeated changes may accumulate interpolation
+loss, while original duration metadata prevents rounded tail frames accumulating.
+The audio callback still reads ready PCM without decoding, resampling or file I/O.
+Slice-only BMSON sources have no full-track playback owner or full-track
+resampling pass. Sources also referenced directly by notes retain that owner.
+Same-rate slices share their native backing allocation; converted slices retain
+only their individual outputs. Skin sounds also share same-rate PCM and charge
+their decoded-memory budget once for retained output, including after rate changes.
+
+Gameplay, preview and skin preparation share a 128 MiB scheduling budget for
+estimated transient PCM and decoder scratch. Admission uses the bounded frame
+count from the decoder header and holds the reservation through all dependent
+slice conversions and source release. Small assets can prepare concurrently;
+one oversized asset runs alone. Waiting honors cancellation. This controls
+concurrent preparation rather than total resident playback memory; encoded
+archive queues and retained caches have separate budgets.
+Archive audio consumers release encoded buffers as soon as decoding finishes,
+before preparing playback PCM. Gameplay uses the existing validated archive
+snapshot for each entry, and resolved PCM handoff does not repeat file lookup.
+Preview aliases share one native decode and hand off the cache after all aliases
+are prepared. Decode and resampling append finished samples without first
+zero-filling output PCM. Small keysounds reserve once; longer PCM16 WAVs can
+also reserve once when the allocation is bounded by their actual encoded size.
+Other long decodes grow with produced samples rather than trusting header duration.
 A submix stop closes its render gate and waits on the control thread for an
 already admitted callback; the callback never waits on that gate.
 

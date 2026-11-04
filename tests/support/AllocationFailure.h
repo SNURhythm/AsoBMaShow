@@ -26,6 +26,13 @@ public:
   std::size_t afterCancellation() const noexcept;
 };
 
+// Cancel at a specific real PCM allocation, independent of bookkeeping count.
+class CancelOnAllocationSize final {
+public:
+  CancelOnAllocationSize(std::atomic_bool &cancelled, std::size_t bytes) noexcept;
+  ~CancelOnAllocationSize();
+};
+
 // Reject oversized ordinary allocations without putting the test process at risk.
 class AllocationSizeLimit final {
 public:

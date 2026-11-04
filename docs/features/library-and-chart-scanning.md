@@ -117,8 +117,13 @@ are extracted first; the remaining sounds still warm through the indexed batch
 pipeline. Other archives inspect already-extracted bytes. Deferred encoded data
 stays capped at 8 MiB. Expired native PCM still warms for gameplay, but needs no
 preview resampling unless the sample plays later.
-Custom selectors reuse preloaded native PCM, including
-sounds retained when changing difficulty, and drain previews before gameplay.
+Custom selectors reuse preloaded output PCM, including sounds retained when
+changing difficulty, and drain previews before gameplay. Converted source buffers
+are released per asset. BMSON cuts all dependent slices from one original source
+before releasing it. Repeated gameplay preparation reuses each slice whose source
+identity and cut definition are unchanged. Only missing or changed slices require
+another original-source decode through the existing archive batch path; all
+required keysounds from that source are populated before releasing its PCM.
 
 Temporary media writes and cleanup share one mutation lock. Cleanup uses the
 current platform path normalizer to protect active top-level cache entries;

@@ -53,6 +53,39 @@ void zipWav(const std::filesystem::path &zip, const std::vector<unsigned char> &
   require(archive_write_data(writer.get(), bytes.data(), bytes.size()) == static_cast<la_ssize_t>(bytes.size()), "write ZIP bytes");
   require(archive_write_close(writer.get()) == ARCHIVE_OK, "close ZIP");
 }
+void testPreparedOutputReplacesNativePerAsset(const std::filesystem::path &root) {
+  const auto path = root / "converted.wav";
+  writeWav(path, 1, 320);
+  std::atomic_bool cancelled = false;
+  audio::DecodedAssetCache cache;
+  auto native = cache.Load(path, cancelled);
+  require(native && native->originalPcm, "decode original PCM for conversion");
+  std::weak_ptr<const std::vector<short>> originalStorage = native->pcm.storage();
+  const auto originalSamples = std::vector<short>(native->pcm.begin(), native->pcm.end());
+  const audio::SharedPcmBuffer output(std::vector<short>(441, 1234));
+  native->RememberPreparedOutput(44100, output);
+  cache.ReleaseNativePcm(path, native);
+  native.reset();
+  require(originalStorage.expired(), "cache releases original before the next asset loads");
+  const auto opens = cache.GetStatistics().decoderOpens;
+  const auto ready = cache.Load(path, cancelled);
+  require(ready && !ready->originalPcm && ready->info.samplerate == 44100 &&
+              ready->info.frames == 441 && ready->pcm.data() == output.data() &&
+              cache.GetStatistics().decoderOpens == opens &&
+              cache.GetStatistics().retainedBytes == output.size() * sizeof(short),
+          "cache retains only prepared PCM with matching metadata and accounting");
+  auto forSlices = cache.Load(path, cancelled, {}, nullptr, nullptr, true);
+  require(forSlices && forSlices->originalPcm && forSlices->info.samplerate == 32000 &&
+              forSlices->pcm == originalSamples && cache.GetStatistics().decoderOpens == opens + 1,
+          "new BMSON slices can explicitly request original samples");
+  originalStorage = forSlices->pcm.storage();
+  cache.ReleaseNativePcm(path, forSlices);
+  forSlices.reset();
+  require(originalStorage.expired() && cache.GetStatistics().retainedBytes == 0 &&
+              ready->pcm.data() == output.data(),
+          "slice-only preparation drops native cache ownership without invalidating playback");
+}
+
 void testChartAudioFileLookup(const std::filesystem::path &root) {
   const auto folder = root / "lookup";
   std::filesystem::create_directory(folder);
@@ -408,6 +441,7 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() / ("decoded-asset-tests-" + uuid::generateV4());
   try {
     std::filesystem::create_directories(root);
+    testPreparedOutputReplacesNativePerAsset(root);
     testCaseFallbackSymlinkParentDecode(root);
     testCaseLookupCancellation(root);
     testChartAudioFileLookup(root);

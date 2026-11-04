@@ -227,17 +227,26 @@ bool ResampledPcmFitsSampleBudget(
 
 std::vector<short> ResamplePcm(std::span<const short> source, int channels,
                                int sourceRate, int targetRate,
-                               const std::atomic_bool *cancelled) {
+                               const std::atomic_bool *cancelled,
+                               std::size_t durationFrames, int durationSampleRate) {
   const auto projectedSamples = ProjectedResampledPcmSampleCount(
       source.size(), channels, sourceRate, targetRate);
   if (!projectedSamples || source.empty()) return {};
   if (cancelled && cancelled->load(std::memory_order_relaxed)) return {};
-  if (sourceRate == targetRate && !cancelled) return {source.begin(), source.end()};
+  if (sourceRate == targetRate && !cancelled && durationSampleRate == 0)
+    return {source.begin(), source.end()};
 
   const size_t channelCount = static_cast<size_t>(channels);
   const size_t sourceFrames = source.size() / channelCount;
-  const size_t targetFrames = *projectedSamples / channelCount;
-  std::vector<short> output(*projectedSamples);
+  size_t targetFrames = *projectedSamples / channelCount;
+  if (durationSampleRate > 0) {
+    const pcm_resampling::Ratio durationRatio(durationSampleRate, targetRate);
+    const auto exactFrames = durationRatio.outputFrames(durationFrames, targetFrames);
+    if (!exactFrames) return {};
+    targetFrames = *exactFrames;
+  }
+  std::vector<short> output;
+  output.reserve(targetFrames * channelCount);
 
   pcm_resampling::Cursor cursor(
       pcm_resampling::Ratio(sourceRate, targetRate), sourceFrames);
@@ -249,7 +258,8 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
     const size_t chunkEnd = targetFrame + chunkFrames;
     if (sourceRate == targetRate) {
       const size_t offset = targetFrame * channelCount;
-      std::copy_n(source.data() + offset, chunkFrames * channelCount, output.data() + offset);
+      output.insert(output.end(), source.data() + offset,
+                    source.data() + offset + chunkFrames * channelCount);
       targetFrame = chunkEnd;
       continue;
     }
@@ -257,8 +267,8 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
       const size_t leftIndex = cursor.left() * channelCount;
       const size_t rightIndex = cursor.right() * channelCount;
       for (size_t channel = 0; channel < channelCount; ++channel) {
-        output[targetFrame * channelCount + channel] = cursor.interpolate(
-            source[leftIndex + channel], source[rightIndex + channel]);
+        output.push_back(cursor.interpolate(
+            source[leftIndex + channel], source[rightIndex + channel]));
       }
       cursor.advance();
     }
@@ -470,10 +480,13 @@ PrepareOutputRateTransition(std::span<SoundData *const> sounds,
       return std::nullopt;
     }
 
-    SharedPcmBuffer outputData = targetSampleRate == soundData->sourceSampleRate
-        ? soundData->sourceData
-        : SharedPcmBuffer(ResamplePcm(soundData->sourceData, soundData->channels,
-                                      soundData->sourceSampleRate, targetSampleRate));
+    SharedPcmBuffer outputData = soundData->sourceData;
+    if (targetSampleRate != soundData->sourceSampleRate) {
+      auto samples = ResamplePcm(soundData->sourceData, soundData->channels,
+                                soundData->sourceSampleRate, targetSampleRate, nullptr,
+                                soundData->durationFrameCount, soundData->durationSampleRate);
+      outputData = std::move(samples);
+    }
     if (!soundData->sourceData.empty() && outputData.empty()) {
       return std::nullopt;
     }
@@ -502,6 +515,7 @@ void CommitOutputRateTransition(OutputRateTransition transition,
   for (auto &candidate : transition.candidates) {
     candidate.soundData->outputData = std::move(candidate.outputData);
     candidate.soundData->outputFrameCount = candidate.outputFrameCount;
+    candidate.soundData->retainOutputPcm(transition.targetSampleRate);
     candidate.soundData->currentFrame =
         clampFrameToSound(RemapFramePosition(candidate.soundData->currentFrame,
                                              transition.previousSampleRate,

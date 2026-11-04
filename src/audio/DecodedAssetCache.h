@@ -16,7 +16,7 @@
 #include <vector>
 
 namespace audio {
-// Whole native-rate keysounds shared by preview and gameplay. Decode once using
+// Whole keysounds shared by preview and gameplay. Decode once using
 // the full loader; readers retain immutable PCM independently of cache eviction.
 // All operations are loader/worker operations, never audio callbacks.
 class DecodedAssetCache {
@@ -24,10 +24,13 @@ class DecodedAssetCache {
 public:
   struct DecodedSound {
     SF_INFO info{};
+    bool originalPcm = true;
+    std::size_t durationFrames = 0;
+    int durationSampleRate = 0;
     SharedPcmBuffer pcm;
 
-    // Reuse the preview's conversion while its playback owner is alive. The
-    // cache itself retains only native PCM, not additional output-rate buffers.
+    // Reuse the preview conversion while its playback owner is alive. After
+    // publication, the cache replaces the original with this prepared output.
     [[nodiscard]] SharedPcmBuffer FindPreparedOutput(int sampleRate) const {
       if (sampleRate == info.samplerate) return pcm;
       std::lock_guard lock(outputMutex_);
@@ -37,6 +40,21 @@ public:
       std::lock_guard lock(outputMutex_);
       outputRate_ = sampleRate;
       output_ = output.storage();
+    }
+
+    [[nodiscard]] std::shared_ptr<const DecodedSound> PreparedSnapshot() const {
+      std::lock_guard lock(outputMutex_);
+      auto output = output_.lock();
+      if (!output || outputRate_ <= 0 || info.channels <= 0) return {};
+      auto snapshot = std::make_shared<DecodedSound>();
+      snapshot->pcm = outputRate_ == info.samplerate ? pcm : SharedPcmBuffer(std::move(output));
+      snapshot->info = info;
+      snapshot->info.samplerate = outputRate_;
+      snapshot->info.frames = snapshot->pcm.size() / info.channels;
+      snapshot->originalPcm = originalPcm && outputRate_ == info.samplerate;
+      snapshot->durationFrames = durationSampleRate > 0 ? durationFrames : pcm.size() / info.channels;
+      snapshot->durationSampleRate = durationSampleRate > 0 ? durationSampleRate : info.samplerate;
+      return snapshot;
     }
 
   private:
@@ -66,10 +84,10 @@ public:
   DecodedAssetCache &operator=(const DecodedAssetCache &) = delete;
   std::shared_ptr<const DecodedSound> Load(const std::filesystem::path &path,
       const std::atomic_bool &cancelled, std::stop_token stop = {},
-      std::string *error = nullptr, FailureKind *failure = nullptr);
+      std::string *error = nullptr, FailureKind *failure = nullptr, bool requireOriginal = false);
   std::shared_ptr<const DecodedSound> LoadBytes(const std::filesystem::path &path,
       const std::vector<unsigned char> &bytes, const std::atomic_bool &cancelled,
-      std::stop_token stop = {}, std::string *error = nullptr, FailureKind *failure = nullptr);
+      std::stop_token stop = {}, std::string *error = nullptr, FailureKind *failure = nullptr, bool requireOriginal = false);
   // Identity-checked lookup only; never opens a decoder or reads asset payloads.
   std::shared_ptr<const DecodedSound> Find(const std::filesystem::path &path);
   // Metadata identity of a regular file or an archive container.
@@ -93,8 +111,12 @@ public:
   std::shared_ptr<const DecodedSound> LoadArchiveBytes(const ArchiveBatch &batch,
       const std::filesystem::path &resolvedPath, const std::vector<unsigned char> &bytes,
       const std::atomic_bool &cancelled, std::stop_token stop = {},
-      std::string *error = nullptr, FailureKind *failure = nullptr);
+      std::string *error = nullptr, FailureKind *failure = nullptr, bool requireOriginal = false);
   [[nodiscard]] bool Contains(const std::filesystem::path &path) const;
+  // Replace one entry with its ready output, or evict it if only dependent
+  // slices were prepared. Existing readers may finish using the old snapshot.
+  void ReleaseNativePcm(const std::filesystem::path &path,
+                        const std::shared_ptr<const DecodedSound> &sound);
   // Release cache ownership after handoff; active playback keeps shared PCM.
   void Clear();
   [[nodiscard]] Statistics GetStatistics() const;

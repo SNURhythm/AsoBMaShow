@@ -1,3 +1,4 @@
+#include "AudioPreparationBudget.h"
 #include "BmsonAudio.h"
 #include "PagedPreviewSource.h"
 
@@ -250,7 +251,8 @@ struct PagedPreviewSource::Impl {
       const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native) {
     if (native->info.channels > 0 && native->info.samplerate > 0)
       publishPastDuration(index, duration_bound::Duration{
-          native->pcm.size() / native->info.channels, native->info.samplerate});
+          native->durationSampleRate > 0 ? native->durationFrames : native->pcm.size() / native->info.channels,
+          native->durationSampleRate > 0 ? native->durationSampleRate : native->info.samplerate});
   }
   void fail(std::string error) {
     { std::lock_guard lock(mutex);
@@ -259,11 +261,18 @@ struct PagedPreviewSource::Impl {
       ++state.revision; }
     changed.notify_all();
   }
-  void publishDecoded(std::size_t index,
-      const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native) {
+  bool publishDecoded(std::size_t index,
+      const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native,
+      bool releaseCache = true) {
     checkpoint();
+    AudioPreparationScope preparation(cancelled, outputRate);
+    if (native && !preparation.reserve(native->pcm.size(), native->info.channels,
+                                       native->info.samplerate)) { checkpoint(); return false; }
     auto &outputSound = *assets[index].sound->pagedOutput;
+    bool releaseNative = false;
     if (const auto found = sourceSlices.find(index); found != sourceSlices.end()) {
+      if (native && !native->originalPcm)
+        throw std::runtime_error("BMSON slicing requires original PCM.");
       // Flattened slices each have exactly one dependency. Only this source's
       // loader publishes them, so independent sources need no shared PCM lock.
       for (const auto slice : found->second) {
@@ -272,6 +281,7 @@ struct PagedPreviewSource::Impl {
         publishDecoded(slice, sliced);
       }
       outputSound.publishMetadata(0, 0);
+      releaseNative = true;
     } else if (!native || (excluded(index) && !assets[index].firstFutureStart)) {
       // Native PCM remains warm for gameplay; expired preview voices need no
       // output-rate conversion, even when the cache already contains them.
@@ -288,26 +298,30 @@ struct PagedPreviewSource::Impl {
       auto output = native->FindPreparedOutput(outputRate);
       if (output.empty() && !native->pcm.empty()) {
         output = ResamplePcm(native->pcm, native->info.channels,
-                             native->info.samplerate, outputRate, &cancelled);
+                             native->info.samplerate, outputRate, &cancelled,
+                             native->durationFrames, native->durationSampleRate);
       }
       checkpoint();
       native->RememberPreparedOutput(outputRate, output);
       if ((!native->pcm.empty() && output.empty()) ||
           !outputSound.publishFull(native->info.channels, std::move(output)))
         throw std::runtime_error("Could not publish preview audio.");
+      releaseNative = true;
     }
+    if (native && releaseNative && releaseCache && !sliceRecipes.contains(index))
+      cache->ReleaseNativePcm(assets[index].path, native);
     publishState();
+    return releaseNative;
   }
-  void publishAsset(std::size_t index, const std::vector<unsigned char> *bytes = nullptr,
-                     const DecodedAssetCache::ArchiveBatch *batch = nullptr) {
+  void publishAsset(std::size_t index) {
     checkpoint();
+    AudioPreparationScope preparation(cancelled, outputRate);
     if (const auto &source = assets[index].probedSource; source && !cache->ArchiveBatchUnchanged(*source))
       throw std::runtime_error("Audio source changed after duration probing.");
     DecodedAssetCache::FailureKind failure{};
     std::string error;
-    const auto native = bytes
-        ? cache->LoadArchiveBytes(*batch, assets[index].path, *bytes, cancelled, {}, &error, &failure)
-        : cache->Load(assets[index].path, cancelled, {}, &error, &failure);
+    const auto native = cache->Load(assets[index].path, cancelled, {}, &error, &failure,
+                                    sourceSlices.contains(index));
     if (const auto &source = assets[index].probedSource; source && !cache->ArchiveBatchUnchanged(*source))
       throw std::runtime_error("Audio source changed after duration probing.");
     if (!native && failure != DecodedAssetCache::FailureKind::InvalidAsset) {
@@ -315,6 +329,38 @@ struct PagedPreviewSource::Impl {
       throw std::runtime_error(error.empty() ? "Could not load preview audio." : error);
     }
     publishDecoded(index, native);
+  }
+
+  void publishArchiveAssets(const std::vector<std::size_t> &indices,
+                            std::vector<unsigned char> bytes,
+                            const DecodedAssetCache::ArchiveBatch &batch) {
+    checkpoint();
+    AudioPreparationScope preparation(cancelled, outputRate);
+    const auto validateProbes = [&] {
+      for (const auto index : indices)
+        if (const auto &source = assets[index].probedSource; source && !cache->ArchiveBatchUnchanged(*source))
+          throw std::runtime_error("Audio source changed after duration probing.");
+    };
+    validateProbes();
+    const bool requireOriginal = std::any_of(indices.begin(), indices.end(),
+        [&](auto index) { return sourceSlices.contains(index); });
+    DecodedAssetCache::FailureKind failure{};
+    std::string error;
+    const auto native = cache->LoadArchiveBytes(batch, assets[indices.front()].path, bytes,
+                                               cancelled, {}, &error, &failure, requireOriginal);
+    std::vector<unsigned char>().swap(bytes);
+    validateProbes();
+    if (!native && failure != DecodedAssetCache::FailureKind::InvalidAsset) {
+      checkpoint();
+      throw std::runtime_error(error.empty() ? "Could not load preview audio." : error);
+    }
+    // Every alias/slice finishes against one native snapshot. Hand off the
+    // cache only afterward: an earlier slice-only alias must not evict the
+    // entry before a whole-file alias has prepared its reusable output.
+    bool releaseNative = false;
+    for (const auto index : indices)
+      releaseNative = publishDecoded(index, native, false) || releaseNative;
+    if (native && releaseNative) cache->ReleaseNativePcm(assets[indices.front()].path, native);
   }
 
   void loadAll() {
@@ -379,6 +425,7 @@ struct PagedPreviewSource::Impl {
           std::shared_ptr<const DecodedAssetCache::DecodedSound> ready;
           if (hasPastDependency(index)) {
             ready = cache->Find(assets[index].path);
+            if (ready && sourceSlices.contains(index) && !ready->originalPcm) ready.reset();
             if (ready) {
               publishCachedDuration(index, ready);
             } else {
@@ -404,9 +451,10 @@ struct PagedPreviewSource::Impl {
           return futurePriority(a.index) < futurePriority(b.index);
         });
         workers.run(deferred.size(), [&](std::size_t item) {
-          const auto &asset = deferred[item];
+          auto &asset = deferred[item];
           if (asset.native) publishDecoded(asset.index, asset.native);
           else publishAsset(asset.index);
+          asset.native.reset();
         });
       } else {
         const auto batch = cache->BeginArchiveBatch(archive);
@@ -432,7 +480,9 @@ struct PagedPreviewSource::Impl {
           if (!resolved[item - first]) { publishDecoded(index, {}); continue; }
           inner = *resolved[item - first];
           assets[index].path = archive_file::makeVirtualPath(archive, inner);
-          if (const auto ready = cache->FindArchiveAsset(*batch, assets[index].path)) {
+          auto ready = cache->FindArchiveAsset(*batch, assets[index].path);
+          if (ready && sourceSlices.contains(index) && !ready->originalPcm) ready.reset();
+          if (ready) {
             publishCachedDuration(index, ready);
             if (canDefer(index)) cachedDeferred.push_back({index, ready});
             else publishDecoded(index, ready);
@@ -493,7 +543,7 @@ struct PagedPreviewSource::Impl {
                   return !cancelled.load(std::memory_order_relaxed);
                 }
               }
-              for (const auto index : indices.at(file.path)) publishAsset(index, &file.bytes, &*batch);
+              publishArchiveAssets(indices.at(file.path), std::move(file.bytes), *batch);
               return !cancelled.load(std::memory_order_relaxed);
             }, &error, cancelled,
             [](const auto &archivePath, const auto &entries, auto onFile,
@@ -543,11 +593,12 @@ struct PagedPreviewSource::Impl {
         workers.run(work.size(), [&](std::size_t item) {
           const auto &job = work[item];
           if (job.cached) {
-            const auto &asset = cachedDeferred[job.item];
+            auto &asset = cachedDeferred[job.item];
             publishDecoded(asset.index, asset.native);
+            asset.native.reset();
           } else {
-            const auto &file = deferred[job.item];
-            for (const auto index : indices.at(file.path)) publishAsset(index, &file.bytes, &*batch);
+            auto &file = deferred[job.item];
+            publishArchiveAssets(indices.at(file.path), std::move(file.bytes), *batch);
           }
         });
         if (!work.empty() && !cache->ArchiveBatchUnchanged(*batch))
