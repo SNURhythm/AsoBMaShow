@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <ctime>
 #include <cstdio>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,6 +17,7 @@ struct Upgrade {
   std::optional<int> before;
   int after = 0;
   std::string difficulty = "Lv. —";
+  std::filesystem::path jacket;
 };
 struct Snapshot {
   Range range;

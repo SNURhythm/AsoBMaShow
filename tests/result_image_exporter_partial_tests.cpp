@@ -549,6 +549,17 @@ void testReceiptLayoutIgnoresDeviceSize() {
     for (int i=0;i<12;++i) section.entries.push_back({"Chart title [ANOTHER]","LN","1200","1300","(+100)","","sl6"});
   auto compact=recap::makeReceipt(compactContent); compact->applyYogaLayout();
   expect(compact->getHeight()<2600,"36 ordinary records fit a compact tabular receipt");
+  int jackets=0;
+  const auto inspectJackets=[&](View *view,const auto &self)->void {
+    if (view->getName()=="recapJacket") {
+      ++jackets;
+      expect(view->getWidth()==view->getHeight() && view->getWidth()<=48,
+          "jacket and placeholder slots stay square and compact");
+    }
+    for (auto *child:view->getChildren()) self(child,self);
+  };
+  inspectJackets(compact.get(),inspectJackets);
+  expect(jackets==36,"every receipt row has a jacket or placeholder slot");
   for (int i=0;i<80;++i) content.sections[i%3].entries.push_back(
       {"A chart with a long title that must wrap instead of clipping at the device edge", "HCN", "1200", "1300", "+100"});
   content.sections[0].entries[0].group="Hard Clear";

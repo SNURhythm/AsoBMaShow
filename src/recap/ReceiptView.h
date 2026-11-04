@@ -1,5 +1,6 @@
 #pragma once
 #include "LampBadge.h"
+#include "JacketView.h"
 #include "../view/View.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
@@ -14,6 +15,7 @@ struct ReceiptEntry {
   std::string title, mode, before, after, delta, group;
   std::string difficulty = "Lv. —";
   std::optional<int> beforeLamp, afterLamp;
+  std::filesystem::path jacket;
 };
 struct ReceiptSection { std::string title, empty; std::vector<ReceiptEntry> entries; };
 struct ReceiptContent {
@@ -100,6 +102,7 @@ inline std::unique_ptr<View> makeReceipt(const ReceiptContent &content) {
       if (entry.afterLamp) styleLampBadge(after,*entry.afterLamp,true);
       else after->setWidth(70);
       if (!entry.delta.empty()) text(values,entry.delta,16,accent)->setFlexShrink(1)->setMinWidth(0);
+      item->addView(new JacketView(entry.jacket,true));
       text(item,entry.title,20,ink)->setFlex(1)->setMinWidth(0);
     }
   }

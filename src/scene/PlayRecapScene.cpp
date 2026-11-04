@@ -1,5 +1,6 @@
 #include "PlayRecapScene.h"
 #include "../recap/ReceiptView.h"
+#include "../recap/ChartMetadata.h"
 #include "SceneManager.h"
 #include "../ResultImageExporter.h"
 #include "../Utils.h"
@@ -12,7 +13,6 @@
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include <map>
-#include <sstream>
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
 #endif
@@ -53,39 +53,34 @@ std::string localStamp(std::int64_t seconds) {
   std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &time);
   return buffer;
 }
-void loadDifficulties(recap::Snapshot &snapshot, ChartRepository &charts) {
-  std::map<std::string,std::string> labels;
+void loadChartMetadata(recap::Snapshot &snapshot, ChartRepository &charts) {
+  std::map<std::string,std::optional<recap::ChartMetadata>> metadata;
   for (const auto &section : snapshot.sections)
-    for (const auto &upgrade : section) labels.try_emplace(upgrade.hash,"Lv. —");
-  if (labels.empty()) return;
+    for (const auto &upgrade : section) metadata.try_emplace(upgrade.hash);
+  if (metadata.empty()) return;
   auto session = charts.OpenSession();
   if (!session) return;
   ChartMetaQuery query;
   query.rawSongData = true;
   query.allowedSha256.emplace();
-  for (const auto &[hash,label] : labels) query.allowedSha256->push_back(hash);
+  for (const auto &[hash,details] : metadata) query.allowedSha256->push_back(hash);
   std::vector<ChartMetaRecord> records;
   session->QueryChartMeta(query,records);
   for (const auto &record : records) {
-    auto found = labels.find(record.meta.SHA256);
-    if (found == labels.end() || found->second != "Lv. —") continue;
-    auto table = session->DifficultyTableLabelsForChart(record.meta);
-    if (!table.empty()) found->second = std::move(table);
-    else if (record.meta.PlayLevel > 0) {
-      std::ostringstream level;
-      level << "Lv. " << record.meta.PlayLevel;
-      found->second = level.str();
-    }
+    auto found = metadata.find(record.meta.SHA256);
+    if (found == metadata.end() || found->second) continue;
+    found->second = recap::chartMetadata(record.meta,
+        session->DifficultyTableLabelsForChart(record.meta),
+        !record.unavailable && !record.solidArchive);
   }
   // Deleted charts may still have a SHA-256 difficulty-table entry.
-  for (auto &[hash,label] : labels) if (label == "Lv. —") {
+  for (auto &[hash,details] : metadata) if (!details) {
     bms_parser::ChartMeta meta;
-    meta.SHA256 = hash;
-    auto table = session->DifficultyTableLabelsForChart(meta);
-    if (!table.empty()) label = std::move(table);
+    meta.SHA256 = hash; meta.PlayLevel = 0;
+    details = recap::chartMetadata(meta,session->DifficultyTableLabelsForChart(meta),false);
   }
   for (auto &section : snapshot.sections)
-    for (auto &upgrade : section) upgrade.difficulty = labels.at(upgrade.hash);
+    for (auto &upgrade : section) recap::applyChartMetadata(upgrade,*metadata.at(upgrade.hash));
 }
 }
 
@@ -123,7 +118,7 @@ void PlayRecapScene::reload() {
   try {
     load_ = std::async(std::launch::async, [repository, charts, database, range, session = period_ == 0] {
       auto snapshot = repository->LoadPlayRecap(range, session, database);
-      if (snapshot.error.empty()) loadDifficulties(snapshot,*charts);
+      if (snapshot.error.empty()) loadChartMetadata(snapshot,*charts);
       return snapshot;
     });
   } catch (const std::exception &error) {
@@ -169,6 +164,7 @@ void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &up
   auto *details = new View();
   details->setFlexDirection(narrow ? FlexDirection::Column : FlexDirection::Row)
       ->setAlignItems(narrow ? YGAlignStretch : YGAlignCenter)->setGap(6)->setFlex(1)->setMinWidth(0);
+  card->addView(new recap::JacketView(upgrade.jacket));
   card->addView(details);
   auto *title = label(details,upgrade.title,20);
   if (!narrow) title->setFlex(1)->setMinWidth(0);
@@ -294,7 +290,7 @@ void PlayRecapScene::exportReceipt() {
       section.entries.push_back({upgrade.title, mode,
           upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"), value(upgrade.after), delta,
           kind == 0 ? value(upgrade.after) : "", upgrade.difficulty,
-          kind == 0 ? upgrade.before : std::nullopt, kind == 0 ? std::optional{upgrade.after} : std::nullopt});
+          kind == 0 ? upgrade.before : std::nullopt, kind == 0 ? std::optional{upgrade.after} : std::nullopt, upgrade.jacket});
     }
   }
   const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(

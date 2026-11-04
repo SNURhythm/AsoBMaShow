@@ -1,9 +1,28 @@
 #include "recap/PlayRecapQuery.h"
+#include "recap/ChartMetadata.h"
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
 
 int main() {
+  bms_parser::ChartMeta meta;
+  meta.Title="Song"; meta.SubTitle="[ANOTHER]"; meta.PlayLevel=12;
+  meta.Folder="charts/song"; meta.StageFile="stage.png"; meta.Banner="banner.png";
+  auto metadata=recap::chartMetadata(meta,"sl6",true);
+  assert(metadata.title=="Song [ANOTHER]" && metadata.difficulty=="sl6");
+  assert(metadata.jacket==meta.Folder/meta.StageFile);
+  recap::Upgrade identity{.title="Song [ANOTHER]"};
+  recap::applyChartMetadata(identity,metadata);
+  assert(identity.title=="Song [ANOTHER]"); // Replace metadata; never append the subtitle twice.
+  meta.SubTitle.clear(); meta.StageFile.clear();
+  metadata=recap::chartMetadata(meta,"",true);
+  assert(metadata.title=="Song" && metadata.difficulty=="Lv. 12");
+  assert(metadata.jacket==meta.Folder/meta.Banner);
+  assert(recap::chartMetadata(meta,"",false).jacket.empty());
+  meta.Banner.clear();
+  assert(recap::chartMetadata(meta,"",true).jacket.empty());
+  recap::applyChartMetadata(identity,{});
+  assert(identity.title=="Song [ANOTHER]" && identity.jacket.empty()); // Missing library metadata retains the saved title.
   sqlite3 *db = nullptr;
   assert(sqlite3_open(":memory:", &db) == SQLITE_OK);
   auto sql = [&](const std::string &query) { assert(sqlite3_exec(db, query.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK); };

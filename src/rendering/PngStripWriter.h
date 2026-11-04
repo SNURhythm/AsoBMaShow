@@ -98,5 +98,7 @@ private:
   bool initialized_=false,finished_=false,streamEnded_=false;
   std::string error_;
   std::vector<unsigned char> row_;
-  std::array<unsigned char,65536> compressed_{};
+  // Leave the application thread's stack available for image decoding and
+  // rendering while a receipt is open. Compression storage remains bounded.
+  std::vector<unsigned char> compressed_ = std::vector<unsigned char>(65536);
 };
