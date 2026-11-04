@@ -1,4 +1,5 @@
 #include "ResultImageExporter.h"
+#include "recap/ReceiptView.h"
 #include "platform/PhotoAuthorizationPolicy.h"
 
 #include "rendering/UniformCache.h"
@@ -536,6 +537,25 @@ void testPresentationExportAcceptsPlatformConsumedArtifact() {
          "library");
 }
 
+void testReceiptLayoutIgnoresDeviceSize() {
+  recap::ReceiptContent content{.title="Play recap",.profile="Player",.period="Weekly · 2026-11-02 — 2026-11-08",.footer="Before → after"};
+  for (auto &section:content.sections) { section.title="Upgrades"; section.empty="No upgrades"; }
+  auto empty=recap::makeReceipt(content); empty->applyYogaLayout();
+  const int emptyHeight=empty->getHeight();
+  expect(empty->getWidth()==960 && emptyHeight>=720,"receipt has a fixed independent width");
+  for (int i=0;i<80;++i) content.sections[i%3].entries.push_back(
+      {"A chart with a long title that must wrap instead of clipping at the device edge", "HCN", "1200", "1300", "+100"});
+  auto portrait=recap::makeReceipt(content); portrait->applyYogaLayout();
+  const int height=portrait->getHeight();
+  const int originalWidth=rendering::window_width, originalHeight=rendering::window_height;
+  rendering::window_width=320; rendering::window_height=480;
+  auto small=recap::makeReceipt(content); small->applyYogaLayout();
+  expect(small->getWidth()==960 && small->getHeight()==height && height>16384,
+      "all upgrades fit one tall receipt independent of the device and texture-size limits");
+  expect(height>emptyHeight,"receipt height grows with content");
+  rendering::window_width=originalWidth; rendering::window_height=originalHeight;
+}
+
 void testPhotoAuthorizationRecoveryPolicy() {
   using platform::PhotoAuthorizationAction;
   using platform::PhotoAuthorizationStatus;
@@ -583,6 +603,7 @@ int main() {
   testProductionPresentationExportPropagatesFailures();
   testPresentationExportAcceptsPlatformConsumedArtifact();
   testPhotoAuthorizationRecoveryPolicy();
+  testReceiptLayoutIgnoresDeviceSize();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

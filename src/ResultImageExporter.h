@@ -140,6 +140,11 @@ public:
       ApplicationContext &context, const std::string &title,
       const result_image_export::SkinRenderBackend &renderSkin,
       const result_image_export::ExportOptions &options = {});
+  // Export an independently sized view as one PNG, rendering bounded strips.
+  // The view must have its final layout; its size is unrelated to the window.
+  static ResultImageExportResult ExportView(
+      ApplicationContext &context, const std::string &title, View &view,
+      const result_image_export::ExportOptions &options = {});
   // Shared presentation export orchestration. Production supplies the bgfx
   // renderer; controlled/headless callers can supply another artifact writer
   // while exercising the same destination, filename, skin, and gauge plan.

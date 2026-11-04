@@ -1,4 +1,5 @@
 #include "PlayRecapScene.h"
+#include "../recap/ReceiptView.h"
 #include "SceneManager.h"
 #include "../ResultImageExporter.h"
 #include "../Utils.h"
@@ -106,14 +107,12 @@ void PlayRecapScene::movePeriod(int direction) {
   } else dayOffset_ = std::min(0, dayOffset_ + direction);
   reload();
 }
-void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &upgrade, bool image) {
+void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &upgrade) {
   auto *card = new View();
   card->setFlexDirection(FlexDirection::Column)->setGap(4)->setPadding(Edge::All, 12)
       ->setCornerRadius(12)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panel);
-  if (image) card->setHeight(120);
   parent->addView(card);
-  auto *title = label(card, upgrade.title, 22);
-  if (image) { title->setWrap(false); title->setMinimumFontSize(16); title->setOverflow(TextView::TextOverflow::Hidden); title->setHeight(32); }
+  label(card, upgrade.title, 22);
   const auto value = [kind](int number) { return kind == 0 ? kombo::lampLabel(number) : std::to_string(number); };
   std::string text = upgrade.before ? value(*upgrade.before) : tr("recap.ui.new");
   text += " → " + value(upgrade.after);
@@ -125,7 +124,6 @@ void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &up
       upgrade.lnMode == 3 ? "HCN" : upgrade.lnMode == -1 ? tr("recap.ui.legacy") : tr("recap.ui.normal");
   auto *detail = label(card, text + " · " + mode, 18);
   detail->setThemedColor(app_theme::cyan);
-  if (image) { detail->setHeight(56); detail->setOverflow(TextView::TextOverflow::Hidden); }
 }
 void PlayRecapScene::build() {
   onPause();
@@ -144,10 +142,9 @@ void PlayRecapScene::build() {
   addView(root_);
   auto *header = row(root_);
   button(header, tr("kombo.ui.back"), [this] { back(); });
-  button(header, tr(exporting_ ? "recap.ui.cancel" : "recap.ui.export"), [this] { later([this] {
-    if (exporting_) { exporting_ = false; message_ = tr("recap.ui.cancelled") + exportSummary(); }
-    else beginExport();
-  }); });
+  button(header, tr(exporting_ ? "recap.ui.exporting" : "recap.ui.export"), [this] {
+    later([this] { if (!exporting_) beginExport(); });
+  });
   auto *scroll = new ScrollView();
   scroll->setFlex(1)->setMinHeight(0);
   root_->addView(scroll);
@@ -207,57 +204,42 @@ void PlayRecapScene::build() {
 }
 void PlayRecapScene::beginExport() {
   if (loading_ || !snapshot_.error.empty()) return;
-  if (rendering::window_height < 382) { message_ = tr("recap.ui.resized"); return; }
-  const auto rows = static_cast<std::size_t>((rendering::window_height - 250) / 132);
-  exportPages_.clear();
+  exporting_ = true;
+  message_ = tr("recap.ui.exporting");
+}
+void PlayRecapScene::exportReceipt() {
+  exporting_ = false;
+  recap::ReceiptContent receipt{.title = tr("recap.ui.title"), .profile = profileName_,
+      .period = periodText(), .footer = tr("recap.ui.image_footer")};
   for (int kind = 0; kind < 3; ++kind) {
-    const auto count = snapshot_.sections[kind].size();
-    for (std::size_t start = 0; start < count; start += rows)
-      exportPages_.push_back({kind, start, std::min(rows, count - start)});
+    auto &section = receipt.sections[kind];
+    section.title = tr(sectionKeys[kind]); section.empty = tr("recap.ui.empty");
+    for (const auto &upgrade : snapshot_.sections[kind]) {
+      const auto value = [kind](int number) { return kind == 0 ? kombo::lampLabel(number) : std::to_string(number); };
+      const auto mode = upgrade.lnMode == 1 ? "LN" : upgrade.lnMode == 2 ? "CN" :
+          upgrade.lnMode == 3 ? "HCN" : upgrade.lnMode == -1 ? tr("recap.ui.legacy") : tr("recap.ui.normal");
+      std::string delta;
+      if (kind && upgrade.before) {
+        const int amount = upgrade.after - *upgrade.before;
+        delta = "(" + std::string(amount > 0 ? "+" : "") + std::to_string(amount) + ")";
+      }
+      section.entries.push_back({upgrade.title, mode,
+          upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"), value(upgrade.after), delta});
+    }
   }
-  if (exportPages_.empty()) { message_ = tr("recap.ui.empty"); return; }
   const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
   exportDirectory_ = Utils::GetDocumentsPath("recap_exports") / std::to_string(stamp);
-  exportWidth_ = rendering::window_width; exportHeight_ = rendering::window_height;
-  exportedToPhotos_ = false; exportPage_ = 0; exporting_ = true;
-  message_ = tr("recap.ui.exporting");
-}
-std::string PlayRecapScene::exportSummary() const {
-  if (!exportPage_) return {};
-  return " · " + tr("recap.ui.saved") + " " + std::to_string(exportPage_) + "/" +
-      std::to_string(exportPages_.size()) + " · " +
-      (exportedToPhotos_ ? tr("recap.ui.photos") : exportDirectory_.string());
-}
-void PlayRecapScene::exportNext() {
-  if (rendering::window_width != exportWidth_ || rendering::window_height != exportHeight_) {
-    exporting_ = false; message_ = tr("recap.ui.resized") + exportSummary(); build(); return;
-  }
-  const auto page = exportPages_[exportPage_];
-  auto result = ResultImageExporter::ExportSkin(context, "recap_" + std::to_string(exportPage_ + 1),
-      [this, page](RenderContext &renderContext) {
-        auto canvas = std::make_unique<View>(0, 0, rendering::window_width, rendering::window_height);
-        canvas->setFlexDirection(FlexDirection::Column)->setGap(12)->setPadding(Edge::All, 24)
-            ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
-        label(canvas.get(), "AsoBMaShow · " + tr("recap.ui.title"), 28);
-        auto *name = label(canvas.get(), profileName_ + " · " + periodText(), 18);
-        name->setWrap(false); name->setMinimumFontSize(14); name->setOverflow(TextView::TextOverflow::Hidden);
-        label(canvas.get(), tr(sectionKeys[page.kind]) + " · " +
-            std::to_string(exportPage_ + 1) + "/" + std::to_string(exportPages_.size()), 24);
-        for (auto i = page.start; i < page.start + page.count; ++i)
-          addUpgrade(canvas.get(), page.kind, snapshot_.sections[page.kind][i], true);
-        label(canvas.get(), tr("recap.ui.image_footer"), 16);
-        canvas->applyYogaLayout(); canvas->render(renderContext); return true;
-      }, {.outputDirectory = exportDirectory_});
-  if (!result.success) { exporting_ = false; message_ = tr("recap.ui.failed") + " " + result.message + exportSummary(); }
-  else {
-    exportedToPhotos_ = !result.artifactRetained;
-    ++exportPage_;
-    exporting_ = exportPage_ < exportPages_.size();
-    message_ = tr(exporting_ ? "recap.ui.exporting" : "recap.ui.saved") + " " +
-        std::to_string(exportPage_) + "/" + std::to_string(exportPages_.size());
-    if (!exporting_) message_ += " · " + (result.artifactRetained ? exportDirectory_.string() : result.message);
-  }
+  try {
+    auto canvas = recap::makeReceipt(receipt);
+    canvas->applyYogaLayout();
+    const auto result = ResultImageExporter::ExportView(context, "recap", *canvas,
+        {.outputDirectory = exportDirectory_});
+    message_ = result.success ? tr("recap.ui.saved") : tr("recap.ui.failed") + " " + result.message;
+    if (result.success) message_ += " · " + (result.artifactRetained ? result.outputPath.string() : tr("recap.ui.photos"));
+    else if (result.artifactRetained && std::filesystem::exists(result.outputPath))
+      message_ += " · " + result.outputPath.string();
+  } catch (const std::exception &error) { message_ = tr("recap.ui.failed") + " " + error.what(); }
   build();
 }
 void PlayRecapScene::update(float) {
@@ -273,7 +255,7 @@ void PlayRecapScene::update(float) {
     if (std::exchange(reloadPending_, false)) reload();
     build();
   }
-  if (exporting_ && !context.appInBackground.load()) exportNext();
+  if (exporting_ && !context.appInBackground.load()) exportReceipt();
   if (root_ && (root_->getWidth() != rendering::window_width || root_->getHeight() != rendering::window_height)) build();
 }
 void PlayRecapScene::onPause() {

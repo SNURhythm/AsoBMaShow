@@ -27,10 +27,9 @@ private:
   void back();
   void movePeriod(int direction);
   void beginExport();
-  void exportNext();
-  void addUpgrade(View *, int kind, const recap::Upgrade &, bool image = false);
+  void exportReceipt();
+  void addUpgrade(View *, int kind, const recap::Upgrade &);
   std::string periodText() const;
-  std::string exportSummary() const;
   SceneReturnTarget returnTarget_;
   recap::Snapshot snapshot_;
   std::future<recap::Snapshot> load_;
@@ -40,11 +39,6 @@ private:
   std::vector<std::int64_t> sessionForward_;
   std::array<std::size_t, 3> offsets_{};
   bool loading_ = false, reloadPending_ = false, exporting_ = false;
-  struct ExportPage { int kind; std::size_t start, count; };
-  std::vector<ExportPage> exportPages_;
-  std::size_t exportPage_ = 0;
-  bool exportedToPhotos_ = false;
-  int exportWidth_ = 0, exportHeight_ = 0;
   std::filesystem::path exportDirectory_;
   View *root_ = nullptr;
 };
