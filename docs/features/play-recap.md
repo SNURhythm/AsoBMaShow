@@ -1,0 +1,11 @@
+# Play recap
+
+Open **Play recap** in the standard selector's chart-details tools or the skinned selector's **More** menu.
+
+Choose **Session**, **Daily**, **Weekly**, or **Custom**. Previous/Next selects older/newer periods; Latest returns to the current period. Sessions group local chart results less than 60 minutes apart, including across app restarts. The most recent session remains available after an idle gap. Days use local midnight; weeks start Monday. Custom dates use `YYYY-MM-DD` and include both dates.
+
+The recap has separate **Lamp upgrades**, **Score upgrades**, and **Combo-break upgrades** sections. A chart can appear in several sections. Each row compares the best before the period with the best achieved inside it; repeated upgrades are consolidated. **New** means no earlier eligible local record was found. Score is EX score; fewer combo breaks is better. Combo-break records require evidence of a completed play. Different LN modes remain separate, with legacy unknown-mode records retained as baselines according to the existing best-score policy.
+
+Recaps cover local chart records, not courses or imported IR scores. They follow the existing score and lamp eligibility policies. Stored titles allow deleted charts to remain visible; old records without a resolved chart hash are excluded because they cannot be safely attributed to a chart. The available history determines the baseline.
+
+**Export PNG** exports every populated section, regardless of the currently visible list page. Long sections become multiple numbered images. Desktop/Android files are saved under `Documents/recap_exports/<export-id>` in the app's document storage; iOS uses Photos. The screen reports completion or failure. Export can be cancelled between pages, keeping completed images. Keep the window size unchanged during export; resizing cancels the remaining pages to avoid cropping.

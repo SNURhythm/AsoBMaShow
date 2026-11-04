@@ -177,6 +177,7 @@ asobmashow_label_tests(area_practice
 )
 
 asobmashow_label_tests(area_results
+    play_recap_tests
     chart_goal_tests
     folder_goal_tests
     reminder_plan_tests

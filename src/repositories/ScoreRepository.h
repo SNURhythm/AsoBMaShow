@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../CourseIdentity.h"
+#include "../recap/PlayRecap.h"
 #include "../ModernResult.h"
 #include "../ScoreProvenance.h"
 #include "../ir/IrRemoteScoreModels.h"
@@ -153,6 +154,8 @@ public:
       const bms_parser::ChartMeta &chartMeta,
       int selectedLongNoteMode = 0);
   PlayerScoreHistorySnapshot LoadPlayerScoreHistory();
+  recap::Snapshot LoadPlayRecap(recap::Range range, bool session = false,
+      const std::filesystem::path &expectedDatabase = {});
   RecentScoreImprovements
   LoadRecentScoreImprovements(std::int64_t nowUnixSeconds,
                               int selectedLongNoteMode);

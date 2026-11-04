@@ -1,3 +1,4 @@
+#include "PlayRecapScene.h"
 #include "../RAII.h"
 #include "../audio/ChartPreviewHighlight.h"
 #include "../audio/PagedPreviewSource.h"
@@ -3899,6 +3900,9 @@ void MusicSelectScene::ensureToolbarContextMenu() {
               if (toolbarControlAvailable(Control::MusicPlayer)) openMusicPlayer();
             } else if (actionId == "tasks") {
               if (toolbarControlAvailable(Control::Tasks)) openTasks();
+            } else if (actionId == "play-recap") {
+              context.sceneManager->changeScene(std::make_unique<PlayRecapScene>(
+                  context, SceneReturnTarget::Retained(this)), true);
             } else if (actionId == "ir-uploads") {
               if (toolbarControlAvailable(Control::IrUploads)) openIrUploads();
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
@@ -3951,6 +3955,8 @@ void MusicSelectScene::openToolbarMenu(MusicSelectToolbarControl control) {
              ? i18n::message("menu.tasks.count.label", {{"count", std::to_string(tasksDialog_->notificationCount())}})
              : i18n::message("menu.tasks.label"),
          .enabled = toolbarControlAvailable(Control::Tasks)},
+        {.id = "play-recap", .label = i18n::message("recap.ui.title"),
+         .enabled = !context.storageMaintenanceActive.load()},
         {.id = "ir-uploads", .label = i18n::message("menu.ir_uploads.label"),
          .enabled = toolbarControlAvailable(Control::IrUploads)},
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID

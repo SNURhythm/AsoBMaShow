@@ -10172,6 +10172,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     include("${CMAKE_SOURCE_DIR}/cmake/KomboTests.cmake")
     include("${CMAKE_SOURCE_DIR}/cmake/ChartGoalTests.cmake")
+    add_executable(play_recap_tests tests/PlayRecapTests.cpp)
+    target_include_directories(play_recap_tests PRIVATE src)
+    target_link_libraries(play_recap_tests PRIVATE SQLite3)
+    asobmashow_register_test(play_recap_tests)
+    set_tests_properties(play_recap_tests PROPERTIES ENVIRONMENT "TZ=UTC")
     include("${CMAKE_SOURCE_DIR}/cmake/TestGroupCatalog.cmake")
 endif()
 

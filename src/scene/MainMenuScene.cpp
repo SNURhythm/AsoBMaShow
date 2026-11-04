@@ -1,3 +1,4 @@
+#include "PlayRecapScene.h"
 #include "../view/TabButtonStyle.h"
 #include "../rendering/ResponsiveUi.h"
 #include "../GameplayKeyMode.h"
@@ -2593,6 +2594,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
   primaryActions->addView(primaryActionSlot_);
   primaryActions->addView(recordActions);
   primaryActions->addView(chartActionsRow);
+  auto *recapButton = makeSelectorButton(i18n::message("recap.ui.title"), 20);
+  recapButton->setHeight(kMenuActionHeight);
+  recapButton->setOnClickListener([this, &context] {
+    if (willStart.load() || replayExportJob_.inProgress() || context.storageMaintenanceActive.load()) return;
+    if (previewWorker_) previewWorker_->stop();
+    stopAndClearSelectedChart();
+    context.sceneManager->changeScene(std::make_unique<PlayRecapScene>(
+        context, SceneReturnTarget::Retained(this)), true);
+  });
+  rightContent->addView(recapButton);
   primaryActions->addView(settingsButton);
   right->addView(primaryActions);
   auto *controls = new View();
