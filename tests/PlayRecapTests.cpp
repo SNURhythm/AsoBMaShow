@@ -1,10 +1,35 @@
 #include "recap/PlayRecapQuery.h"
 #include "recap/ChartMetadata.h"
+#include "recap/Filters.h"
+#include "kombo/KomboForm.h"
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
 
 int main() {
+  kombo::Assignment selected;
+  const std::vector<kombo::Level> levels{{"a","2","a2"},{"a","10","a10"},{"a","X","aX"}};
+  assert(kombo::addLevelRange(selected,levels,0,1));
+  assert(kombo::addLevelRange(selected,levels,1,2));
+  assert(kombo::addLevelRange(selected,{{"b","2","b2"}},0,0));
+  assert(selected.levels.size()==4); // Table order, overlapping ranges, distinct tables.
+  recap::Snapshot original;
+  original.range={10,20};
+  for (auto &section:original.sections) {
+    section.push_back({.hash="a",.before=0,.after=1});
+    section.push_back({.hash="b",.before=std::nullopt,.after=2});
+    section.push_back({.hash="c",.before=1,.after=3});
+  }
+  auto filtered=original;
+  recap::filterSnapshot(filtered,false,std::nullopt);
+  assert(filtered.range.start==10 && filtered.sections[0].size()==2);
+  filtered=original;
+  recap::filterSnapshot(filtered,true,std::unordered_set<std::string>{"a","b"});
+  assert(filtered.sections[1].size()==2 && filtered.sections[1][1].hash=="b");
+  recap::filterSnapshot(filtered,false,std::unordered_set<std::string>{"a","b"});
+  assert(filtered.sections[2].size()==1 && filtered.sections[2][0].hash=="a");
+  recap::filterSnapshot(filtered,true,std::unordered_set<std::string>{});
+  assert(filtered.sections[0].empty()); // Active ranges with no matches never mean all.
   bms_parser::ChartMeta meta;
   meta.Title="Song"; meta.SubTitle="[ANOTHER]"; meta.PlayLevel=12;
   meta.Folder="charts/song"; meta.StageFile="stage.png"; meta.Banner="banner.png";

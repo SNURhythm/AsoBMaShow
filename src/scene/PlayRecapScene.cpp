@@ -1,6 +1,10 @@
 #include "PlayRecapScene.h"
 #include "../recap/ReceiptView.h"
 #include "../recap/ChartMetadata.h"
+#include "../recap/Filters.h"
+#include "../kombo/KomboForm.h"
+#include "../view/DropdownView.h"
+#include "../view/OverlayPortal.h"
 #include "SceneManager.h"
 #include "../ResultImageExporter.h"
 #include "../Utils.h"
@@ -53,6 +57,32 @@ std::string localStamp(std::int64_t seconds) {
   std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &time);
   return buffer;
 }
+void filterRecap(recap::Snapshot &snapshot, ChartRepository &charts,
+                 const std::vector<kombo::Level> &levels, bool includeNew) {
+  std::optional<std::unordered_set<std::string>> hashes;
+  if (!levels.empty()) {
+    hashes.emplace();
+    auto session = charts.OpenSession();
+    if (!session) throw std::runtime_error("Difficulty-table storage is unavailable.");
+    const auto tables = session->SelectDifficultyTables();
+    ChartMetaQuery query;
+    std::unordered_set<std::string> candidates;
+    for (const auto &section : snapshot.sections)
+      for (const auto &upgrade : section) candidates.insert(upgrade.hash);
+    // Read table entries too: restricting the library query to hashes would
+    // discard table-only records for charts removed from the local library.
+    for (const auto &level : levels) {
+      auto table = std::find_if(tables.begin(),tables.end(),[&](const auto &t) { return t.sourceUrl == level.source; });
+      if (table == tables.end() || candidates.empty()) continue;
+      query.tableId = table->id; query.tableLevel = level.level; query.exactTableLevel = true;
+      std::vector<ChartMetaRecord> records;
+      session->QueryChartMeta(query,records);
+      for (const auto &record : records)
+        if (candidates.contains(record.meta.SHA256)) hashes->insert(record.meta.SHA256);
+    }
+  }
+  recap::filterSnapshot(snapshot,includeNew,hashes);
+}
 void loadChartMetadata(recap::Snapshot &snapshot, ChartRepository &charts) {
   std::map<std::string,std::optional<recap::ChartMetadata>> metadata;
   for (const auto &section : snapshot.sections)
@@ -98,7 +128,7 @@ void PlayRecapScene::later(std::function<void()> action) {
 }
 void PlayRecapScene::reload() {
   if (exporting_) return;
-  if (load_.valid()) { reloadPending_ = true; return; }
+  if (load_.valid()) { reloadPending_ = true; offsets_ = {}; message_.clear(); return; }
   const auto now = static_cast<std::int64_t>(std::time(nullptr));
   recap::Range range;
   if (period_ == 0) range = {0, sessionBefore_ ? sessionBefore_ : now + 1};
@@ -116,9 +146,12 @@ void PlayRecapScene::reload() {
   auto *charts = &context.chartRepository;
   const auto database = repository->GetResolvedDatabasePath();
   try {
-    load_ = std::async(std::launch::async, [repository, charts, database, range, session = period_ == 0] {
+    load_ = std::async(std::launch::async, [repository, charts, database, range, session = period_ == 0, levels = difficultyFilter_.levels, includeNew = includeNew_] {
       auto snapshot = repository->LoadPlayRecap(range, session, database);
-      if (snapshot.error.empty()) loadChartMetadata(snapshot,*charts);
+      if (snapshot.error.empty()) {
+        filterRecap(snapshot,*charts,levels,includeNew);
+        loadChartMetadata(snapshot,*charts);
+      }
       return snapshot;
     });
   } catch (const std::exception &error) {
@@ -182,6 +215,95 @@ void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &up
     if (!narrow) change->setWidth(280);
   }
 }
+std::string PlayRecapScene::filterText() const {
+  std::string text = tr("recap.ui.difficulties") + ": ";
+  if (difficultyFilter_.levels.empty()) text += tr("recap.ui.all_difficulties");
+  else for (const auto &level : difficultyFilter_.levels) {
+    if (&level != &difficultyFilter_.levels.front()) text += ", ";
+    text += level.label;
+  }
+  return text + " · " + tr(includeNew_ ? "recap.ui.new_on" : "recap.ui.new_off");
+}
+void PlayRecapScene::buildFilters(View *body) {
+  auto *controls = row(body);
+  button(controls,tr("recap.ui.difficulties"),[this] { later([this] {
+    filtersExpanded_ = !filtersExpanded_;
+  }); },filtersExpanded_);
+  button(controls,tr(includeNew_ ? "recap.ui.new_on" : "recap.ui.new_off"),[this] { later([this] {
+    includeNew_ = !includeNew_; reload();
+  }); },includeNew_);
+  label(body,filterText(),16)->setThemedColor(app_theme::textSecondary);
+  if (!filtersExpanded_) return;
+  const auto select = [this](View *parent,const std::string &caption,
+      std::vector<DropdownView::Option> options,std::string selected,
+      std::function<void(const std::string &)> change) {
+    label(parent,caption,18);
+    DropdownView::State state;
+    state.selectedId = std::move(selected); state.options = std::move(options);
+    state.maxVisibleItems = 7;
+    auto *dropdown = new DropdownView({.onOptionSelected = std::move(change)},portal_);
+    dropdown->setHeight(52)->setFlexShrink(0);
+    dropdown->setTriggerWidth(300); dropdown->refresh(state);
+    parent->addView(dropdown);
+  };
+  auto session = context.chartRepository.OpenSession();
+  const auto tables = session ? session->SelectDifficultyTables() : std::vector<DifficultyTableInfo>{};
+  if (std::none_of(tables.begin(),tables.end(),[this](const auto &t) { return t.id == tableId_; })) {
+    tableId_ = tables.empty() ? 0 : tables.front().id;
+    rangeStart_.reset(); rangeEnd_.reset();
+  }
+  if (tables.empty()) label(body,tr("kombo.ui.no_tables"),18);
+  else {
+    std::vector<DropdownView::Option> options;
+    for (const auto &table : tables) options.push_back({std::to_string(table.id),table.name});
+    select(body,tr("kombo.ui.table"),std::move(options),std::to_string(tableId_),[this](const std::string &id) {
+      later([this,id] { tableId_ = std::stoi(id); rangeStart_.reset(); rangeEnd_.reset(); });
+    });
+    const auto table = std::find_if(tables.begin(),tables.end(),[this](const auto &t) { return t.id == tableId_; });
+    std::vector<kombo::Level> levels;
+    options = {{"",tr("kombo.ui.choose_level")}};
+    int first = -1, last = -1;
+    for (const auto &level : session->SelectDifficultyLevels(tableId_)) {
+      const int index = static_cast<int>(levels.size());
+      if (rangeStart_ && *rangeStart_ == level.level) first = index;
+      if (rangeEnd_ && *rangeEnd_ == level.level) last = index;
+      levels.push_back({table->sourceUrl,level.level,level.tableName + " · " + level.tableSymbol + level.level});
+      options.push_back({std::to_string(index),level.tableSymbol + level.level});
+    }
+    for (bool start : {true,false}) {
+      const int selected = start ? first : last;
+      select(body,tr(start ? "kombo.ui.level_from" : "kombo.ui.level_to"),options,
+          selected < 0 ? "" : std::to_string(selected),
+          [this,levels,start,counter = start ? last : first](const std::string &id) {
+        later([this,levels,start,counter,id] {
+          const int index = id.empty() ? -1 : std::stoi(id);
+          const auto level = index < 0 ? std::nullopt : std::optional(levels.at(index).level);
+          if (start) {
+            rangeStart_ = level;
+            if (!level || counter < index) rangeEnd_ = level;
+          } else {
+            rangeEnd_ = level;
+            if (!level || counter < 0 || counter > index) rangeStart_ = level;
+          }
+        });
+      });
+    }
+    button(body,tr("kombo.ui.add_levels"),[this,levels,first,last] { later([this,levels,first,last] {
+      if (kombo::addLevelRange(difficultyFilter_,levels,first,last)) reload();
+      else message_ = tr("kombo.ui.invalid_levels");
+    }); })->setEnabled(first >= 0 && last >= first);
+  }
+  for (std::size_t i = 0; i < difficultyFilter_.levels.size(); ++i) {
+    auto *selected = row(body);
+    label(selected,difficultyFilter_.levels[i].label,18)->setFlex(1)->setMinWidth(0);
+    button(selected,tr("kombo.ui.remove_level"),[this,i] { later([this,i] {
+      difficultyFilter_.levels.erase(difficultyFilter_.levels.begin()+i); reload();
+    }); })->setFlex(0)->setWidth(140);
+  }
+  if (!difficultyFilter_.levels.empty()) button(body,tr("recap.ui.all_difficulties"),[this] { later([this] {
+    difficultyFilter_.levels.clear(); reload();
+  }); });
+}
 void PlayRecapScene::build() {
   onPause();
   for (auto *view : views) delete view;
@@ -197,6 +319,9 @@ void PlayRecapScene::build() {
       ->setPadding(Edge::Right, 18 + safe.right * rendering::window_width);
 #endif
   addView(root_);
+  portal_ = new OverlayPortal(0,0,rendering::window_width,rendering::window_height);
+  portal_->setPositionType(YGPositionTypeAbsolute);
+  portal_->setPosition(Edge::Left,0)->setPosition(Edge::Top,0)->setZIndex(900);
   auto *header = row(root_);
   button(header, tr("kombo.ui.back"), [this] { back(); });
   button(header, tr(exporting_ ? "recap.ui.exporting" : "recap.ui.export"), [this] {
@@ -235,6 +360,7 @@ void PlayRecapScene::build() {
       }); });
     }
   }
+  if (!exporting_) buildFilters(content);
   label(content, periodText(), 20);
   label(content, tr("recap.ui.scope"), 16)->setThemedColor(app_theme::textSecondary);
   if (!message_.empty()) label(content, message_, 18);
@@ -264,6 +390,7 @@ void PlayRecapScene::build() {
       }); });
     }
   }
+  addView(portal_);
   root_->applyYogaLayout();
 }
 void PlayRecapScene::beginExport() {
@@ -274,7 +401,7 @@ void PlayRecapScene::beginExport() {
 void PlayRecapScene::exportReceipt() {
   exporting_ = false;
   recap::ReceiptContent receipt{.title = tr("recap.ui.title"), .profile = profileName_,
-      .period = periodText(), .footer = tr("recap.ui.image_footer")};
+      .period = periodText() + "\n" + filterText(), .footer = tr("recap.ui.image_footer")};
   for (int kind = 0; kind < 3; ++kind) {
     auto &section = receipt.sections[kind];
     section.title = tr(sectionKeys[kind]); section.empty = tr("recap.ui.empty");
@@ -315,7 +442,7 @@ void PlayRecapScene::update(float) {
     snapshot_ = {}; sessionBefore_ = 0; sessionForward_.clear(); reload(); build();
   }
   if (load_.valid() && load_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-    try { auto result = load_.get(); if (loadedProfile_ == profile_) snapshot_ = std::move(result); }
+    try { auto result = load_.get(); if (loadedProfile_ == profile_ && !reloadPending_) snapshot_ = std::move(result); }
     catch (const std::exception &error) { snapshot_.error = error.what(); }
     loading_ = false;
     if (std::exchange(reloadPending_, false)) reload();

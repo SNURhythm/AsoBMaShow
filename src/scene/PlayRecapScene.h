@@ -3,6 +3,8 @@
 #include "SceneReturnTarget.h"
 #include "../recap/PlayRecap.h"
 #include <future>
+#include "../kombo/KomboModel.h"
+class OverlayPortal;
 
 class PlayRecapScene final : public Scene {
 public:
@@ -24,6 +26,8 @@ private:
   void later(std::function<void()>);
   void reload();
   void build();
+  void buildFilters(View *);
+  std::string filterText() const;
   void back();
   void movePeriod(int direction);
   void beginExport();
@@ -40,5 +44,10 @@ private:
   std::array<std::size_t, 3> offsets_{};
   bool loading_ = false, reloadPending_ = false, exporting_ = false;
   std::filesystem::path exportDirectory_;
+  kombo::Assignment difficultyFilter_;
+  int tableId_ = 0;
+  std::optional<std::string> rangeStart_, rangeEnd_;
+  bool includeNew_ = true, filtersExpanded_ = false;
+  OverlayPortal *portal_ = nullptr;
   View *root_ = nullptr;
 };

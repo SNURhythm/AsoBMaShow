@@ -4626,6 +4626,26 @@ void testAssignmentCandidateQueries() {
   rows.clear(); session->QueryChartMeta(query, rows);
   assert(rows.size() == 1);
   query.limit = 0; query.offset = 0;
+  // Recap ranges query table entries, including uninstalled SHA-256 rows;
+  // the recap then intersects these memberships with its recorded hashes.
+  assert(execute(database.get(),
+      "INSERT INTO difficulty_tables(id,name,symbol,source_url) VALUES(2,'Second','S','second');"
+      "INSERT INTO difficulty_table_entries(table_id,level,sha256,md5,title,sort_order) VALUES"
+      "(2,'10','cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','','Sticky',0),"
+      "(2,'10','eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee','','Removed',1);"));
+  query.allowedSha256 = std::vector<std::string>{std::string(64,'a'),std::string(64,'c'),std::string(64,'e')};
+  query.tableId = 1; query.tableLevel = "0"; query.exactTableLevel = true;
+  rows.clear(); session->QueryChartMeta(query,rows);
+  assert(rows.size()==1 && rows[0].meta.SHA256==std::string(64,'a'));
+  query.allowedSha256.reset();
+  query.tableId = 2; query.tableLevel = "10";
+  rows.clear(); session->QueryChartMeta(query,rows);
+  assert(rows.size()==2);
+  assert(std::any_of(rows.begin(),rows.end(),[](const auto &r) { return r.meta.SHA256==std::string(64,'e'); }));
+  query.tableLevel = "2";
+  rows.clear(); session->QueryChartMeta(query,rows);
+  assert(rows.empty()); // Exact levels, not a numeric/textual approximation.
+  query.tableId = 0; query.tableLevel.clear(); query.exactTableLevel = false;
   query.allowedSha256 = std::vector<std::string>{};
   rows.clear(); session->QueryChartMeta(query, rows);
   assert(rows.empty() && session->CountChartMeta(query) == 0);
