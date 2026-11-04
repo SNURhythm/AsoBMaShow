@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace recap {
-struct ReceiptEntry { std::string title, mode, before, after, delta; };
+struct ReceiptEntry { std::string title, mode, before, after, delta, group; };
 struct ReceiptSection { std::string title, empty; std::vector<ReceiptEntry> entries; };
 struct ReceiptContent {
   std::string title, profile, period, footer;
@@ -76,7 +76,12 @@ inline std::unique_ptr<View> makeReceipt(const ReceiptContent &content) {
     text(heading,section.title,28,ink,true)->setFlex(1)->setMinWidth(0);
     text(heading,std::to_string(section.entries.size()),28,accent,true);
     if (section.entries.empty()) text(root.get(),section.empty,22,muted);
+    std::string previousGroup;
     for (const auto &entry:section.entries) {
+      if (!entry.group.empty() && entry.group != previousGroup) {
+        text(root.get(),entry.group,22,accent,true)->setMargin(Edge::Top,12);
+        previousGroup=entry.group;
+      }
       auto *item=column(root.get(),10);
       item->setPadding(Edge::Top,8)->setPadding(Edge::Bottom,12);
       text(item,entry.title,28,ink,true);

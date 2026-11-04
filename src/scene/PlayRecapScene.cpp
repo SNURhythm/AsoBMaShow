@@ -18,7 +18,7 @@
 namespace {
 std::string tr(const char *key) { return i18n::tr(key); }
 constexpr std::size_t browsePageSize = 20;
-constexpr const char *sectionKeys[] = {"recap.ui.lamps", "recap.ui.scores", "recap.ui.combo"};
+constexpr const char *sectionKeys[] = {"recap.ui.lamps", "recap.ui.scores", "recap.ui.bp"};
 constexpr const char *periodKeys[] = {"recap.ui.session", "recap.ui.daily", "recap.ui.weekly", "recap.ui.custom"};
 TextView *label(View *parent, const std::string &value, int size = 22) {
   auto *text = new TextView(app_theme::font, size);
@@ -188,7 +188,11 @@ void PlayRecapScene::build() {
     label(content, tr(sectionKeys[kind]) + " · " + std::to_string(upgrades.size()), 26);
     if (upgrades.empty()) label(content, tr("recap.ui.empty"), 18);
     const auto end = std::min(upgrades.size(), offsets_[kind] + browsePageSize);
-    for (auto i = offsets_[kind]; i < end; ++i) addUpgrade(content, kind, upgrades[i]);
+    for (auto i = offsets_[kind]; i < end; ++i) {
+      if (kind == 0 && (i == offsets_[kind] || upgrades[i].after != upgrades[i-1].after))
+        label(content, kombo::lampLabel(upgrades[i].after), 22)->setThemedColor(app_theme::cyan);
+      addUpgrade(content, kind, upgrades[i]);
+    }
     if (upgrades.size() > browsePageSize) {
       auto *navigation = row(content);
       button(navigation, tr("recap.ui.previous"), [this, kind] { later([this, kind] {
@@ -224,7 +228,7 @@ void PlayRecapScene::exportReceipt() {
         delta = "(" + std::string(amount > 0 ? "+" : "") + std::to_string(amount) + ")";
       }
       section.entries.push_back({upgrade.title, mode,
-          upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"), value(upgrade.after), delta});
+          upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"), value(upgrade.after), delta, kind == 0 ? value(upgrade.after) : ""});
     }
   }
   const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(

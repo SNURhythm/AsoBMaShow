@@ -545,8 +545,19 @@ void testReceiptLayoutIgnoresDeviceSize() {
   expect(empty->getWidth()==960 && emptyHeight>=720,"receipt has a fixed independent width");
   for (int i=0;i<80;++i) content.sections[i%3].entries.push_back(
       {"A chart with a long title that must wrap instead of clipping at the device edge", "HCN", "1200", "1300", "+100"});
+  content.sections[0].entries[0].group="Hard Clear";
+  content.sections[0].entries[1].group="Hard Clear";
+  for (std::size_t i=2;i<content.sections[0].entries.size();++i)
+    content.sections[0].entries[i].group="Normal Clear";
   auto portrait=recap::makeReceipt(content); portrait->applyYogaLayout();
   const int height=portrait->getHeight();
+  std::vector<std::string> groupHeadings;
+  for (auto *child:portrait->getChildren())
+    if (auto *text=dynamic_cast<TextView *>(child); text &&
+        (text->getText()=="Hard Clear" || text->getText()=="Normal Clear"))
+      groupHeadings.push_back(text->getText());
+  expect(groupHeadings==std::vector<std::string>{"Hard Clear","Normal Clear"},
+      "receipt emits each achieved-lamp heading once in best-first order");
   const int originalWidth=rendering::window_width, originalHeight=rendering::window_height;
   rendering::window_width=320; rendering::window_height=480;
   auto small=recap::makeReceipt(content); small->applyYogaLayout();

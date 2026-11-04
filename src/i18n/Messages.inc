@@ -1293,7 +1293,7 @@
 {"readme.translation.unavailable", "On-device translation requires Android, iOS 18+, or macOS 15+.", "온디바이스 번역은 Android, iOS 18 이상 또는 macOS 15 이상에서 사용할 수 있습니다.", "デバイス内翻訳には Android、iOS 18 以降、macOS 15 以降が必要です。", "设备端翻译需要 Android、iOS 18 或 macOS 15 及更高版本。", "裝置端翻譯需要 Android、iOS 18 或 macOS 15 及更新版本。"},
 {"readme.translation.working", "Translating on device…", "기기에서 번역 중…", "デバイスで翻訳中…", "正在设备上翻译…", "正在裝置上翻譯…"},
 {"recap.ui.apply", "Apply", "적용", "適用", "应用", "套用"},
-{"recap.ui.combo", "Combo-break upgrades", "콤보 브레이크 갱신", "コンボブレイク更新", "断连数改善", "斷連數改善"},
+{"recap.ui.bp", "BP upgrades", "BP 갱신", "BP更新", "BP改善", "BP改善"},
 {"recap.ui.custom", "Custom", "직접 지정", "期間指定", "自定义", "自訂"},
 {"recap.ui.daily", "Daily", "일간", "日別", "每日", "每日"},
 {"recap.ui.date_hint", "From / through (YYYY-MM-DD, local dates, both included)", "시작일 / 종료일 (YYYY-MM-DD, 현지 날짜, 양쪽 포함)", "開始日 / 終了日（YYYY-MM-DD、現地日付、両日を含む）", "开始 / 结束（YYYY-MM-DD，本地日期，包含首尾）", "開始 / 結束（YYYY-MM-DD，本地日期，包含首尾）"},

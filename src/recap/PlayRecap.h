@@ -9,7 +9,7 @@
 
 namespace recap {
 struct Range { std::int64_t start = 0, end = 0; };
-enum class Kind { Lamp, Score, ComboBreak };
+enum class Kind { Lamp, Score, BadPoints };
 struct Upgrade {
   std::string hash, title;
   int lnMode = 0;

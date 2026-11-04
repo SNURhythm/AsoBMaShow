@@ -1,5 +1,7 @@
 #pragma once
 #include "PlayRecap.h"
+#include "../ClearLampOrder.h"
+#include <algorithm>
 #include "../sqlite3.h"
 #include <memory>
 
@@ -50,29 +52,36 @@ inline Snapshot load(sqlite3 *db, Range range, const std::string &scoreEligible,
   Snapshot result{.range = range};
   if (range.start >= range.end) { result.error = "Invalid recap range"; return result; }
   // Only histories of charts/modes actually played in the window are aggregated.
-  // Each metric has independent eligibility; incomplete plays never set combo bests.
+  // Each metric has independent eligibility. Exact BP includes unpassed notes;
+  // only the legacy judgement-count fallback needs evidence of completion.
   // Unknown hashes cannot identify charts. Legacy unknown-LN attempts before the
   // window remain baselines for every mode, matching the existing best cache.
   const std::string completed =
-      "s.max_score>0 AND s.max_score%2=0 AND s.combo_break>=0 AND "
+      "s.max_score>0 AND s.max_score%2=0 AND s.kpoor>=0 AND "
       "s.pgreat>=0 AND s.great>=0 AND s.good>=0 AND s.bad>=0 AND s.poor>=0 AND "
       "(s.clear_type>0 OR s.pgreat+s.great+s.good+s.poor+"
       "CASE WHEN json_valid(s.provenance_json) AND "
       "json_extract(s.provenance_json,'$.ruleset.id')='beatoraja' AND "
       "json_extract(s.provenance_json,'$.gaugeProfile')='standard-9-keys' THEN 0 ELSE s.bad END=s.max_score/2)";
+  // BMSPlayer.createScoreData: BAD + POOR + MISS + notes - pastNotes.
+  // captureChartScoreWrite already persists that exact metric in bad_points.
+  // Never replace a malformed stored BP with a potentially smaller fallback.
+  const std::string badPoints = "(CASE WHEN s.bad_points IS NOT NULL THEN s.bad_points "
+      "WHEN " + completed + " THEN s.bad+s.poor+s.kpoor END)";
   const std::string query =
       "WITH touched AS (SELECT DISTINCT lower(trim(chart_sha256)) hash,ln_mode FROM scores "
       "WHERE score_source=0 AND trim(chart_sha256)<>'' AND created_at>=?1 AND created_at<?2), "
       "attempts AS (SELECT lower(trim(s.chart_sha256)) hash,t.ln_mode,s.chart_title,s.created_at,"
       "CASE WHEN " + lampEligible + " THEN " + clearRank + " END lamp,"
       "CASE WHEN " + scoreEligible + " THEN s.score END ex,"
-      "CASE WHEN (" + scoreEligible + ") AND (" + completed + ") THEN s.combo_break END cb "
+      "CASE WHEN (" + scoreEligible + ") AND typeof(" + badPoints + ")='integer' "
+      "AND " + badPoints + " BETWEEN 0 AND 2147483647 THEN " + badPoints + " END bp "
       "FROM scores s JOIN touched t ON lower(trim(s.chart_sha256))=t.hash AND (s.ln_mode=t.ln_mode OR (s.ln_mode=-1 AND s.created_at<?1)) "
       "WHERE s.score_source=0 AND s.created_at<?2) "
       "SELECT hash,ln_mode,COALESCE(MAX(CASE WHEN created_at>=?1 THEN chart_title END),MAX(chart_title),hash),"
       "MAX(CASE WHEN created_at<?1 THEN lamp END),MAX(CASE WHEN created_at>=?1 THEN lamp END),"
       "MAX(CASE WHEN created_at<?1 THEN ex END),MAX(CASE WHEN created_at>=?1 THEN ex END),"
-      "MIN(CASE WHEN created_at<?1 THEN cb END),MIN(CASE WHEN created_at>=?1 THEN cb END) "
+      "MIN(CASE WHEN created_at<?1 THEN bp END),MIN(CASE WHEN created_at>=?1 THEN bp END) "
       "FROM attempts GROUP BY hash,ln_mode ORDER BY 3 COLLATE NOCASE,hash,ln_mode";
   sqlite3_stmt *raw = nullptr;
   const int prepared = sqlite3_prepare_v2(db, query.c_str(), -1, &raw, nullptr);
@@ -96,6 +105,10 @@ inline Snapshot load(sqlite3 *db, Range range, const std::string &scoreEligible,
     }
   }
   if (rc != SQLITE_DONE) { result.sections = {}; result.error = sqlite3_errmsg(db); }
+  std::stable_sort(result.sections[0].begin(), result.sections[0].end(),
+      [](const Upgrade &left, const Upgrade &right) {
+        return clearLampOrder(left.after) > clearLampOrder(right.after);
+      });
   return result;
 }
 } // namespace recap
