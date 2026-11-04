@@ -65,7 +65,7 @@ inline std::unique_ptr<View> makeReceipt(const ReceiptContent &content) {
   auto root=std::make_unique<View>();
   root->setWidth(receiptWidth)->setMinHeight(720)->setFlexDirection(FlexDirection::Column)
       ->setGap(20)->setPadding(Edge::All,64)->setBackgroundColor(paper);
-  text(root.get(),"A S O B M A S H O W",20,accent,true);
+  text(root.get(),"AsoBMaShow",20,accent,true);
   text(root.get(),content.title,48,ink,true);
   text(root.get(),content.profile,26,ink,true);
   text(root.get(),content.period,20,muted);
