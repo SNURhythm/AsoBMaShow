@@ -542,7 +542,13 @@ void testReceiptLayoutIgnoresDeviceSize() {
   for (auto &section:content.sections) { section.title="Upgrades"; section.empty="No upgrades"; }
   auto empty=recap::makeReceipt(content); empty->applyYogaLayout();
   const int emptyHeight=empty->getHeight();
-  expect(empty->getWidth()==960 && emptyHeight>=720,"receipt has a fixed independent width");
+  expect(empty->getWidth()==960 && emptyHeight>0 && emptyHeight<600,
+      "empty receipt keeps its fixed width without a large minimum-height pad");
+  auto compactContent=content;
+  for (auto &section:compactContent.sections)
+    for (int i=0;i<12;++i) section.entries.push_back({"Chart title [ANOTHER]","LN","1200","1300","(+100)","","sl6"});
+  auto compact=recap::makeReceipt(compactContent); compact->applyYogaLayout();
+  expect(compact->getHeight()<2600,"36 ordinary records fit a compact tabular receipt");
   for (int i=0;i<80;++i) content.sections[i%3].entries.push_back(
       {"A chart with a long title that must wrap instead of clipping at the device edge", "HCN", "1200", "1300", "+100"});
   content.sections[0].entries[0].group="Hard Clear";
@@ -579,8 +585,8 @@ void testReceiptLayoutIgnoresDeviceSize() {
   const int originalWidth=rendering::window_width, originalHeight=rendering::window_height;
   rendering::window_width=320; rendering::window_height=480;
   auto small=recap::makeReceipt(content); small->applyYogaLayout();
-  expect(small->getWidth()==960 && small->getHeight()==height && height>16384,
-      "all upgrades fit one tall receipt independent of the device and texture-size limits");
+  expect(small->getWidth()==960 && small->getHeight()==height,
+      "all upgrades fit one receipt independent of device size");
   expect(height>emptyHeight,"receipt height grows with content");
   rendering::window_width=originalWidth; rendering::window_height=originalHeight;
 }

@@ -148,10 +148,9 @@ void PlayRecapScene::movePeriod(int direction) {
 }
 void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &upgrade) {
   auto *card = new View();
-  card->setFlexDirection(FlexDirection::Column)->setGap(4)->setPadding(Edge::All, 12)
-      ->setCornerRadius(12)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panel);
+  card->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10)->setPadding(Edge::All, 6)
+      ->setCornerRadius(4)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panel);
   parent->addView(card);
-  label(card, upgrade.title, 22);
   const auto value = [kind](int number) { return kind == 0 ? kombo::lampLabel(number) : std::to_string(number); };
   std::string text = upgrade.before ? value(*upgrade.before) : tr("recap.ui.new");
   text += " → " + value(upgrade.after);
@@ -161,15 +160,31 @@ void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &up
   }
   const std::string mode = upgrade.lnMode == 1 ? "LN" : upgrade.lnMode == 2 ? "CN" :
       upgrade.lnMode == 3 ? "HCN" : upgrade.lnMode == -1 ? tr("recap.ui.legacy") : tr("recap.ui.normal");
-  label(card,upgrade.difficulty + " · " + mode,18)->setThemedColor(app_theme::textSecondary);
+  auto *difficulty = new View();
+  difficulty->setFlexDirection(FlexDirection::Column)->setWidth(108)->setFlexShrink(0);
+  card->addView(difficulty);
+  label(difficulty,upgrade.difficulty,18);
+  label(difficulty,mode,14)->setThemedColor(app_theme::textSecondary);
+  const bool narrow = rendering::window_width < 720;
+  auto *details = new View();
+  details->setFlexDirection(narrow ? FlexDirection::Column : FlexDirection::Row)
+      ->setAlignItems(narrow ? YGAlignStretch : YGAlignCenter)->setGap(6)->setFlex(1)->setMinWidth(0);
+  card->addView(details);
+  auto *title = label(details,upgrade.title,20);
+  if (!narrow) title->setFlex(1)->setMinWidth(0);
   if (kind == 0) {
-    auto *lamps = row(card);
+    auto *lamps = row(details);
     lamps->setFlexWrap(YGWrapWrap)->setAlignItems(YGAlignCenter);
-    auto *before = label(lamps,upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"),18);
-    if (upgrade.before) recap::styleLampBadge(before,*upgrade.before);
-    label(lamps,"→",18);
-    recap::styleLampBadge(label(lamps,value(upgrade.after),18),upgrade.after);
-  } else label(card,text,18)->setThemedColor(app_theme::cyan);
+    if (!narrow) lamps->setWidth(280);
+    auto *before = label(lamps,upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"),16);
+    if (upgrade.before) recap::styleLampBadge(before,*upgrade.before,true);
+    label(lamps,"→",16);
+    recap::styleLampBadge(label(lamps,value(upgrade.after),16),upgrade.after,true);
+  } else {
+    auto *change = label(details,text,18);
+    change->setThemedColor(app_theme::cyan);
+    if (!narrow) change->setWidth(280);
+  }
 }
 void PlayRecapScene::build() {
   onPause();
@@ -195,7 +210,7 @@ void PlayRecapScene::build() {
   scroll->setFlex(1)->setMinHeight(0);
   root_->addView(scroll);
   auto *content = new View();
-  content->setFlexDirection(FlexDirection::Column)->setGap(12)->setPadding(Edge::Bottom, 20);
+  content->setFlexDirection(FlexDirection::Column)->setGap(6)->setPadding(Edge::Bottom, 16);
   scroll->setContentView(content);
   label(content, tr("recap.ui.title") + " · " + profileName_, 30);
   if (!exporting_) {
@@ -231,12 +246,15 @@ void PlayRecapScene::build() {
   else if (!snapshot_.error.empty()) label(content, tr("recap.ui.failed") + " " + snapshot_.error);
   else for (int kind = 0; kind < 3; ++kind) {
     const auto &upgrades = snapshot_.sections[kind];
-    label(content, tr(sectionKeys[kind]) + " · " + std::to_string(upgrades.size()), 26);
+    label(content, tr(sectionKeys[kind]) + " · " + std::to_string(upgrades.size()), 22)->setMargin(Edge::Top,8);
     if (upgrades.empty()) label(content, tr("recap.ui.empty"), 18);
     const auto end = std::min(upgrades.size(), offsets_[kind] + browsePageSize);
     for (auto i = offsets_[kind]; i < end; ++i) {
-      if (kind == 0 && (i == offsets_[kind] || upgrades[i].after != upgrades[i-1].after))
-        recap::styleLampBadge(label(content,kombo::lampLabel(upgrades[i].after),22),upgrades[i].after);
+      if (kind == 0 && (i == offsets_[kind] || upgrades[i].after != upgrades[i-1].after)) {
+        auto *heading = label(content,kombo::lampLabel(upgrades[i].after),18);
+        recap::styleLampBadge(heading,upgrades[i].after,true);
+        heading->setAlignSelf(YGAlignStretch);
+      }
       addUpgrade(content, kind, upgrades[i]);
     }
     if (upgrades.size() > browsePageSize) {

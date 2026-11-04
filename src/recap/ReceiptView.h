@@ -40,7 +40,7 @@ protected:
 inline Text *text(View *parent,const std::string &value,int size,Color color=ink,bool bold=false) {
   auto *label=new Text(size,bold);
   label->setText(value); label->setWrap(true); label->setColor({color.r,color.g,color.b,255});
-  label->setFlexShrink(0)->setMinHeight(size+8);
+  label->setFlexShrink(0)->setMinHeight(size+4);
   parent->addView(label); return label;
 }
 inline View *column(View *parent,int gap=12) {
@@ -51,64 +51,60 @@ inline View *row(View *parent,int gap=16) {
   auto *view=new View(); view->setFlexDirection(FlexDirection::Row)->setGap(gap)->setFlexShrink(0);
   parent->addView(view); return view;
 }
-inline void divider(View *parent) {
-  auto *line=row(parent,8);
-  line->setMargin(Edge::Top,12)->setMargin(Edge::Bottom,12);
-  for (int i=0;i<42;++i) {
-    auto *dash=new View(); dash->setWidth(12)->setHeight(2)->setBackgroundColor(rule); line->addView(dash);
-  }
-}
 }
 inline std::unique_ptr<View> makeReceipt(const ReceiptContent &content) {
   using namespace receipt_detail;
   View::LayoutBatchScope batch;
   auto root=std::make_unique<View>();
-  root->setWidth(receiptWidth)->setMinHeight(720)->setFlexDirection(FlexDirection::Column)
-      ->setGap(20)->setPadding(Edge::All,64)->setBackgroundColor(paper);
-  text(root.get(),"AsoBMaShow",20,accent,true);
-  text(root.get(),content.title,48,ink,true);
-  text(root.get(),content.profile,26,ink,true);
-  text(root.get(),content.period,20,muted);
-  divider(root.get());
-  auto *summary=row(root.get(),24);
+  root->setWidth(receiptWidth)->setFlexDirection(FlexDirection::Column)
+      ->setGap(4)->setPadding(Edge::All,28)->setBackgroundColor(paper);
+  auto *brand=row(root.get(),12);
+  text(brand,"AsoBMaShow",20,accent,true)->setFlex(1)->setMinWidth(0);
+  auto *profile=text(brand,content.profile,18,muted);
+  profile->setAlign(TextView::RIGHT); profile->setFlex(1)->setMinWidth(0);
+  text(root.get(),content.title,30,ink,true)->setAlign(TextView::CENTER);
+  text(root.get(),content.period,18,muted)->setAlign(TextView::CENTER);
   for (const auto &section:content.sections) {
-    auto *item=column(summary,4); item->setFlex(1)->setMinWidth(0);
-    text(item,std::to_string(section.entries.size()),48,accent,true);
-    text(item,section.title,20,muted);
-  }
-  for (const auto &section:content.sections) {
-    divider(root.get());
     auto *heading=row(root.get());
-    text(heading,section.title,28,ink,true)->setFlex(1)->setMinWidth(0);
-    text(heading,std::to_string(section.entries.size()),28,accent,true);
-    if (section.entries.empty()) text(root.get(),section.empty,22,muted);
+    heading->setMargin(Edge::Top,14)->setPadding(Edge::All,6)->setCornerRadius(4)->setBackgroundColor(rule);
+    text(heading,section.title,20,ink,true)->setFlex(1)->setMinWidth(0);
+    text(heading,std::to_string(section.entries.size()),20,ink,true);
+    if (section.entries.empty()) text(root.get(),section.empty,18,muted);
     std::string previousGroup;
     for (const auto &entry:section.entries) {
       if (!entry.group.empty() && entry.group != previousGroup) {
-        auto *heading=text(root.get(),entry.group,22,accent,true);
-        heading->setMargin(Edge::Top,12);
-        if (entry.afterLamp) styleLampBadge(heading,*entry.afterLamp);
+        auto *heading=text(root.get(),entry.group,18,accent,true);
+        heading->setMargin(Edge::Top,6);
+        if (entry.afterLamp) styleLampBadge(heading,*entry.afterLamp,true);
+        heading->setAlignSelf(YGAlignStretch);
         previousGroup=entry.group;
       }
-      auto *item=column(root.get(),10);
-      item->setPadding(Edge::Top,8)->setPadding(Edge::Bottom,12);
-      text(item,entry.title,28,ink,true);
-      text(item,entry.difficulty+" · "+entry.mode,18,muted);
-      auto *values=row(item,12);
+      auto *item=row(root.get(),10);
+      item->setName("recapEntry");
+      item->setAlignItems(YGAlignCenter)->setPadding(Edge::All,6)
+          ->setCornerRadius(3)->setBackgroundColor({255,255,255});
+      auto *difficulty=column(item,0);
+      difficulty->setWidth(108);
+      text(difficulty,entry.difficulty,18,ink,true);
+      text(difficulty,entry.mode,14,muted);
+      auto *values=row(item,5);
+      values->setWidth(250);
       values->setFlexWrap(YGWrapWrap)->setAlignItems(YGAlignCenter);
-      auto *before=text(values,entry.before,22,muted);
+      auto *before=text(values,entry.before,18,muted);
       before->setFlexShrink(1)->setMinWidth(0);
-      if (entry.beforeLamp) styleLampBadge(before,*entry.beforeLamp);
-      text(values,"→",22,muted);
-      auto *after=text(values,entry.after,24,accent,true);
+      if (entry.beforeLamp) styleLampBadge(before,*entry.beforeLamp,true);
+      else if (!entry.afterLamp) { before->setWidth(70); before->setAlign(TextView::RIGHT); }
+      text(values,"→",18,muted);
+      auto *after=text(values,entry.after,18,accent,true);
       after->setFlexShrink(1)->setMinWidth(0);
-      if (entry.afterLamp) styleLampBadge(after,*entry.afterLamp);
-      if (!entry.delta.empty()) text(values,entry.delta,20,accent)->setFlexShrink(1)->setMinWidth(0);
-      auto *line=new View(); line->setHeight(1)->setMargin(Edge::Top,10)->setBackgroundColor(rule); item->addView(line);
+      if (entry.afterLamp) styleLampBadge(after,*entry.afterLamp,true);
+      else after->setWidth(70);
+      if (!entry.delta.empty()) text(values,entry.delta,16,accent)->setFlexShrink(1)->setMinWidth(0);
+      text(item,entry.title,20,ink)->setFlex(1)->setMinWidth(0);
     }
   }
-  divider(root.get());
-  auto *footer=text(root.get(),content.footer,20,muted);
+  auto *footer=text(root.get(),content.footer,16,muted);
+  footer->setMargin(Edge::Top,14);
   footer->setAlign(TextView::CENTER);
   return root;
 }
