@@ -1,14 +1,20 @@
 #pragma once
+#include "LampBadge.h"
 #include "../view/View.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace recap {
-struct ReceiptEntry { std::string title, mode, before, after, delta, group; };
+struct ReceiptEntry {
+  std::string title, mode, before, after, delta, group;
+  std::string difficulty = "Lv. —";
+  std::optional<int> beforeLamp, afterLamp;
+};
 struct ReceiptSection { std::string title, empty; std::vector<ReceiptEntry> entries; };
 struct ReceiptContent {
   std::string title, profile, period, footer;
@@ -79,16 +85,24 @@ inline std::unique_ptr<View> makeReceipt(const ReceiptContent &content) {
     std::string previousGroup;
     for (const auto &entry:section.entries) {
       if (!entry.group.empty() && entry.group != previousGroup) {
-        text(root.get(),entry.group,22,accent,true)->setMargin(Edge::Top,12);
+        auto *heading=text(root.get(),entry.group,22,accent,true);
+        heading->setMargin(Edge::Top,12);
+        if (entry.afterLamp) styleLampBadge(heading,*entry.afterLamp);
         previousGroup=entry.group;
       }
       auto *item=column(root.get(),10);
       item->setPadding(Edge::Top,8)->setPadding(Edge::Bottom,12);
       text(item,entry.title,28,ink,true);
-      text(item,entry.mode,18,muted);
+      text(item,entry.difficulty+" · "+entry.mode,18,muted);
       auto *values=row(item,12);
-      text(values,entry.before+"  →",22,muted)->setFlexShrink(1)->setMinWidth(0);
-      text(values,entry.after,24,accent,true)->setFlexShrink(1)->setMinWidth(0);
+      values->setFlexWrap(YGWrapWrap)->setAlignItems(YGAlignCenter);
+      auto *before=text(values,entry.before,22,muted);
+      before->setFlexShrink(1)->setMinWidth(0);
+      if (entry.beforeLamp) styleLampBadge(before,*entry.beforeLamp);
+      text(values,"→",22,muted);
+      auto *after=text(values,entry.after,24,accent,true);
+      after->setFlexShrink(1)->setMinWidth(0);
+      if (entry.afterLamp) styleLampBadge(after,*entry.afterLamp);
       if (!entry.delta.empty()) text(values,entry.delta,20,accent)->setFlexShrink(1)->setMinWidth(0);
       auto *line=new View(); line->setHeight(1)->setMargin(Edge::Top,10)->setBackgroundColor(rule); item->addView(line);
     }

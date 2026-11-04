@@ -11,6 +11,8 @@
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
+#include <map>
+#include <sstream>
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
 #endif
@@ -51,6 +53,40 @@ std::string localStamp(std::int64_t seconds) {
   std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &time);
   return buffer;
 }
+void loadDifficulties(recap::Snapshot &snapshot, ChartRepository &charts) {
+  std::map<std::string,std::string> labels;
+  for (const auto &section : snapshot.sections)
+    for (const auto &upgrade : section) labels.try_emplace(upgrade.hash,"Lv. —");
+  if (labels.empty()) return;
+  auto session = charts.OpenSession();
+  if (!session) return;
+  ChartMetaQuery query;
+  query.rawSongData = true;
+  query.allowedSha256.emplace();
+  for (const auto &[hash,label] : labels) query.allowedSha256->push_back(hash);
+  std::vector<ChartMetaRecord> records;
+  session->QueryChartMeta(query,records);
+  for (const auto &record : records) {
+    auto found = labels.find(record.meta.SHA256);
+    if (found == labels.end() || found->second != "Lv. —") continue;
+    auto table = session->DifficultyTableLabelsForChart(record.meta);
+    if (!table.empty()) found->second = std::move(table);
+    else if (record.meta.PlayLevel > 0) {
+      std::ostringstream level;
+      level << "Lv. " << record.meta.PlayLevel;
+      found->second = level.str();
+    }
+  }
+  // Deleted charts may still have a SHA-256 difficulty-table entry.
+  for (auto &[hash,label] : labels) if (label == "Lv. —") {
+    bms_parser::ChartMeta meta;
+    meta.SHA256 = hash;
+    auto table = session->DifficultyTableLabelsForChart(meta);
+    if (!table.empty()) label = std::move(table);
+  }
+  for (auto &section : snapshot.sections)
+    for (auto &upgrade : section) upgrade.difficulty = labels.at(upgrade.hash);
+}
 }
 
 void PlayRecapScene::init() {
@@ -82,10 +118,13 @@ void PlayRecapScene::reload() {
   snapshot_ = {}; offsets_ = {}; message_.clear(); loading_ = true;
   loadedProfile_ = profile_;
   auto *repository = &context.scoreRepository;
+  auto *charts = &context.chartRepository;
   const auto database = repository->GetResolvedDatabasePath();
   try {
-    load_ = std::async(std::launch::async, [repository, database, range, session = period_ == 0] {
-      return repository->LoadPlayRecap(range, session, database);
+    load_ = std::async(std::launch::async, [repository, charts, database, range, session = period_ == 0] {
+      auto snapshot = repository->LoadPlayRecap(range, session, database);
+      if (snapshot.error.empty()) loadDifficulties(snapshot,*charts);
+      return snapshot;
     });
   } catch (const std::exception &error) {
     loading_ = false; snapshot_.error = error.what();
@@ -122,8 +161,15 @@ void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &up
   }
   const std::string mode = upgrade.lnMode == 1 ? "LN" : upgrade.lnMode == 2 ? "CN" :
       upgrade.lnMode == 3 ? "HCN" : upgrade.lnMode == -1 ? tr("recap.ui.legacy") : tr("recap.ui.normal");
-  auto *detail = label(card, text + " · " + mode, 18);
-  detail->setThemedColor(app_theme::cyan);
+  label(card,upgrade.difficulty + " · " + mode,18)->setThemedColor(app_theme::textSecondary);
+  if (kind == 0) {
+    auto *lamps = row(card);
+    lamps->setFlexWrap(YGWrapWrap)->setAlignItems(YGAlignCenter);
+    auto *before = label(lamps,upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"),18);
+    if (upgrade.before) recap::styleLampBadge(before,*upgrade.before);
+    label(lamps,"→",18);
+    recap::styleLampBadge(label(lamps,value(upgrade.after),18),upgrade.after);
+  } else label(card,text,18)->setThemedColor(app_theme::cyan);
 }
 void PlayRecapScene::build() {
   onPause();
@@ -190,7 +236,7 @@ void PlayRecapScene::build() {
     const auto end = std::min(upgrades.size(), offsets_[kind] + browsePageSize);
     for (auto i = offsets_[kind]; i < end; ++i) {
       if (kind == 0 && (i == offsets_[kind] || upgrades[i].after != upgrades[i-1].after))
-        label(content, kombo::lampLabel(upgrades[i].after), 22)->setThemedColor(app_theme::cyan);
+        recap::styleLampBadge(label(content,kombo::lampLabel(upgrades[i].after),22),upgrades[i].after);
       addUpgrade(content, kind, upgrades[i]);
     }
     if (upgrades.size() > browsePageSize) {
@@ -228,7 +274,9 @@ void PlayRecapScene::exportReceipt() {
         delta = "(" + std::string(amount > 0 ? "+" : "") + std::to_string(amount) + ")";
       }
       section.entries.push_back({upgrade.title, mode,
-          upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"), value(upgrade.after), delta, kind == 0 ? value(upgrade.after) : ""});
+          upgrade.before ? value(*upgrade.before) : tr("recap.ui.new"), value(upgrade.after), delta,
+          kind == 0 ? value(upgrade.after) : "", upgrade.difficulty,
+          kind == 0 ? upgrade.before : std::nullopt, kind == 0 ? std::optional{upgrade.after} : std::nullopt});
     }
   }
   const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(

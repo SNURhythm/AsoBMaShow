@@ -58,6 +58,13 @@ int main() {
   assert(spring && recap::calendarRange(*spring,false).end-*spring==23*3600);
   const auto fall = recap::parseLocalDate("2026-11-01");
   assert(fall && recap::calendarRange(*fall,false).end-*fall==25*3600);
+  setenv("TZ", "America/Santiago", 1); tzset();
+  const auto midnightGap = recap::parseLocalDate("2026-09-06");
+  const auto nextMidnight = recap::parseLocalDate("2026-09-07");
+  assert(midnightGap && nextMidnight && recap::localTime(*midnightGap).tm_hour==1);
+  assert(recap::calendarRange(*midnightGap,false).end==*nextMidnight);
+  assert(recap::shiftDays(*midnightGap,1)==*nextMidnight); // Inclusive custom end date.
+  assert(recap::localTime(recap::shiftDays(*midnightGap,-1)).tm_hour==0);
   setenv("TZ", "UTC", 1); tzset();
 #endif
   sql("DELETE FROM scores");

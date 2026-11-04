@@ -549,15 +549,33 @@ void testReceiptLayoutIgnoresDeviceSize() {
   content.sections[0].entries[1].group="Hard Clear";
   for (std::size_t i=2;i<content.sections[0].entries.size();++i)
     content.sections[0].entries[i].group="Normal Clear";
+  for (auto &entry:content.sections[0].entries) {
+    entry.before="Easy Clear"; entry.beforeLamp=200;
+    entry.after=entry.group; entry.afterLamp=entry.group=="Hard Clear" ? 400 : 300;
+    entry.difficulty="★12 / sl10 / A difficulty label long enough to wrap within the receipt";
+  }
   auto portrait=recap::makeReceipt(content); portrait->applyYogaLayout();
   const int height=portrait->getHeight();
   std::vector<std::string> groupHeadings;
   for (auto *child:portrait->getChildren())
     if (auto *text=dynamic_cast<TextView *>(child); text &&
         (text->getText()=="Hard Clear" || text->getText()=="Normal Clear"))
-      groupHeadings.push_back(text->getText());
+      {
+        groupHeadings.push_back(text->getText());
+        expect(text->getCornerRadius()>0,"receipt lamp headings are styled as badges");
+      }
   expect(groupHeadings==std::vector<std::string>{"Hard Clear","Normal Clear"},
       "receipt emits each achieved-lamp heading once in best-first order");
+  bool foundDifficulty=false;
+  const auto inspect=[&](View *view,const auto &self)->void {
+    if (auto *text=dynamic_cast<TextView *>(view); text && text->getText().starts_with("★12 / sl10")) {
+      foundDifficulty=true;
+      expect(text->getWidth()<=832,"difficulty metadata stays inside the receipt margins");
+    }
+    for (auto *child:view->getChildren()) self(child,self);
+  };
+  inspect(portrait.get(),inspect);
+  expect(foundDifficulty,"receipt includes each chart's difficulty metadata");
   const int originalWidth=rendering::window_width, originalHeight=rendering::window_height;
   rendering::window_width=320; rendering::window_height=480;
   auto small=recap::makeReceipt(content); small->applyYogaLayout();

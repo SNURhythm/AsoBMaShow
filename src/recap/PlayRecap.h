@@ -15,6 +15,7 @@ struct Upgrade {
   int lnMode = 0;
   std::optional<int> before;
   int after = 0;
+  std::string difficulty = "Lv. —";
 };
 struct Snapshot {
   Range range;
@@ -52,6 +53,9 @@ inline std::optional<std::int64_t> parseLocalDate(const std::string &value) {
 }
 inline std::int64_t shiftDays(std::int64_t seconds, int days) {
   auto time = localTime(seconds);
+  // A skipped midnight can normalize to 01:00. Resolve the destination date
+  // at midnight independently instead of carrying that hour into another day.
+  time.tm_hour = time.tm_min = time.tm_sec = 0;
   time.tm_mday += days; time.tm_isdst = -1;
   return std::mktime(&time);
 }
