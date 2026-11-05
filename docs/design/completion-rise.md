@@ -54,11 +54,17 @@ custom skins retain their authored timers and animations.
   visible lettering. The mark stays 88 design units above the word. The pulse
   decays without a second emission. Exit fades from 2.35 to 2.75 seconds.
 - `CompletionCelebrationEffect.h` evaluates bounded geometry directly. It emits
-  at most 576 colored vertices plus seven or nine textured glyph quads. There
+  at most 1344 colored vertices plus seven or nine textured glyph quads. There
   are no particle containers, blur passes, shaders to compile, or audio cues.
 - The renderer pre-rasterizes the sixteen visible glyph slots at construction.
   Frames reuse those textures and the existing batch buffers; motion changes
   quad geometry and opacity, not font rasterization or text layout.
+- A local black scrim sits behind the native celebration, reaching 68% opacity
+  in 160 ms and fading with the lettering. Its solid elliptical center feathers
+  to transparent edges; Perfect's backdrop also covers the mark. This readability
+  refinement is native-only; the original authoring studies retain their backdrop.
+- A faint lime/gold radial glow above the scrim follows the lettering's fade;
+  Perfect also has a smaller gold halo behind its mark. Neither glow pulses.
 - The authoring review's reduced-motion switch remains a prototype option.
   Native gameplay has no corresponding motion preference yet.
 

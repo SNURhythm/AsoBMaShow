@@ -86,12 +86,39 @@ void draw(Batch &batch, float time, Achievement achievement,
   };
   constexpr int segments = 64;
   const auto &circle = rendering::unitCircleSamples<segments>();
-  const float haze = out(time, 0, .22F) * (1 - smooth((time - 1.5F) / .8F)) * .12F;
+  // A quiet, feathered scrim keeps stacked HUD text from competing with the
+  // achievement. Hold it through the lettering's exit, including Perfect's mark.
+  const float dim = .68F * out(time, 0, .16F) *
+      (1 - smooth((time - (perfect ? 2.35F : 2.05F)) / .4F));
+  const float backdropY = centerY - (perfect ? 28 : 0) * scale;
+  for (int i = 0; dim > 0 && i < segments; ++i) {
+    const float ax = centerX + circle[i].x * 320 * scale;
+    const float ay = backdropY + circle[i].y * 105 * scale;
+    const float bx = centerX + circle[i + 1].x * 320 * scale;
+    const float by = backdropY + circle[i + 1].y * 105 * scale;
+    const float cx = centerX + circle[i].x * 480 * scale;
+    const float cy = backdropY + circle[i].y * 200 * scale;
+    const float dx = centerX + circle[i + 1].x * 480 * scale;
+    const float dy = backdropY + circle[i + 1].y * 200 * scale;
+    const auto shade = color(0, dim);
+    batch.addTriangleColors(centerX, backdropY, ax, ay, bx, by, shade, shade, shade);
+    batch.addTriangleColors(ax, ay, cx, cy, dx, dy, shade, 0, 0);
+    batch.addTriangleColors(ax, ay, dx, dy, bx, by, shade, 0, shade);
+  }
+  const float haze = out(time, .08F, .22F) *
+      (1 - smooth((time - (perfect ? 2.35F : 2.05F)) / .4F)) * .22F;
   for (int i = 0; haze > 0 && i < segments; ++i) {
     batch.addTriangleColors(centerX, centerY,
-        centerX + circle[i].x * 330 * scale, centerY + circle[i].y * 125 * scale,
-        centerX + circle[i + 1].x * 330 * scale, centerY + circle[i + 1].y * 125 * scale,
-        color(perfect ? kTeal : kLime, haze), 0, 0);
+        centerX + circle[i].x * 330 * scale, centerY + circle[i].y * 90 * scale,
+        centerX + circle[i + 1].x * 330 * scale, centerY + circle[i + 1].y * 90 * scale,
+        color(accent, haze), 0, 0);
+    if (perfect) {
+      const float markY = centerY - 88 * scale;
+      batch.addTriangleColors(centerX, markY,
+          centerX + circle[i].x * 70 * scale, markY + circle[i].y * 55 * scale,
+          centerX + circle[i + 1].x * 70 * scale, markY + circle[i + 1].y * 55 * scale,
+          color(kGold, haze * .7F), 0, 0);
+    }
   }
 
   if (!perfect) {
