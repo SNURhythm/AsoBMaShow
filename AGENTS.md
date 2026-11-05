@@ -271,6 +271,23 @@ contains examples and timing context if needed.
   across layouts. Apply this guidance when revising controls; existing
   inconsistencies are not precedents.
 
+## Visual Design and Animation
+
+- Before substantial visual or motion work, read
+  [Visual implementation guide](docs/design/visual-implementation-guide.md).
+  It records the reusable skill/tool choices, prototype
+  workflow, and native-renderer handoff criteria.
+- Use `motion-design` for choreography and art direction and
+  `remotion-best-practices` when authoring Remotion prototypes. Discover/read the
+  installed skills; the guide includes restoration commands if unavailable.
+- For a new visual direction, make reviewable moving alternatives in gameplay
+  context before committing to native implementation, unless the user already
+  chose a direction or explicitly asks for direct implementation. Routine fixes
+  and small refinements do not need another exploration phase.
+- Keep authoring tools out of the shipped C++/bgfx runtime. Do not add a web
+  view, Lottie/Rive runtime, or particle engine just to play a celebration without
+  first establishing the need and integration cost.
+
 ## Formatting
 
 - Do not run a whole-file formatter (including `clang-format -i`) on this
