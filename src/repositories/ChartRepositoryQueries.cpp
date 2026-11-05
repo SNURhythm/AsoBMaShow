@@ -3949,7 +3949,7 @@ std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(in
   while ((rc = sqlite3_step(query)) == SQLITE_ROW) {
     if (target>=kClearTypeLightAssistedEasyClearRank) {
       rows.push_back({.sha256=sqliteColumnString(query, 0), .longNoteMode=sqlite3_column_int(query, 1),
-          .target=sqlite3_column_int(query, 2), .remaining=target==600 ? sqlite3_column_int(query, 8) : 0,
+          .target=sqlite3_column_int(query, 2), .remaining=sqlite3_column_int(query, 8),
           .gaugeValue=static_cast<float>(sqlite3_column_double(query, 3)),
           .gaugeBorder=static_cast<float>(sqlite3_column_double(query, 4)), .deathNotes=sqlite3_column_int(query, 5),
           .totalNotes=sqlite3_column_int(query, 6)});

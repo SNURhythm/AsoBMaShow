@@ -449,6 +449,66 @@ void testGaugeRecommendationSummaries() {
   sqlite3_close(db);
   assert(scores.EnsureSchema());
 
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  exec("DROP TRIGGER no_repeat_backfill");
+  sqlite3_close(db);
+  // Near PERFECT keeps the fewest GOODs from completed eligible FCs, independently of EX.
+  pending.score = {};
+  pending.score.chartSha256 = std::string(64, '8');
+  pending.score.maxScore = 200; pending.score.maxCombo = 100;
+  pending.score.clearType = kClearTypeFullComboRank;
+  pending.score.provenance = historicalProvenance;
+  evidence = recorded;
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614175100";
+  pending.score.pGreat = 90; pending.score.great = 5; pending.score.good = 5; pending.score.score = 185;
+  save();
+  assert(queryInt(path, "SELECT good FROM goal_perfect_best WHERE chart_sha256 LIKE '8%'") == 5);
+  pending.attemptId.back() = '1';
+  pending.score.pGreat = 50; pending.score.great = 49; pending.score.good = 1; pending.score.score = 149;
+  save();
+  pending.attemptId.back() = '2';
+  pending.score.great = 48; pending.score.good = 2; pending.score.score = 148;
+  save();
+  assert(queryInt(path, "SELECT good FROM goal_perfect_best WHERE chart_sha256 LIKE '8%'") == 1);
+  pending.score.chartSha256 = std::string(64, '9');
+  pending.attemptId.back() = '3'; evidence.passedNotes = 99;
+  save();
+  pending.attemptId.back() = '4'; evidence.passedNotes = 100;
+  pending.score.clearType = kClearTypeHardClearRank; pending.score.comboBreak = 1;
+  save();
+  pending.attemptId.back() = '5'; pending.score.clearType = kClearTypeFullComboRank;
+  pending.score.comboBreak = 0; pending.score.provenance.practice = true;
+  save();
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_perfect_best WHERE chart_sha256 LIKE '9%'") == 0);
+  pending.score.provenance = historicalProvenance;
+  pending.attemptId.back() = '6';
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  exec("CREATE TRIGGER reject_perfect BEFORE INSERT ON goal_perfect_best BEGIN SELECT RAISE(ABORT,'test failure'); END");
+  sqlite3_close(db);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::StorageFailure);
+  assert(queryInt(path, "SELECT COUNT(*) FROM scores WHERE attempt_id='123e4567-e89b-42d3-a456-426614175106'") == 0);
+  scores.Shutdown();
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  // Simulate a profile from the preceding v15 build; no gauge payloads are needed for backfill.
+  exec("DROP TABLE goal_perfect_best; DROP TABLE score_v15_perfect_migration_state;"
+       "DELETE FROM scores WHERE chart_sha256 LIKE '9%';"
+       "CREATE TABLE goal_perfect_best(chart_sha256 TEXT,ln_mode INTEGER,good INTEGER,PRIMARY KEY(chart_sha256,ln_mode));"
+       "CREATE TRIGGER reject_perfect_backfill BEFORE INSERT ON goal_perfect_best BEGIN SELECT RAISE(ABORT,'test failure'); END");
+  sqlite3_close(db);
+  assert(!scores.EnsureSchema());
+  assert(queryInt(path, "SELECT COUNT(*) FROM sqlite_master WHERE name='score_v15_perfect_migration_state'") == 0);
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  exec("DROP TRIGGER reject_perfect_backfill");
+  sqlite3_close(db);
+  assert(scores.EnsureSchema());
+  assert(queryInt(path, "SELECT good FROM goal_perfect_best WHERE chart_sha256 LIKE '8%'") == 1);
+  assert(queryInt(path, "PRAGMA user_version") == 15);
+  scores.Shutdown();
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  exec("CREATE TRIGGER no_repeat_perfect BEFORE INSERT ON goal_perfect_best BEGIN SELECT RAISE(ABORT,'must not repeat'); END");
+  sqlite3_close(db);
+  assert(scores.EnsureSchema());
+
 }
 
 void testKomboProjectionIsAtomicAndUsesEffectiveLamp() {

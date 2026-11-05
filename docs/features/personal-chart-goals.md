@@ -49,6 +49,12 @@ Incomplete plays cannot supply final groove values or claim complete survival.
 Full Combo recommendations use the lowest **combo-break count**, independently
 of Hazard, and qualify with **1–5 combo breaks** in a completed eligible play.
 They are ordered by fewest breaks and show that count on the chart card.
+Near PERFECT is an independent group for completed eligible full combos with
+**1–5 GOODs**, ordered by fewest GOODs and showing that count on the card. It uses
+the lowest GOOD count from any eligible full combo, independently of best EX.
+Already-earned PERFECT/MAX lamps and saved PERFECT/MAX goals suppress the
+recommendation in that LN mode. Existing local full-combo records are backfilled
+once; subsequent browsing reads an indexed summary rather than play history.
 
 Each group hides lamps already earned and sorts by closeness: gauge points below
 the border for groove gauges, remaining chart proportion after death for survival

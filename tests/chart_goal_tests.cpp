@@ -115,6 +115,7 @@ int main() {
     query.reset();
     CHECK(sqlite3_exec(recommendations,
         "CREATE TABLE score_db.goal_combo_best(chart_sha256 TEXT,ln_mode INTEGER,combo_break INTEGER);"
+        "CREATE TABLE score_db.goal_perfect_best(chart_sha256 TEXT,ln_mode INTEGER,good INTEGER);"
         "CREATE TABLE score_db.goal_gauge_best(chart_sha256 TEXT,ln_mode INTEGER,target INTEGER,gauge_value REAL,border REAL,death_notes INTEGER,total_notes INTEGER,gap REAL);"
         "CREATE INDEX score_db.goal_gauge_proximity ON goal_gauge_best(target,gap,death_notes,chart_sha256,ln_mode);"
         "CREATE TABLE score_db.score_sha256_clear_rank_cache(chart_sha256 TEXT,ln_mode INTEGER,rank INTEGER,PRIMARY KEY(chart_sha256,ln_mode));"
@@ -232,6 +233,30 @@ int main() {
     }
     CHECK(sqlite3_step(query)==SQLITE_DONE);
     query.reset();
+    // Near PERFECT is independent of EX/FC suggestions, with its own best count.
+    CHECK(sqlite3_exec(recommendations,
+        "INSERT INTO score_db.goal_perfect_best VALUES('one',0,1),('five',0,5),('six',0,6),"
+        "('earned',0,1),('missing',0,1),('modes',1,4),('modes',2,2),('modes',3,3),('modes',0,1);"
+        "UPDATE score_db.score_sha256_clear_rank_cache SET rank=700 WHERE chart_sha256='earned';",
+        nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationPageSql(),query)==SQLITE_OK);
+    CHECK(sqlite3_bind_int(query,1,700)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+    for (const auto *hash : {"one", "modes", "five"}) {
+      CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)==hash);
+      if (sqliteColumnString(query,0)=="modes") CHECK(sqlite3_column_int(query,1)==2);
+    }
+    CHECK(sqlite3_step(query)==SQLITE_DONE);
+    query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "INSERT INTO score_db.chart_goals VALUES('one',0,'{\"lamp\":600}'),('five',0,'{\"lamp\":700}'),"
+        "('modes',2,'{\"lamp\":800}');",nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationPageSql(0,false,true),query)==SQLITE_OK);
+    CHECK(sqlite3_bind_int(query,1,700)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+    CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="one");
+    CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="modes" && sqlite3_column_int(query,1)==3);
+    CHECK(sqlite3_step(query)==SQLITE_DONE);
+    query.reset();
+    CHECK(sqlite3_exec(recommendations,"DELETE FROM score_db.goal_perfect_best",nullptr,nullptr,nullptr)==SQLITE_OK);
     CHECK(sqlite3_exec(recommendations,
         "DELETE FROM chart_meta; DELETE FROM score_db.goal_gauge_best; DELETE FROM score_db.goal_combo_best;"
         "DELETE FROM score_db.score_sha256_clear_rank_cache;"

@@ -770,6 +770,7 @@ void ChartGoalsScene::build() {
       }
       label(body, i18n::tr("goals.ui.near_help"), 18);
       label(body, i18n::tr("goals.ui.gauge_near_help"), 18);
+      label(body, i18n::tr("goals.ui.perfect_near_help"), 18);
       if (!recommendationChart_) {
         std::vector<DropdownView::Option> tables{{"0", i18n::tr("goals.ui.all_tables")}};
         for (const auto &table : recommendationTables_)
@@ -802,8 +803,8 @@ void ChartGoalsScene::build() {
         if (rank>=50) {
           std::ostringstream value;
           value << std::fixed << std::setprecision(1);
-          if (rank==600) {
-            label(row, i18n::format("goals.ui.combo_breaks", {{"count",std::to_string(candidate.remaining)}}), 18);
+          if (rank==600 || rank==700) {
+            label(row, i18n::format(rank==700 ? "goals.ui.perfect_goods" : "goals.ui.combo_breaks", {{"count",std::to_string(candidate.remaining)}}), 18);
           } else if (rank<=300) {
             value << candidate.gaugeValue;
             std::ostringstream border; border << candidate.gaugeBorder;

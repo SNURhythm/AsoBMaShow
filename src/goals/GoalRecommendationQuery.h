@@ -53,11 +53,14 @@ inline std::string recommendationPageSql(int tableId = 0, bool sortTable = false
 }
 inline std::string gaugeRecommendationCandidatesSql(bool hasGoals = false) {
   return R"sql(WITH lamp_bests AS (
-    SELECT g.*, NULL AS combo_break FROM score_db.goal_gauge_best g
+    SELECT g.*, NULL AS remaining FROM score_db.goal_gauge_best g
     WHERE target<600 AND gap <= CASE WHEN target<=300 THEN 5 ELSE 0.1 END
     UNION ALL
     SELECT chart_sha256,ln_mode,600,0,0,0,0,combo_break,combo_break FROM score_db.goal_combo_best
     WHERE combo_break BETWEEN 1 AND 5
+    UNION ALL
+    SELECT chart_sha256,ln_mode,700,0,0,0,0,good,good FROM score_db.goal_perfect_best
+    WHERE good BETWEEN 1 AND 5
   ), candidates AS (
     SELECT g.* FROM lamp_bests g
     WHERE NOT EXISTS (SELECT 1 FROM score_db.score_sha256_clear_rank_cache b
@@ -72,7 +75,7 @@ inline std::string gaugeRecommendationCandidatesSql(bool hasGoals = false) {
 }
 inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false, bool filterChart = false) {
   return gaugeRecommendationCandidatesSql(hasGoals) +
-      " SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap,combo_break FROM ("
+      " SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap,remaining FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY chart_sha256 ORDER BY gap,death_notes,ln_mode) AS mode_choice "
       "FROM candidates AS candidate WHERE target=?1" + std::string(filterChart ? " AND candidate.chart_sha256=?3" : "") + tableFilter("candidate.chart_sha256", tableId) + ") AS ranked WHERE mode_choice=1"
       " ORDER BY " + (sortTable && tableId ? tableOrder("ranked.chart_sha256", tableId) + ", " : "") +

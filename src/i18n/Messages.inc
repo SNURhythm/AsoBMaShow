@@ -213,6 +213,8 @@
 {"goals.ui.next", "Next page", "다음 페이지", "次のページ", "下一页", "下一頁"},
 {"goals.ui.no_record", "No record", "기록 없음", "記録なし", "暂无记录", "尚無紀錄"},
 {"goals.ui.no_target", "No target", "목표 없음", "指定なし", "不设目标", "不設目標"},
+{"goals.ui.perfect_goods", "GOODs: {count}", "GOOD: {count}개", "GOOD数：{count}", "GOOD数：{count}", "GOOD數：{count}"},
+{"goals.ui.perfect_near_help", "Near PERFECT: full combos with 1–5 GOODs, ordered by fewest GOODs.", "PERFECT 근접: GOOD 1~5개로 풀콤보한 기록이며, GOOD이 적은 순으로 표시합니다.", "PERFECT目前：GOODが1～5個のフルコンボ記録を、GOODが少ない順に表示します。", "接近PERFECT：含1–5个GOOD的全连记录，按GOOD数从少到多排列。", "接近PERFECT：含1–5個GOOD的全連紀錄，按GOOD數從少到多排列。"},
 {"goals.ui.practice", "Practice chart", "채보 연습", "譜面を練習", "练习谱面", "練習譜面"},
 {"goals.ui.previous", "Previous page", "이전 페이지", "前のページ", "上一页", "上一頁"},
 {"goals.ui.recommend_ex", "{ex} EX to {rank} · Set goal", "{rank}까지 {ex} EX · 목표 설정", "{rank}まで{ex} EX · 目標を設定", "距 {rank} 差 {ex} EX · 设置目标", "距 {rank} 差 {ex} EX · 設定目標"},

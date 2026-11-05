@@ -1905,11 +1905,66 @@ bool migrateScoreDatabaseToVersion14(sqlite3 *db) {
   return setDatabaseUserVersion(db, 14);
 }
 
+// Separate completion marker also upgrades profiles from earlier unpublished v15 builds.
+// Recommendation browsing uses only the indexed summary after this one-time scan.
+bool migratePerfectGoalsToVersion15(sqlite3 *db) {
+  bool exists = false;
+  if (!sqliteTableExists(db, "score_v15_perfect_migration_state", exists,
+                         "checking perfect goal migration state")) return false;
+  if (exists) {
+    SqliteStatementHandle state;
+    if (prepareSqliteStatement(db, "SELECT completed FROM score_v15_perfect_migration_state", state) != SQLITE_OK)
+      return false;
+    const int rc = sqlite3_step(state);
+    if (rc == SQLITE_ROW)
+      return sqlite3_column_type(state, 0) == SQLITE_INTEGER && sqlite3_column_int(state, 0) == 1 &&
+             sqlite3_step(state) == SQLITE_DONE;
+    if (rc != SQLITE_DONE) return false;
+  }
+  SqliteStatementHandle rows, insert;
+  const auto sql =
+      "SELECT lower(trim(chart_sha256)),ln_mode,good,provenance_json FROM scores s "
+      "WHERE score_source=0 AND eligibility=0 AND good BETWEEN 0 AND 5 "
+      "AND max_score BETWEEN 2 AND 2147483647 AND max_score%2=0 AND ln_mode BETWEEN 0 AND 3 "
+      "AND pgreat>=0 AND great>=0 AND bad=0 AND poor=0 AND combo_break=0 "
+      "AND max_combo>=max_score/2 AND pgreat+great+good=max_score/2 "
+      "AND length(trim(chart_sha256))=64 AND lower(trim(chart_sha256)) NOT GLOB '*[^0-9a-f]*' "
+      "AND " + score_cache_queries::detail::fullComboClearRankExpr("s") + ">=600";
+  if (prepareSqliteStatement(db, sql, rows) != SQLITE_OK || prepareSqliteStatement(db,
+      "INSERT INTO goal_perfect_best(chart_sha256,ln_mode,good) VALUES(?,?,?) "
+      "ON CONFLICT(chart_sha256,ln_mode) DO UPDATE SET good=min(goal_perfect_best.good,excluded.good)", insert) != SQLITE_OK)
+    return false;
+  const auto previousLr2 = previousBestScoreCompatibleRuleset(RulesetDescriptor::For(GameplayRuleset::LR2));
+  const auto previousBeatoraja = previousBestScoreCompatibleRuleset(RulesetDescriptor::For(GameplayRuleset::Beatoraja));
+  int rc;
+  while ((rc = sqlite3_step(rows)) == SQLITE_ROW) {
+    std::string error;
+    const auto provenance = deserializeScoreProvenance(sqliteColumnString(rows, 3), error);
+    if (!provenance || provenance->eligibility != ScoreEligibility::Verified ||
+        (!isSupportedRulesetDescriptor(provenance->ruleset) &&
+         (!previousLr2 || provenance->ruleset != *previousLr2) &&
+         (!previousBeatoraja || provenance->ruleset != *previousBeatoraja)) ||
+        provenance->autoPlay || provenance->practice || provenance->clubMode ||
+        provenance->assistOption != assist_options::kOff || !provenance->playback.neutral() ||
+        provenance->startingGaugePercent || gaugeProfileIsCourse(provenance->gaugeProfile)) continue;
+    sqlite3_reset(insert);
+    if (!bindSqliteText(insert, 1, sqliteColumnString(rows, 0)) ||
+        sqlite3_bind_int(insert, 2, sqlite3_column_int(rows, 1)) != SQLITE_OK ||
+        sqlite3_bind_int(insert, 3, sqlite3_column_int(rows, 2)) != SQLITE_OK ||
+        sqlite3_step(insert) != SQLITE_DONE) return false;
+  }
+  if (rc != SQLITE_DONE) return false;
+  return execSql(db, "CREATE TABLE IF NOT EXISTS score_v15_perfect_migration_state("
+                    "completed INTEGER NOT NULL PRIMARY KEY CHECK(completed=1)) WITHOUT ROWID",
+                 "creating perfect goal migration state") &&
+         execSql(db, "INSERT INTO score_v15_perfect_migration_state VALUES(1)", "recording perfect goal migration completion");
+}
+
 // The unpublished v15 goal migration also seeds combo bests from score history.
 // Its marker covers profiles that already opened an earlier v15 test build and
 // prevents rescanning history on later schema checks (including deferred v14).
 bool migrateScoreGoalsToVersion15(sqlite3 *db) {
-  if (!chart_goals::ensureGaugeSummary(db)) return false;
+  if (!chart_goals::ensureGaugeSummary(db) || !migratePerfectGoalsToVersion15(db)) return false;
   bool exists = false;
   if (!sqliteTableExists(db, "score_v15_migration_state", exists,
                          "checking goal migration state")) return false;
