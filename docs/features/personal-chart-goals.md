@@ -12,6 +12,12 @@ Independent goals, including those in the same LN mode, and newly set harder
 targets count as separate achievements;
 a goal containing both lamp and score targets counts once when both are met.
 
+The **Achieved** tab in both Chart goals and Folder goals offers **Remove all
+achieved goals**. Confirmation shows the count for that goal type in the active
+profile, across all pages. Cancel or Back keeps the goals. Removal keeps scores,
+replays, and Kombo points, skips goals that changed or are no longer achieved,
+and commits the batch together.
+
 ## Recommendations
 
 A small red dot on a chart's flag indicates available lamp or score

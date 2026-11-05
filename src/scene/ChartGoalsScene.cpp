@@ -273,6 +273,7 @@ bool ChartGoalsScene::checkProfile() {
   recommendations_.clear(); recommendationRank_.reset(); recommendationTable_ = 0; recommendationSortTable_ = false;
   *navigationState_ = {}; overviewTab_ = OverviewTab::Ongoing;
   recommendationMode_ = long_note_mode::valueFromId(context.settings.selectedLnMode);
+  achievedRemoval_.clear();
   draft_ = {}; page_ = {}; offset_ = achievedOffset_ = pickerOffset_ = 0;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
@@ -443,7 +444,7 @@ void ChartGoalsScene::showChartGoals(const ChartMetaRecord &record, int mode) {
   else if (page_.goals.empty()) showGoal({.chart=record.meta, .longNoteMode=mode});
 }
 void ChartGoalsScene::showGoal(chart_goals::Goal goal) {
-  message_.clear(); confirmRemove_ = false;
+  message_.clear(); confirmRemove_ = false; achievedRemoval_.clear();
   std::string error;
   selected_.reset();
   if (goal.id > 0)
@@ -494,6 +495,25 @@ void ChartGoalsScene::saveGoal() {
   draft_ = std::move(candidate);
   selected_ = chart_goals::GoalProgress{draft_, {}};
   editing_ = false; editorReturnGoal_.reset(); message_.clear(); reload();
+}
+void ChartGoalsScene::requestRemoveAchievedGoals() {
+  if (!checkProfile()) { reload(); return; }
+  achievedRemoval_.clear();
+  reload();
+  if (loadFailed_) return;
+  for (const auto &entry : page_.goals)
+    if (entry.progress.achieved) achievedRemoval_.push_back(entry.goal);
+}
+void ChartGoalsScene::removeAchievedGoals() {
+  if (!checkProfile()) { reload(); return; }
+  if (achievedRemoval_.empty()) return;
+  std::string error;
+  if (!context.scoreRepository.RemoveAchievedChartGoals(achievedRemoval_, error)) {
+    SDL_Log("Cannot remove achieved chart goals: %s", error.c_str());
+    message_ = i18n::tr("goals.ui.storage_error"); return;
+  }
+  achievedRemoval_.clear(); achievedOffset_ = 0;
+  message_.clear(); reload();
 }
 void ChartGoalsScene::removeGoal() {
   if (!checkProfile()) { reload(); return; }
@@ -589,7 +609,7 @@ void ChartGoalsScene::build() {
     statusNavigation->setFlexDirection(stacked ? FlexDirection::Row : FlexDirection::Column)->setGap(6)->setFlexShrink(0);
     const auto tab = [this, navigation=statusNavigation, stacked](const std::string &title, OverviewTab value) {
       auto *button = action(navigation, title, [this, value] { later([this, value] {
-        overviewTab_ = value;
+        overviewTab_ = value; achievedRemoval_.clear();
         if (value == OverviewTab::Recommendations && !recommendationRank_ && !recommendations_.empty()) {
           recommendationRank_ = recommendations_.begin()->first;
           loadRecommendations(*recommendationRank_, 0);
@@ -865,6 +885,15 @@ void ChartGoalsScene::build() {
         });
         action(body, i18n::tr("goals.ui.browse_charts"), [this] { browseCharts(); });
       }
+      if (achieved && count > 0) {
+        if (achievedRemoval_.empty()) {
+          action(body, i18n::tr("goals.ui.remove_all_achieved"), [this] { later([this] { requestRemoveAchievedGoals(); }); }, app_theme::ActionCategory::Destructive);
+        } else {
+          label(body, i18n::format("goals.ui.remove_all_achieved_charts_confirm", {{"count", std::to_string(achievedRemoval_.size())}}), 18);
+          action(body, i18n::tr("goals.ui.remove"), [this] { later([this] { removeAchievedGoals(); }); }, app_theme::ActionCategory::Destructive);
+          action(body, i18n::tr("goals.ui.cancel"), [this] { later([this] { achievedRemoval_.clear(); message_.clear(); }); });
+        }
+      }
       const auto artwork = loadGoalArtwork(context, entries, offset);
       for (int i = offset; i < std::min(count, offset + chart_goals::pageSize); ++i) {
         const auto &entry = *entries[i];
@@ -942,12 +971,13 @@ void ChartGoalsScene::browseCharts() {
 }
 void ChartGoalsScene::allGoals() {
   later([this] {
-    editing_ = confirmRemove_ = sourcePicker_ = false;
+    editing_ = confirmRemove_ = sourcePicker_ = false; achievedRemoval_.clear();
     selected_.reset(); pickerChart_.reset(); recommendationChart_.reset(); editorReturnGoal_.reset();
     message_.clear(); reload();
   });
 }
 void ChartGoalsScene::back() {
+  if (!achievedRemoval_.empty()) { later([this] { achievedRemoval_.clear(); message_.clear(); }); return; }
   if (confirmRemove_) { later([this] { confirmRemove_ = false; }); return; }
   if (editing_ && selected_) { later([this] {
     draft_ = selected_->goal; editing_ = false; message_.clear(); reload();

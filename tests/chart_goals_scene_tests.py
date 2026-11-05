@@ -14,7 +14,7 @@ class ChartGoalsSceneTests(unittest.TestCase):
         methods = "\n".join(extract(scene, signature) for signature in (
             "std::string rateText(", "void ChartGoalsScene::init(", "void ChartGoalsScene::showGoal(", "void ChartGoalsScene::showChartGoals(",
             "bool ChartGoalsScene::checkProfile(", "void ChartGoalsScene::later(", "void ChartGoalsScene::back(", "void ChartGoalsScene::browseCharts(",
-            "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal(", "void ChartGoalsScene::recommendGoal(", "void ChartGoalsScene::changeDraftMode(", "void ChartGoalsScene::changeRecommendationMode("))
+            "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal(", "void ChartGoalsScene::requestRemoveAchievedGoals(", "void ChartGoalsScene::removeAchievedGoals(", "void ChartGoalsScene::recommendGoal(", "void ChartGoalsScene::changeDraftMode(", "void ChartGoalsScene::changeRecommendationMode("))
         fixture = (root / "tests/chart_goals_scene_fixture.cpp").read_text()
         fixture = fixture.replace("PRODUCTION_METHODS", methods)
         with tempfile.TemporaryDirectory(prefix="asobmashow-goals-scene-") as directory:
@@ -587,7 +587,7 @@ struct Goal { struct { std::string Title, SubTitle, SHA256; } chart; int target 
 std::string normalizedHash(const std::string &s) { return s; }
 struct GoalProgress { Goal goal; struct { bool achieved = false; } progress; };
 }
-namespace app_theme { constexpr int textSecondary=0; enum class ActionCategory { Neutral }; }
+namespace app_theme { constexpr int textSecondary=0; enum class ActionCategory { Neutral, Destructive }; }
 namespace ui_icons { constexpr int kHide=1, kPlus=2; }
 namespace i18n { std::string tr(const char *s) { return s; } std::string format(const char *s, std::initializer_list<std::pair<std::string,std::string>>) { return s; } }
 std::vector<std::string> titles, actions;
@@ -613,6 +613,9 @@ struct Scene {
   int returnTarget_=0;
   void defer(std::function<bool()> f, int, bool) { f(); }
   int offset_=0, achievedOffset_=0;
+  std::vector<chart_goals::Goal> achievedRemoval_;
+  std::string message_;
+  void requestRemoveAchievedGoals() {} void removeAchievedGoals() {}
   enum class OverviewTab { Ongoing, Recommendations, Achieved };
   OverviewTab overviewTab_=OverviewTab::Ongoing;
   void later(std::function<void()> f) { f(); }
@@ -630,6 +633,7 @@ int main() {
   assert(titles.size()==20 && titles.front()=="Active 0" && titles.back()=="Active 19");
   scene.overviewTab_=Scene::OverviewTab::Achieved; scene.achievedOffset_=20; scene.build();
   assert(titles.size()==5 && titles.front()=="Done 20" && titles.back()=="Done 24");
+  assert(std::find(actions.begin(),actions.end(),"goals.ui.remove_all_achieved")!=actions.end());
   scene.overviewTab_=Scene::OverviewTab::Ongoing; scene.offset_=20; scene.build();
   assert(titles.size()==5 && titles.front()=="Active 20");
   scene.page_.goals.clear(); scene.build();

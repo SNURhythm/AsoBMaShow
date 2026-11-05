@@ -198,3 +198,25 @@ bool ScoreRepository::RemoveChartGoal(const bms_parser::ChartMeta &chart, int se
     return true;
   } catch (const std::exception &failure) { error = failure.what(); return false; }
 }
+bool ScoreRepository::RemoveAchievedChartGoals(std::span<const chart_goals::Goal> confirmed, std::string &error) {
+  profile_database_activity::WriteGuard guard;
+  std::lock_guard lock(impl_->sessionMutex);
+  error.clear();
+  if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return false; }
+  SqliteTransactionHandle tx(impl_->sessionDatabase, "BEGIN IMMEDIATE", error);
+  if (!tx.active()) return false;
+  try {
+    bool changed = false;
+    for (const auto &expected : confirmed) {
+      if (expected.id <= 0) continue;
+      const auto current = chart_goals::load(impl_->sessionDatabase, expected.chart.SHA256, expected.longNoteMode, expected.id);
+      if (!current || current->target != expected.target || current->longNoteMode != expected.longNoteMode ||
+          current->setAtUnixMillis != expected.setAtUnixMillis || !project(impl_->sessionDatabase, *current).progress.achieved) continue;
+      chart_goals::remove(impl_->sessionDatabase, current->chart.SHA256, current->longNoteMode, current->id);
+      changed = true;
+    }
+    if (!tx.commit(error)) return false;
+    if (changed) score_repository_detail::IncrementRevision();
+    return true;
+  } catch (const std::exception &failure) { error = failure.what(); return false; }
+}

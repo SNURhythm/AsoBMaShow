@@ -57,6 +57,8 @@ private:
   void showGoal(chart_goals::Goal);
   void saveGoal();
   void removeGoal();
+  void requestRemoveAchievedGoals();
+  void removeAchievedGoals();
   void resolveChart();
   void navigate(bool practice);
   void build();
@@ -76,6 +78,7 @@ private:
   std::optional<chart_goals::Goal> editorReturnGoal_;
   std::string profileId_, message_, customRate_;
   chart_goals::ProgressPage page_;
+  std::vector<chart_goals::Goal> achievedRemoval_;
   std::optional<chart_goals::GoalProgress> selected_;
   chart_goals::Goal draft_;
   bool editing_ = false, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;

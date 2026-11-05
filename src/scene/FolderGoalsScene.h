@@ -36,6 +36,8 @@ private:
   void selectScoreTarget(const std::string &);
   void saveGoal();
   void removeGoal();
+  void requestRemoveAchievedGoals();
+  void removeAchievedGoals();
   void build();
   void layout();
   void back();
@@ -49,6 +51,7 @@ private:
   std::optional<folder_goals::Source> initial_;
   std::string profile_,message_,rate_="100",scoreRate_="100";
   std::vector<folder_goals::GoalProgress> goals_;
+  std::vector<folder_goals::Goal> achievedRemoval_;
   folder_goals::Goal draft_;
   std::optional<folder_goals::Progress> progress_;
   bool detail_=false,editing_=false,confirmRemove_=false,failed_=false,achieved_=false;

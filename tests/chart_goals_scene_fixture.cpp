@@ -35,7 +35,12 @@ struct Scores {
     return result;
   }
   bool fail = false, achieved = false;
-  int saves = 0, removals = 0;
+  int saves = 0, removals = 0, bulkRemovals = 0;
+  std::vector<chart_goals::Goal> removedBatch;
+  bool RemoveAchievedChartGoals(const std::vector<chart_goals::Goal> &goals, std::string &error) {
+    ++bulkRemovals; if (fail) { error="storage failure"; return false; }
+    removedBatch=goals; return true;
+  }
   bool SaveChartGoal(chart_goals::Goal &, std::string &error) {
     ++saves; if (fail) error = "storage failure"; else if (achieved) error = "goal_already_achieved"; return !fail && !achieved;
   }
@@ -71,6 +76,7 @@ struct ChartGoalsScene {
   int offset_ = 20, builds = 0, reloads = 0;
   chart_goals::Goal draft_;
   chart_goals::ProgressPage page_;
+  std::vector<chart_goals::Goal> achievedRemoval_;
   std::optional<chart_goals::GoalProgress> selected_;
   std::optional<Record> initial_, recommendationChart_, pickerChart_;
   std::optional<int> initialMode_, resolved_;
@@ -103,6 +109,8 @@ struct ChartGoalsScene {
   void later(std::function<void()>);
   void saveGoal();
   void removeGoal();
+  void requestRemoveAchievedGoals();
+  void removeAchievedGoals();
   void flush() { auto work = std::exchange(queued, {}); for (auto &f : work) f(); }
 };
 PRODUCTION_METHODS
@@ -242,6 +250,20 @@ int main() {
   assert(multiple.manager.returned == 1);
   multiple.context.profileManager.profile.id = "two";
   assert(!multiple.checkProfile() && !multiple.pickerChart_ && multiple.page_.goals.empty());
+  ChartGoalsScene bulk;
+  bulk.editing_=false; bulk.overviewTab_=ChartGoalsScene::OverviewTab::Achieved;
+  for (int i=0;i<25;++i) bulk.page_.goals.push_back({.goal={.id=i+1},.progress={.achieved=true}});
+  bulk.page_.goals.push_back({.goal={.id=26},.progress={.lampMet=true}}); // Partial completion stays active.
+  bulk.achievedOffset_=20;
+  bulk.removeAchievedGoals(); assert(bulk.context.scoreRepository.bulkRemovals==0);
+  bulk.requestRemoveAchievedGoals(); assert(bulk.achievedRemoval_.size()==25);
+  bulk.back(); bulk.flush(); assert(bulk.achievedRemoval_.empty() && bulk.manager.returned==0);
+  bulk.requestRemoveAchievedGoals(); bulk.context.scoreRepository.fail=true;
+  bulk.removeAchievedGoals(); assert(bulk.achievedRemoval_.size()==25 && bulk.achievedOffset_==20 && !bulk.message_.empty());
+  bulk.context.scoreRepository.fail=false; bulk.removeAchievedGoals();
+  assert(bulk.achievedRemoval_.empty() && bulk.achievedOffset_==0 && bulk.context.scoreRepository.removedBatch.size()==25);
+  bulk.requestRemoveAchievedGoals(); bulk.context.profileManager.profile.id="two";
+  bulk.removeAchievedGoals(); assert(bulk.achievedRemoval_.empty() && bulk.context.scoreRepository.bulkRemovals==2);
   ChartGoalsScene scene;
   scene.saveGoal();
   assert(scene.context.scoreRepository.saves == 0 && scene.editing_);

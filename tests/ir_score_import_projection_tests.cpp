@@ -1076,6 +1076,34 @@ void testIndependentChartGoals() {
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
   assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 20);
+  // Bulk removal checks current achievement and rolls the whole batch back on failure.
+  auto active = lamp; active.id = 0; active.target.lamp = 700;
+  assert(scores.SaveChartGoal(active, error));
+  auto otherGoal = active; otherGoal.id = 0;
+  assert(otherProfile.SaveChartGoal(otherGoal, error));
+  const std::vector confirmed{lamp, score, active}; // An ongoing goal must survive even if supplied.
+  const auto records = queryInt(root / "scores.db", "SELECT COUNT(*) FROM scores");
+  sqlite3 *db = nullptr;
+  assert(sqlite3_open((root / "scores.db").string().c_str(), &db) == SQLITE_OK);
+  const auto reject = "CREATE TRIGGER reject_bulk_goal BEFORE DELETE ON chart_goals WHEN OLD.id=" +
+      std::to_string(score.id) + " BEGIN SELECT RAISE(ABORT,'test failure'); END";
+  assert(sqlite3_exec(db, reject.c_str(), nullptr,nullptr,nullptr) == SQLITE_OK);
+  const auto revision = scores.GetRevision();
+  assert(!scores.RemoveAchievedChartGoals(confirmed, error));
+  assert(scores.LoadChartGoalsForChart(lamp.chart, error)->size() == 3);
+  assert(scores.GetRevision() == revision);
+  assert(sqlite3_exec(db, "DROP TRIGGER reject_bulk_goal", nullptr,nullptr,nullptr) == SQLITE_OK);
+  sqlite3_close(db);
+  assert(scores.RemoveAchievedChartGoals(confirmed, error));
+  const auto remaining = scores.LoadChartGoalsForChart(lamp.chart, error);
+  assert(remaining && remaining->size() == 1 && remaining->front().goal.id == active.id);
+  assert(scores.GetRevision() == revision + 1);
+  assert(scores.RemoveAchievedChartGoals(confirmed, error)); // Retry is harmless.
+  assert(scores.GetRevision() == revision + 1);
+  assert(otherProfile.LoadChartGoalsForChart(lamp.chart, error)->size() == 1);
+  assert(queryInt(root / "scores.db", "SELECT COUNT(*) FROM scores") == records);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 20);
+
 }
 
 void testFolderGoalPersistenceAndPlayCredit() {
@@ -1212,6 +1240,31 @@ void testFolderGoalPersistenceAndPlayCredit() {
   assert(scores.TakeFolderGoalAchievements(pending.attemptId).empty());
   assert(scores.LoadKombo(error)->days.at(effectiveDay).points==23);
   assert(scores.LoadKombo(error)->savings==3);
+  std::vector<folder_goals::Goal> confirmed;
+  const auto confirmedProgress = scores.LoadFolderGoals(error);
+  for (const auto &entry : *confirmedProgress) confirmed.push_back(entry.goal);
+  auto active = goal; active.id.clear(); active.target.lamp = 500;
+  assert(scores.SaveFolderGoal(active,error));
+  sqlite3 *scoreDb = nullptr;
+  assert(sqlite3_open((root/"score.db").string().c_str(),&scoreDb)==SQLITE_OK);
+  const auto reject = "CREATE TRIGGER reject_bulk_folder BEFORE DELETE ON folder_goals WHEN OLD.id='" +
+      confirmed.back().id + "' BEGIN SELECT RAISE(ABORT,'test failure'); END";
+  assert(sqlite3_exec(scoreDb,reject.c_str(),nullptr,nullptr,nullptr)==SQLITE_OK);
+  const auto revision = scores.GetRevision();
+  assert(!scores.RemoveAchievedFolderGoals(confirmed,error));
+  assert(scores.LoadFolderGoals(error)->size()==6 && scores.GetRevision()==revision);
+  assert(sqlite3_exec(scoreDb,"DROP TRIGGER reject_bulk_folder",nullptr,nullptr,nullptr)==SQLITE_OK);
+  sqlite3_close(scoreDb);
+  // An edited target is no longer the goal shown in the confirmation.
+  ex.target.percent=10000;
+  assert(scores.SaveFolderGoal(ex,error));
+  const auto records = queryInt(root/"score.db","SELECT COUNT(*) FROM scores");
+  assert(scores.RemoveAchievedFolderGoals(confirmed,error));
+  const auto remaining = scores.LoadFolderGoals(error);
+  assert(remaining && remaining->size()==2);
+  for (const auto &entry : *remaining) assert(entry.goal.id==ex.id || entry.goal.id==active.id);
+  assert(queryInt(root/"score.db","SELECT COUNT(*) FROM scores")==records);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points==23 && scores.LoadKombo(error)->savings==3);
   // Removing the source keeps all goals without transferring them to another table.
   assert(sqlite3_exec(db,"DELETE FROM difficulty_tables;DELETE FROM difficulty_table_entries",nullptr,nullptr,nullptr)==SQLITE_OK);
   assert(!scores.LoadFolderGoals(error)->front().progress.sourceAvailable);
@@ -1224,6 +1277,7 @@ void testFolderGoalPersistenceAndPlayCredit() {
   assert(scores.LoadFolderGoals(error)->empty());
   scores.SetDatabasePath(root/"score.db");
   assert(scores.RemoveFolderGoal(goal,error));
+  assert(scores.RemoveFolderGoal(active,error));
   assert(scores.LoadFolderGoals(error)->empty());
 }
 
