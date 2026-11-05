@@ -1,6 +1,7 @@
 #include "../src/scene/play/LaneEffects.h"
 #include "graph_allocation_guard.h"
 #include "../src/scene/play/KeybombEffect.h"
+#include "../src/scene/play/CompletionWaveEffect.h"
 #include <cmath>
 #undef NDEBUG
 #include <cassert>
@@ -126,7 +127,42 @@ void testHoldGeometry() {
   assert((burst.firstColor & 0xFFFFFFU) == 0xA03FE8);
 }
 
+void testCompletionWave() {
+  struct WaveGeometry {
+    int count = 0;
+    unsigned maxAlpha = 0;
+    double weightedY = 0, weight = 0;
+    void addRectVerticalGradient(float x, float y, float width, float height,
+                                 unsigned low, unsigned high) {
+      assert(x == -4 && width == 8);
+      assert(std::isfinite(y) && std::isfinite(height));
+      assert(y >= 2 && y + height <= 12.00001F && height > 0);
+      ++count;
+      maxAlpha = std::max(maxAlpha, std::max(low >> 24, high >> 24));
+      const double mass = ((low >> 24) + (high >> 24)) * height;
+      weightedY += (y + height * .5F) * mass;
+      weight += mass;
+    }
+  };
+  using namespace completion_celebration;
+  graph_test::AllocationGuard guard;
+  graph_test::remainingAllocationBytes = 0;
+  for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect}) {
+    WaveGeometry early, late, before, expired;
+    wave::draw(early, achievement, .08F, -4, 8, 2, 12);
+    wave::draw(late, achievement, .3F, -4, 8, 2, 12);
+    wave::draw(before, achievement, -.01F, -4, 8, 2, 12);
+    wave::draw(expired, achievement, achievement == Achievement::Perfect ? .65F : .55F,
+               -4, 8, 2, 12);
+    assert(early.count > 0 && early.count <= 24 && late.count <= 24);
+    assert(early.maxAlpha > 160 && late.weight > 0);
+    assert(late.weightedY / late.weight > early.weightedY / early.weight);
+    assert(before.count == 0 && expired.count == 0);
+  }
+}
+
 int main() {
+  testCompletionWave();
   testInvisibleTailsSubmitNothing();
   testPoorHasNoKeybomb();
   testDefaultHitsStayClearlyVisible();

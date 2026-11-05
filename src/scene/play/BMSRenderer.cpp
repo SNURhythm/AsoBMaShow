@@ -26,6 +26,7 @@
 #include "Judge.h"
 #include "KeybombEffect.h"
 #include "CompletionCelebrationEffect.h"
+#include "CompletionWaveEffect.h"
 #include "../../rendering/UniformCache.h"
 #include "../../rendering/ShaderManager.h"
 #include "LaneBeamClip.h"
@@ -945,6 +946,15 @@ void BMSRenderer::drawCompletionCelebration(
   const float age = static_cast<float>(
       (static_cast<double>(frame.clock.visualTimeMicros) - completion.startMicros) / 1'000'000.0);
   if (!visible(completion.achievement, age)) return;
+
+  // The lane-space wash stays below notes and opaque lane covers. Its lane
+  // coordinates follow the current camera, width, and judgement-line position.
+  simpleBatchRenderer.setSubmitView(rendering::main_view);
+  simpleBatchRenderer.setSubmitDepth(gameplay_note_submission_order::kLaneBeamDepth);
+  simpleBatchRenderer.begin();
+  wave::draw(simpleBatchRenderer, completion.achievement, age,
+             playAreaLeftX, playAreaWidth, judgeY, upperBound);
+  simpleBatchRenderer.flush();
 
   const auto insets = rendering::uiSafeAreaInsets();
   const float width = static_cast<float>(rendering::window_width - insets.left - insets.right);

@@ -65,6 +65,12 @@ custom skins retain their authored timers and animations.
   refinement is native-only; the original authoring studies retain their backdrop.
 - A faint lime/gold radial glow above the scrim follows the lettering's fade;
   Perfect also has a smaller gold halo behind its mark. Neither glow pulses.
+- The selected soft Wave fills the lane surface beneath notes and opaque covers.
+  It shares the title's captured event/clock, lasts 550 ms for Full Combo or
+  650 ms for Perfect, and uses a borderless asymmetric gradient with a broad wake.
+  `CompletionWaveEffect.h` clips 24 gradient strips to the lane bounds (at most
+  96 additional vertices); the gameplay camera supplies perspective. No blur
+  pass, texture, screen-space overlay, or new completion event is needed.
 - The authoring review's reduced-motion switch remains a prototype option.
   Native gameplay has no corresponding motion preference yet.
 

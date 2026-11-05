@@ -2859,6 +2859,21 @@ void verifyCompletionCelebration(const RenderTarget &target) {
   const auto baseline = render(Achievement::None, 0);
   const auto fullCombo = render(Achievement::FullCombo, 250'000);
   const auto perfect = render(Achievement::Perfect, 250'000);
+  const auto waveStart = render(Achievement::Perfect, 50'000);
+  const auto waveEnd = render(Achievement::Perfect, 650'000);
+  const auto regionDiffers = [&](const auto &pixels, unsigned left, unsigned right) {
+    for (unsigned y = 520; y < 540; ++y)
+      for (unsigned x = left; x < right; ++x)
+        for (unsigned channel = 0; channel < 3; ++channel) {
+          const auto offset = (y * kDrawableWidth + x) * 4 + channel;
+          if (pixels[offset] != baseline[offset]) return true;
+        }
+    return false;
+  };
+  expect(regionDiffers(waveStart, 450, 850) && !regionDiffers(waveEnd, 450, 850),
+         "lane-space wave lights the lower field and clears at 650 ms while the title holds");
+  expect(!regionDiffers(waveStart, 20, 60),
+         "lane-space wave does not spill outside the projected playfield");
   expect(fullCombo != baseline && perfect != fullCombo,
          "native Rise renders distinct Full Combo and Perfect celebrations");
   expect(render(Achievement::Perfect, 650'000) != perfect,

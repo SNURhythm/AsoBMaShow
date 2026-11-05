@@ -27,8 +27,8 @@ Sound design is intentionally not included in this visual comparison.
 Run `node make-review.mjs --lanes` to create `out/lane-review.html`.
 Wave, Rails, and Fan compare perspective-clipped completion effects beneath
 the same Rise title. Each includes Full Combo, Perfect, and a reduced-motion
-variant. The final hit and timing are synthetic. These are authoring experiments
-only; no lane-space completion effect has been added to the native renderer.
+variant. The final hit and timing are synthetic. The selected soft Wave is now
+implemented in the native renderer; Rails and Fan remain authoring experiments.
 Matching `Lane-Wave-*`, `Lane-Rails-*`, and `Lane-Fan-*` compositions are available
 in Remotion, using the same analytic frame model as the reviewer.
 Wave is the selected direction: its borderless, feathered wash has a fast
