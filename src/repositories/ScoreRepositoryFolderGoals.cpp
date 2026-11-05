@@ -153,3 +153,31 @@ std::vector<folder_goals::Goal> ScoreRepository::TakeFolderGoalAchievements(std:
   impl_->folderGoalAchievementAttempt.clear();
   return std::exchange(impl_->folderGoalAchievements,{});
 }
+bool ScoreRepository::RemoveAchievedFolderGoals(std::span<const folder_goals::Goal> confirmed,std::string &error) {
+  profile_database_activity::WriteGuard guard;
+  std::lock_guard lock(impl_->sessionMutex);
+  error.clear();
+  if (!EnsureSessionDatabaseLocked()) { error="Score storage is unavailable."; return false; }
+  try {
+    SqliteTransactionHandle tx(impl_->sessionDatabase,"BEGIN IMMEDIATE",error);
+    if (!tx.active()) return false;
+    auto goals=folder_goals::load(impl_->sessionDatabase);
+    std::erase_if(goals,[&](const auto &goal) {
+      return std::ranges::none_of(confirmed,[&](const auto &expected) {
+        return !expected.id.empty() && goal.id==expected.id && goal.revision==expected.revision &&
+            goal.target==expected.target && folder_goals::scopeKey(goal)==folder_goals::scopeKey(expected);
+      });
+    });
+    bool changed=false;
+    if (!goals.empty()) {
+      const auto progress=impl_->folderProjector().projectAll(goals,folder_goals::loadEvidence(impl_->sessionDatabase));
+      for (std::size_t i=0;i<goals.size();++i) if (progress[i].achieved) {
+        folder_goals::remove(impl_->sessionDatabase,goals[i]);
+        changed=true;
+      }
+    }
+    if (!tx.commit(error)) return false;
+    if (changed) score_repository_detail::IncrementRevision();
+    return true;
+  } catch (const std::exception &e) { error=e.what(); return false; }
+}

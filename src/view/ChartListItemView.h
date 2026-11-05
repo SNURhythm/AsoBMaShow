@@ -23,7 +23,7 @@ public:
   void setBestScoreRank(int score, int maxScore);
   void setGoalHandler(std::function<void(const ChartMetaRecord &)> handler);
   void setGoalState(bool goal, bool achieved = false, bool recommended = false);
-  void setGoalTarget(int lampRank, std::string lamp, std::string score);
+  void setGoalTarget(int lampRank, std::string lamp, std::string score, bool lampMet = false, bool scoreMet = false);
   void onSelected() override;
   void onUnselected() override;
 

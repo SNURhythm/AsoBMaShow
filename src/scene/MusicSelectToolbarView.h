@@ -78,7 +78,7 @@ public:
   void setTaskCount(int count);
   void setViewportSize(int width, int height);
   void setGoalState(bool present, bool achieved, int lampRank, std::string lamp, std::string score,
-                    bool recommended = false, std::string coverage = {});
+                    bool recommended = false, std::string coverage = {}, bool lampMet = false, bool scoreMet = false);
 
 private:
   MusicSelectToolbarView(MusicSelectToolbarState state,
@@ -102,6 +102,7 @@ private:
   MusicSelectToolbarCallbacks callbacks_;
   std::vector<MusicSelectToolbarRenderedControl> controls_;
   std::set<MusicSelectToolbarControl> disabledControls_;
+  bool goalLampMet_ = false, goalScoreMet_ = false;
   GoalTargetBubble *goalBubble_ = nullptr;
   View *goalRecommendationBadge_ = nullptr;
   TextView *tasksBadge_ = nullptr;

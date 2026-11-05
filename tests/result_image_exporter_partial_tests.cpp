@@ -1,4 +1,5 @@
 #include "ResultImageExporter.h"
+#include "recap/ReceiptView.h"
 #include "platform/PhotoAuthorizationPolicy.h"
 
 #include "rendering/UniformCache.h"
@@ -536,6 +537,71 @@ void testPresentationExportAcceptsPlatformConsumedArtifact() {
          "library");
 }
 
+void testReceiptLayoutIgnoresDeviceSize() {
+  recap::ReceiptContent content{.title="Play recap",.profile="Player",.period="Weekly · 2026-11-02 — 2026-11-08",.footer="Before → after"};
+  for (auto &section:content.sections) { section.title="Upgrades"; section.empty="No upgrades"; }
+  auto empty=recap::makeReceipt(content); empty->applyYogaLayout();
+  const int emptyHeight=empty->getHeight();
+  expect(empty->getWidth()==960 && emptyHeight>0 && emptyHeight<600,
+      "empty receipt keeps its fixed width without a large minimum-height pad");
+  auto compactContent=content;
+  for (auto &section:compactContent.sections)
+    for (int i=0;i<12;++i) section.entries.push_back({"Chart title [ANOTHER]","LN","1200","1300","(+100)","","sl6"});
+  auto compact=recap::makeReceipt(compactContent); compact->applyYogaLayout();
+  expect(compact->getHeight()<2600,"36 ordinary records fit a compact tabular receipt");
+  int jackets=0;
+  const auto inspectJackets=[&](View *view,const auto &self)->void {
+    if (view->getName()=="recapJacket") {
+      ++jackets;
+      expect(view->getWidth()==view->getHeight() && view->getWidth()<=48,
+          "jacket and placeholder slots stay square and compact");
+    }
+    for (auto *child:view->getChildren()) self(child,self);
+  };
+  inspectJackets(compact.get(),inspectJackets);
+  expect(jackets==36,"every receipt row has a jacket or placeholder slot");
+  for (int i=0;i<80;++i) content.sections[i%3].entries.push_back(
+      {"A chart with a long title that must wrap instead of clipping at the device edge", "HCN", "1200", "1300", "+100"});
+  content.sections[0].entries[0].group="Hard Clear";
+  content.sections[0].entries[1].group="Hard Clear";
+  for (std::size_t i=2;i<content.sections[0].entries.size();++i)
+    content.sections[0].entries[i].group="Normal Clear";
+  for (auto &entry:content.sections[0].entries) {
+    entry.before="Easy Clear"; entry.beforeLamp=200;
+    entry.after=entry.group; entry.afterLamp=entry.group=="Hard Clear" ? 400 : 300;
+    entry.difficulty="★12 / sl10 / A difficulty label long enough to wrap within the receipt";
+  }
+  auto portrait=recap::makeReceipt(content); portrait->applyYogaLayout();
+  const int height=portrait->getHeight();
+  std::vector<std::string> groupHeadings;
+  for (auto *child:portrait->getChildren())
+    if (auto *text=dynamic_cast<TextView *>(child); text &&
+        (text->getText()=="Hard Clear" || text->getText()=="Normal Clear"))
+      {
+        groupHeadings.push_back(text->getText());
+        expect(text->getCornerRadius()>0,"receipt lamp headings are styled as badges");
+      }
+  expect(groupHeadings==std::vector<std::string>{"Hard Clear","Normal Clear"},
+      "receipt emits each achieved-lamp heading once in best-first order");
+  bool foundDifficulty=false;
+  const auto inspect=[&](View *view,const auto &self)->void {
+    if (auto *text=dynamic_cast<TextView *>(view); text && text->getText().starts_with("★12 / sl10")) {
+      foundDifficulty=true;
+      expect(text->getWidth()<=832,"difficulty metadata stays inside the receipt margins");
+    }
+    for (auto *child:view->getChildren()) self(child,self);
+  };
+  inspect(portrait.get(),inspect);
+  expect(foundDifficulty,"receipt includes each chart's difficulty metadata");
+  const int originalWidth=rendering::window_width, originalHeight=rendering::window_height;
+  rendering::window_width=320; rendering::window_height=480;
+  auto small=recap::makeReceipt(content); small->applyYogaLayout();
+  expect(small->getWidth()==960 && small->getHeight()==height,
+      "all upgrades fit one receipt independent of device size");
+  expect(height>emptyHeight,"receipt height grows with content");
+  rendering::window_width=originalWidth; rendering::window_height=originalHeight;
+}
+
 void testPhotoAuthorizationRecoveryPolicy() {
   using platform::PhotoAuthorizationAction;
   using platform::PhotoAuthorizationStatus;
@@ -583,6 +649,7 @@ int main() {
   testProductionPresentationExportPropagatesFailures();
   testPresentationExportAcceptsPlatformConsumedArtifact();
   testPhotoAuthorizationRecoveryPolicy();
+  testReceiptLayoutIgnoresDeviceSize();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

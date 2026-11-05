@@ -3,9 +3,13 @@
 #include "../ClearLampOrder.h"
 
 namespace chart_goals {
+// Mode 0 means all scopes; charts without long notes (scope 0) stay visible.
+inline std::string recommendationModeFilter(std::string_view column, int lnMode) {
+  return lnMode >= 1 && lnMode <= 3 ? " AND " + std::string(column) + " IN (0," + std::to_string(lnMode) + ")" : "";
+}
 // One pass over best records, never play history. The correlated library lookup
 // uses the SHA256 index, avoids duplicate chart installations, and checks LN scope.
-inline std::string recommendationCandidatesSql(bool hasGoals = false) {
+inline std::string recommendationCandidatesSql(bool hasGoals = false, int lnMode = 0) {
   return std::string(R"sql(WITH ranked AS MATERIALIZED (
     SELECT chart_sha256 AS sha256, ln_mode, score, max_score,
       CASE WHEN score*27 < max_score*6 THEN 6
@@ -26,7 +30,7 @@ inline std::string recommendationCandidatesSql(bool hasGoals = false) {
         AND r.ln_mode=CASE WHEN COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 THEN 0
           WHEN c.ln_mode BETWEEN 1 AND 3 THEN c.ln_mode ELSE r.ln_mode END
         AND (COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 OR r.ln_mode BETWEEN 1 AND 3))
-  )sql") + (hasGoals ? R"sql( AND NOT EXISTS (
+  )sql") + recommendationModeFilter("r.ln_mode", lnMode) + (hasGoals ? R"sql( AND NOT EXISTS (
         SELECT 1 FROM score_db.chart_goals g WHERE g.sha256=r.sha256 AND g.ln_mode=r.ln_mode
         AND CASE WHEN json_valid(g.body) THEN
           json_extract(g.body,'$.numerator')*27 >= r.target*json_extract(g.body,'$.denominator')
@@ -43,21 +47,24 @@ inline std::string tableOrder(std::string_view hash, int tableId) {
 inline std::string tableFilter(std::string_view hash, int tableId) {
   return tableId == 0 ? "" : " AND " + tableOrder(hash, tableId) + " IS NOT NULL";
 }
-inline std::string recommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false, bool filterChart = false) {
-  return recommendationCandidatesSql(hasGoals) +
+inline std::string recommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false, bool filterChart = false, int lnMode = 0) {
+  return recommendationCandidatesSql(hasGoals, lnMode) +
       " SELECT sha256,ln_mode,target,score,max_score,remaining FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY sha256 ORDER BY remaining,1.0*remaining/max_score,ln_mode) AS mode_choice "
       "FROM candidates AS candidate WHERE target=?1" + std::string(filterChart ? " AND candidate.sha256=?3" : "") + tableFilter("candidate.sha256", tableId) + ") AS ranked WHERE mode_choice=1"
       " ORDER BY " + (sortTable && tableId ? tableOrder("ranked.sha256", tableId) + ", " : "") +
       "remaining, 1.0*remaining/max_score, sha256 LIMIT 20 OFFSET ?2";
 }
-inline std::string gaugeRecommendationCandidatesSql(bool hasGoals = false) {
+inline std::string gaugeRecommendationCandidatesSql(bool hasGoals = false, int lnMode = 0) {
   return R"sql(WITH lamp_bests AS (
-    SELECT g.*, NULL AS combo_break FROM score_db.goal_gauge_best g
+    SELECT g.*, NULL AS remaining FROM score_db.goal_gauge_best g
     WHERE target<600 AND gap <= CASE WHEN target<=300 THEN 5 ELSE 0.1 END
     UNION ALL
     SELECT chart_sha256,ln_mode,600,0,0,0,0,combo_break,combo_break FROM score_db.goal_combo_best
     WHERE combo_break BETWEEN 1 AND 5
+    UNION ALL
+    SELECT chart_sha256,ln_mode,700,0,0,0,0,good,good FROM score_db.goal_perfect_best
+    WHERE good BETWEEN 1 AND 5
   ), candidates AS (
     SELECT g.* FROM lamp_bests g
     WHERE NOT EXISTS (SELECT 1 FROM score_db.score_sha256_clear_rank_cache b
@@ -66,13 +73,13 @@ inline std::string gaugeRecommendationCandidatesSql(bool hasGoals = false) {
         AND g.ln_mode=CASE WHEN COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 THEN 0
           WHEN c.ln_mode BETWEEN 1 AND 3 THEN c.ln_mode ELSE g.ln_mode END
         AND (COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 OR g.ln_mode BETWEEN 1 AND 3))
-  )sql" + (hasGoals ? R"sql( AND NOT EXISTS (
+  )sql" + recommendationModeFilter("g.ln_mode", lnMode) + (hasGoals ? R"sql( AND NOT EXISTS (
         SELECT 1 FROM score_db.chart_goals goal WHERE goal.sha256=g.chart_sha256 AND goal.ln_mode=g.ln_mode
         AND CASE WHEN json_valid(goal.body) THEN )sql" + clearLampOrderSql("json_extract(goal.body,'$.lamp')") + R"sql( >= )sql" + clearLampOrderSql("g.target") + R"sql( ELSE 0 END))sql" : "") + ")";
 }
-inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false, bool filterChart = false) {
-  return gaugeRecommendationCandidatesSql(hasGoals) +
-      " SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap,combo_break FROM ("
+inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false, bool filterChart = false, int lnMode = 0) {
+  return gaugeRecommendationCandidatesSql(hasGoals, lnMode) +
+      " SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap,remaining FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY chart_sha256 ORDER BY gap,death_notes,ln_mode) AS mode_choice "
       "FROM candidates AS candidate WHERE target=?1" + std::string(filterChart ? " AND candidate.chart_sha256=?3" : "") + tableFilter("candidate.chart_sha256", tableId) + ") AS ranked WHERE mode_choice=1"
       " ORDER BY " + (sortTable && tableId ? tableOrder("ranked.chart_sha256", tableId) + ", " : "") +
@@ -80,7 +87,7 @@ inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = 
 }
 
 inline std::string recommendationChartHashesSql() {
-  // The selector separately hides the badge for any configured chart goal.
+  // The selector separately hides the badge while any chart goal is unfinished.
   return "SELECT sha256 FROM (" + recommendationCandidatesSql() +
       " SELECT sha256 FROM candidates) UNION SELECT chart_sha256 FROM (" +
       gaugeRecommendationCandidatesSql() + " SELECT chart_sha256 FROM candidates)";

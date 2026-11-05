@@ -33,6 +33,7 @@ private:
   void loadRecommendations(int rank, int offset);
   void recommendGoal(const ChartMetaRecord &, int mode, int rank);
   void changeDraftMode(int mode);
+  void changeRecommendationMode(int mode);
   struct RecommendationGroup {
     int count = 0, offset = 0;
     bool expanded = false;
@@ -41,6 +42,7 @@ private:
   std::map<int, RecommendationGroup> recommendations_;
   std::vector<DifficultyTableInfo> recommendationTables_;
   int recommendationTable_ = 0;
+  int recommendationMode_ = -1;
   bool recommendationSortTable_ = false;
   std::shared_ptr<goal_navigation::State> navigationState_;
   using OverviewTab = goal_navigation::ChartTab;
@@ -55,6 +57,8 @@ private:
   void showGoal(chart_goals::Goal);
   void saveGoal();
   void removeGoal();
+  void requestRemoveAchievedGoals();
+  void removeAchievedGoals();
   void resolveChart();
   void navigate(bool practice);
   void build();
@@ -74,6 +78,7 @@ private:
   std::optional<chart_goals::Goal> editorReturnGoal_;
   std::string profileId_, message_, customRate_;
   chart_goals::ProgressPage page_;
+  std::vector<chart_goals::Goal> achievedRemoval_;
   std::optional<chart_goals::GoalProgress> selected_;
   chart_goals::Goal draft_;
   bool editing_ = false, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;

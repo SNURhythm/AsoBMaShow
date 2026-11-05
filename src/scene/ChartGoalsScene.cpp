@@ -162,7 +162,7 @@ std::map<std::string, ChartMetaRecord> loadGoalArtwork(
   }
   return result;
 }
-void lamp(View *parent, const std::string &text, int rank, bool target = false) {
+TextView *lamp(View *parent, const std::string &text, int rank, bool target = false) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Row)->setGap(10)->setAlignItems(YGAlignCenter)->setFlexShrink(0);
   if (hasClearLampColor(rank)) {
@@ -175,6 +175,7 @@ void lamp(View *parent, const std::string &text, int rank, bool target = false) 
   caption->setFlex(1)->setMinWidth(0);
   caption->setThemedColor(target ? app_theme::cyan : app_theme::textSecondary);
   parent->addView(row);
+  return caption;
 }
 std::string rateText(const chart_goals::Target &target) {
   std::ostringstream text;
@@ -197,24 +198,27 @@ std::string scoreTarget(const chart_goals::Target &target) {
 std::string scope(const chart_goals::Goal &goal) {
   return goal.longNoteMode == 0 ? i18n::tr("goals.ui.shared_scope") : long_note_mode::idFromValue(goal.longNoteMode);
 }
-void targets(View *parent, const chart_goals::Target &target) {
+void targets(View *parent, const chart_goals::Target &target, const chart_goals::Progress *progress = nullptr) {
+  const bool combined = target.lamp >= 0 && target.scoreNumerator > 0;
   parent = goal_ui::targetPanel(parent);
   if (target.lamp >= 0) {
     const auto value = kombo::lampLabel(target.lamp);
     lamp(parent, target.lamp >= kClearTypeFullComboRank ? value
-        : i18n::format("kombo.ui.at_least", {{"value", value}}), target.lamp, true);
+        : i18n::format("kombo.ui.at_least", {{"value", value}}), target.lamp, true)->setStrikethrough(combined && progress && progress->lampMet);
   }
   if (target.scoreNumerator > 0) {
     const auto value = scoreTarget(target);
-    label(parent, target.scoreNumerator >= target.scoreDenominator ? value
-        : i18n::format("kombo.ui.at_least", {{"value", value}}), 28)->setThemedColor(app_theme::cyan);
+    auto *score = label(parent, target.scoreNumerator >= target.scoreDenominator ? value
+        : i18n::format("kombo.ui.at_least", {{"value", value}}), 28);
+    score->setThemedColor(app_theme::cyan);
+    score->setStrikethrough(combined && progress && progress->scoreMet);
   }
 }
 void orderGoalRows(std::vector<chart_goals::GoalProgress> &rows) {
   std::stable_partition(rows.begin(), rows.end(), [](const auto &entry) { return !entry.progress.achieved; });
 }
 void goalSummary(View *parent, const chart_goals::GoalProgress &entry) {
-  targets(parent, entry.goal.target);
+  targets(parent, entry.goal.target, &entry.progress);
   label(parent, scope(entry.goal), 18)->setThemedColor(app_theme::textSecondary);
   auto *status = label(parent, i18n::tr(entry.progress.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"), 18);
   status->setAlignSelf(YGAlignFlexStart)->setPadding(Edge::Left, 8)->setPadding(Edge::Right, 8)->setCornerRadius(8);
@@ -268,6 +272,8 @@ bool ChartGoalsScene::checkProfile() {
   sourcePicker_ = false; editorReturnGoal_.reset();
   recommendations_.clear(); recommendationRank_.reset(); recommendationTable_ = 0; recommendationSortTable_ = false;
   *navigationState_ = {}; overviewTab_ = OverviewTab::Ongoing;
+  recommendationMode_ = long_note_mode::valueFromId(context.settings.selectedLnMode);
+  achievedRemoval_.clear();
   draft_ = {}; page_ = {}; offset_ = achievedOffset_ = pickerOffset_ = 0;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
@@ -283,6 +289,8 @@ void ChartGoalsScene::later(std::function<void()> action) {
 }
 void ChartGoalsScene::init() {
   checkProfile();
+  if (recommendationMode_ < 0) recommendationMode_ = navigationState_->chartRecommendationMode.value_or(
+      long_note_mode::valueFromId(context.settings.selectedLnMode));
   if (initialRecommendations_ && initial_) {
     recommendationChart_ = std::exchange(initial_, {});
     initialMode_.reset();
@@ -328,7 +336,7 @@ void ChartGoalsScene::reload() {
             return table.id == recommendationTable_;
           })) recommendationTable_ = 0;
       for (const auto &[rank, count] : session->GoalRecommendationCounts(recommendationTable_,
-          recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{})) {
+          recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{}, recommendationMode_)) {
         auto &group = recommendations_[rank];
         group.count = count;
         group.offset = std::clamp(previousOffsets[rank], 0,
@@ -381,7 +389,7 @@ void ChartGoalsScene::loadRecommendations(int rank, int offset) {
     auto session = context.chartRepository.OpenSession(&context.scoreRepository);
     if (!session) throw std::runtime_error("Chart storage is unavailable.");
     const auto candidates = session->GoalRecommendations(rank, offset, recommendationTable_, recommendationSortTable_,
-        recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{});
+        recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{}, recommendationMode_);
     ChartMetaQuery query;
     query.allowedSha256 = std::vector<std::string>{};
     for (const auto &entry : candidates) query.allowedSha256->push_back(entry.sha256);
@@ -412,6 +420,16 @@ void ChartGoalsScene::recommendGoal(const ChartMetaRecord &record, int mode, int
   customScore_ = draft_.target.scoreNumerator > 0 && draft_.target.scoreDenominator != 27;
   customRate_ = rateText(draft_.target);
 }
+void ChartGoalsScene::changeRecommendationMode(int mode) {
+  if (mode < 0 || mode > 3 || mode == recommendationMode_) return;
+  recommendationMode_ = mode;
+  for (auto &[rank, group] : recommendations_) group.offset = 0;
+  reload();
+  if (!recommendationRank_ && !recommendations_.empty()) {
+    recommendationRank_ = recommendations_.begin()->first;
+    loadRecommendations(*recommendationRank_, 0);
+  }
+}
 void ChartGoalsScene::changeDraftMode(int mode) {
   draft_.longNoteMode = mode;
 }
@@ -426,7 +444,7 @@ void ChartGoalsScene::showChartGoals(const ChartMetaRecord &record, int mode) {
   else if (page_.goals.empty()) showGoal({.chart=record.meta, .longNoteMode=mode});
 }
 void ChartGoalsScene::showGoal(chart_goals::Goal goal) {
-  message_.clear(); confirmRemove_ = false;
+  message_.clear(); confirmRemove_ = false; achievedRemoval_.clear();
   std::string error;
   selected_.reset();
   if (goal.id > 0)
@@ -477,6 +495,25 @@ void ChartGoalsScene::saveGoal() {
   draft_ = std::move(candidate);
   selected_ = chart_goals::GoalProgress{draft_, {}};
   editing_ = false; editorReturnGoal_.reset(); message_.clear(); reload();
+}
+void ChartGoalsScene::requestRemoveAchievedGoals() {
+  if (!checkProfile()) { reload(); return; }
+  achievedRemoval_.clear();
+  reload();
+  if (loadFailed_) return;
+  for (const auto &entry : page_.goals)
+    if (entry.progress.achieved) achievedRemoval_.push_back(entry.goal);
+}
+void ChartGoalsScene::removeAchievedGoals() {
+  if (!checkProfile()) { reload(); return; }
+  if (achievedRemoval_.empty()) return;
+  std::string error;
+  if (!context.scoreRepository.RemoveAchievedChartGoals(achievedRemoval_, error)) {
+    SDL_Log("Cannot remove achieved chart goals: %s", error.c_str());
+    message_ = i18n::tr("goals.ui.storage_error"); return;
+  }
+  achievedRemoval_.clear(); achievedOffset_ = 0;
+  message_.clear(); reload();
 }
 void ChartGoalsScene::removeGoal() {
   if (!checkProfile()) { reload(); return; }
@@ -530,14 +567,14 @@ std::string ChartGoalsScene::scrollKey() const {
     const int rank = recommendationRank_.value_or(-1);
     const auto found = recommendations_.find(rank);
     return "chart-recommend:" + recommendationChart_->meta.SHA256 + ":" + std::to_string(rank) + ":" +
-        std::to_string(found == recommendations_.end() ? 0 : found->second.offset);
+        std::to_string(found == recommendations_.end() ? 0 : found->second.offset) + ":" + std::to_string(recommendationMode_);
   }
   if (overviewTab_ == OverviewTab::Recommendations) {
     const int rank = recommendationRank_.value_or(-1);
     const auto found = recommendations_.find(rank);
     const int page = found == recommendations_.end() ? 0 : found->second.offset;
     return "recommend:" + std::to_string(rank) + ":" + std::to_string(page) + ":" +
-        std::to_string(recommendationTable_) + ":" + std::to_string(recommendationSortTable_);
+        std::to_string(recommendationTable_) + ":" + std::to_string(recommendationSortTable_) + ":" + std::to_string(recommendationMode_);
   }
   return overviewTab_ == OverviewTab::Ongoing ? "ongoing:" + std::to_string(offset_)
                                                : "achieved:" + std::to_string(achievedOffset_);
@@ -572,7 +609,7 @@ void ChartGoalsScene::build() {
     statusNavigation->setFlexDirection(stacked ? FlexDirection::Row : FlexDirection::Column)->setGap(6)->setFlexShrink(0);
     const auto tab = [this, navigation=statusNavigation, stacked](const std::string &title, OverviewTab value) {
       auto *button = action(navigation, title, [this, value] { later([this, value] {
-        overviewTab_ = value;
+        overviewTab_ = value; achievedRemoval_.clear();
         if (value == OverviewTab::Recommendations && !recommendationRank_ && !recommendations_.empty()) {
           recommendationRank_ = recommendations_.begin()->first;
           loadRecommendations(*recommendationRank_, 0);
@@ -680,7 +717,7 @@ void ChartGoalsScene::build() {
       action(detail, i18n::tr("goals.ui.save"), [this] { later([this] { saveGoal(); }); }, app_theme::ActionCategory::Primary);
       action(detail, i18n::tr("goals.ui.cancel"), [this] { back(); });
     } else {
-      targets(detail, draft_.target);
+      targets(detail, draft_.target, &selected_->progress);
       const auto &progress = selected_->progress;
       label(detail, i18n::tr(progress.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"), 25)
           ->setThemedColor(progress.achieved ? app_theme::lime : app_theme::textPrimary);
@@ -750,6 +787,17 @@ void ChartGoalsScene::build() {
     if (overviewTab_ == OverviewTab::Recommendations) {
       label(body, i18n::tr("goals.ui.recommendations"), 24);
       if (recommendationChart_) goalIdentity(body, recommendationChart_->meta, &*recommendationChart_, 24);
+      label(body, i18n::tr("play_options.long_note_mode.label"), 18);
+      auto *modes = new View();
+      modes->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+      body->addView(modes);
+      for (int mode : {0, 1, 2, 3}) {
+        auto *button = action(modes, mode == 0 ? i18n::tr("goals.ui.all_modes") : long_note_mode::idFromValue(mode),
+            [this, mode] { later([this, mode] { changeRecommendationMode(mode); }); },
+            mode == recommendationMode_ ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
+        button->setFlex(1);
+        button->setSelected(mode == recommendationMode_);
+      }
       if (goal_navigation::stackedNavigation(goalContentWidth(), rendering::compactMenuCanvasActive)) {
         std::vector<DropdownView::Option> ranks;
         for (const auto &[rank, group] : recommendations_)
@@ -766,6 +814,7 @@ void ChartGoalsScene::build() {
       }
       label(body, i18n::tr("goals.ui.near_help"), 18);
       label(body, i18n::tr("goals.ui.gauge_near_help"), 18);
+      label(body, i18n::tr("goals.ui.perfect_near_help"), 18);
       if (!recommendationChart_) {
         std::vector<DropdownView::Option> tables{{"0", i18n::tr("goals.ui.all_tables")}};
         for (const auto &table : recommendationTables_)
@@ -798,8 +847,8 @@ void ChartGoalsScene::build() {
         if (rank>=50) {
           std::ostringstream value;
           value << std::fixed << std::setprecision(1);
-          if (rank==600) {
-            label(row, i18n::format("goals.ui.combo_breaks", {{"count",std::to_string(candidate.remaining)}}), 18);
+          if (rank==600 || rank==700) {
+            label(row, i18n::format(rank==700 ? "goals.ui.perfect_goods" : "goals.ui.combo_breaks", {{"count",std::to_string(candidate.remaining)}}), 18);
           } else if (rank<=300) {
             value << candidate.gaugeValue;
             std::ostringstream border; border << candidate.gaugeBorder;
@@ -835,6 +884,15 @@ void ChartGoalsScene::build() {
           later([this, achieved] { overviewTab_ = achieved ? OverviewTab::Ongoing : OverviewTab::Achieved; });
         });
         action(body, i18n::tr("goals.ui.browse_charts"), [this] { browseCharts(); });
+      }
+      if (achieved && count > 0) {
+        if (achievedRemoval_.empty()) {
+          action(body, i18n::tr("goals.ui.remove_all_achieved"), [this] { later([this] { requestRemoveAchievedGoals(); }); }, app_theme::ActionCategory::Destructive);
+        } else {
+          label(body, i18n::format("goals.ui.remove_all_achieved_charts_confirm", {{"count", std::to_string(achievedRemoval_.size())}}), 18);
+          action(body, i18n::tr("goals.ui.remove"), [this] { later([this] { removeAchievedGoals(); }); }, app_theme::ActionCategory::Destructive);
+          action(body, i18n::tr("goals.ui.cancel"), [this] { later([this] { achievedRemoval_.clear(); message_.clear(); }); });
+        }
       }
       const auto artwork = loadGoalArtwork(context, entries, offset);
       for (int i = offset; i < std::min(count, offset + chart_goals::pageSize); ++i) {
@@ -892,6 +950,7 @@ void ChartGoalsScene::rememberNavigation() {
   if (scroll_ && !renderedScrollKey_.empty()) scrollOffsets_[renderedScrollKey_] = scroll_->getScrollOffset();
   if (navigationScroll_) navigationOffset_ = navigationScroll_->getScrollOffset();
   navigationState_->chartTab = overviewTab_;
+  navigationState_->chartRecommendationMode = recommendationMode_;
   navigationState_->chartOffset = offset_; navigationState_->chartAchievedOffset = achievedOffset_;
   navigationState_->chartScrollOffsets = scrollOffsets_; navigationState_->chartNavigationOffset = navigationOffset_;
   if (!recommendationChart_) {
@@ -912,12 +971,13 @@ void ChartGoalsScene::browseCharts() {
 }
 void ChartGoalsScene::allGoals() {
   later([this] {
-    editing_ = confirmRemove_ = sourcePicker_ = false;
+    editing_ = confirmRemove_ = sourcePicker_ = false; achievedRemoval_.clear();
     selected_.reset(); pickerChart_.reset(); recommendationChart_.reset(); editorReturnGoal_.reset();
     message_.clear(); reload();
   });
 }
 void ChartGoalsScene::back() {
+  if (!achievedRemoval_.empty()) { later([this] { achievedRemoval_.clear(); message_.clear(); }); return; }
   if (confirmRemove_) { later([this] { confirmRemove_ = false; }); return; }
   if (editing_ && selected_) { later([this] {
     draft_ = selected_->goal; editing_ = false; message_.clear(); reload();

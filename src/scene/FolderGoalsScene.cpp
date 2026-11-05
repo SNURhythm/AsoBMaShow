@@ -76,7 +76,7 @@ bool FolderGoalsScene::checkProfile() {
   if (profile_==context.profileManager.activeProfile().id) return true;
   profile_=context.profileManager.activeProfile().id;
   picker_=newGoal_=sourceOrigin_=false; editorReturn_.reset(); renderedPage_.clear();
-  initial_.reset(); goals_.clear(); draft_={}; progress_.reset();
+  initial_.reset(); goals_.clear(); achievedRemoval_.clear(); draft_={}; progress_.reset();
   *navigationState_={};
   detail_=editing_=confirmRemove_=failed_=achieved_=false; offset_=pickerOffset_=0; rate_=scoreRate_="100"; message_.clear();
   return false;
@@ -121,7 +121,7 @@ void FolderGoalsScene::choose(folder_goals::Goal goal) {
   editing_=newGoal_=draft_.id.empty();
   editorReturn_.reset();
   if (found!=goals_.end()) draft_=found->goal;
-  detail_=true; confirmRemove_=false; message_.clear();
+  detail_=true; confirmRemove_=false; achievedRemoval_.clear(); message_.clear();
   rate_=folder_goals::percentText(folder_goals::targetPercent(draft_.target)); rate_.pop_back();
   scoreRate_=folder_goals::percentText(folder_goals::scoreTargetPercent(draft_.target)); scoreRate_.pop_back();
   auto preview=context.scoreRepository.PreviewFolderGoal(draft_,message_);
@@ -202,6 +202,20 @@ void FolderGoalsScene::saveGoal() {
   if (!context.scoreRepository.SaveFolderGoal(draft_,message_)) return;
   editing_=newGoal_=false; editorReturn_.reset(); reload();
 }
+void FolderGoalsScene::requestRemoveAchievedGoals() {
+  if (!checkProfile()) { reload(); return; }
+  achievedRemoval_.clear();
+  reload();
+  if (failed_) return;
+  for (const auto &entry:goals_) if (entry.progress.achieved) achievedRemoval_.push_back(entry.goal);
+}
+void FolderGoalsScene::removeAchievedGoals() {
+  if (!checkProfile()) { reload(); return; }
+  if (achievedRemoval_.empty()) return;
+  if (!context.scoreRepository.RemoveAchievedFolderGoals(achievedRemoval_,message_)) return;
+  achievedRemoval_.clear(); offset_=0;
+  message_.clear(); reload();
+}
 void FolderGoalsScene::removeGoal() {
   if (!context.scoreRepository.RemoveFolderGoal(draft_,message_)) return;
   detail_=editing_=newGoal_=confirmRemove_=false; progress_.reset(); reload();
@@ -249,7 +263,7 @@ void FolderGoalsScene::build() {
     navigationTabs_=new View(); navigationTabs_->setGap(6)->setFlexShrink(0); navigation->addView(navigationTabs_);
     for (bool achieved:{false,true}) {
       auto *tab=button(navigationTabs_,i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),
-          [this,achieved]{later([this,achieved]{achieved_=achieved;offset_=achieved ? navigationState_->folderAchievedOffset : navigationState_->folderOffset;});},achieved_==achieved);
+          [this,achieved]{later([this,achieved]{achieved_=achieved;achievedRemoval_.clear();offset_=achieved ? navigationState_->folderAchievedOffset : navigationState_->folderOffset;});},achieved_==achieved);
       if (auto *label=dynamic_cast<TextView *>(tab->getContentView())) label->setWrap(true);
     }
     navigationScroll_->setContentView(navigation);
@@ -375,6 +389,17 @@ void FolderGoalsScene::build() {
       text(body,i18n::format("goals.ui.source_counts",{{"active",std::to_string(entries.size()-done)},{"achieved",std::to_string(done)}}),18);
       button(body,i18n::tr("goals.ui.add"),[this]{later([this]{addGoal();});},true);
     }
+    if (!picker_ && achieved_ && !entries.empty()) {
+      if (achievedRemoval_.empty()) {
+        auto *remove=button(body,i18n::tr("goals.ui.remove_all_achieved"),[this]{later([this]{requestRemoveAchievedGoals();});});
+        action_button::applyStyle(remove,dynamic_cast<TextView *>(remove->getContentView()),app_theme::ActionCategory::Destructive);
+      } else {
+        text(body,i18n::format("goals.ui.remove_all_achieved_folders_confirm",{{"count",std::to_string(achievedRemoval_.size())}}),18);
+        auto *remove=button(body,i18n::tr("goals.ui.remove"),[this]{later([this]{removeAchievedGoals();});});
+        action_button::applyStyle(remove,dynamic_cast<TextView *>(remove->getContentView()),app_theme::ActionCategory::Destructive);
+        button(body,i18n::tr("goals.ui.cancel"),[this]{later([this]{achievedRemoval_.clear();message_.clear();});});
+      }
+    }
     int start=picker_ ? pickerOffset_ : offset_;
     start=std::min(start,entries.empty() ? 0 : static_cast<int>((entries.size()-1)/20*20));
     (picker_ ? pickerOffset_ : offset_)=start;
@@ -429,6 +454,7 @@ void FolderGoalsScene::layout() {
   if (navigationScroll_) navigationScroll_->refreshContentLayout();
 }
 void FolderGoalsScene::back() {
+  if (!achievedRemoval_.empty()) { later([this]{achievedRemoval_.clear();message_.clear();}); return; }
   if (confirmRemove_) { later([this]{confirmRemove_=false;}); return; }
   if (editing_) {
     if (newGoal_ && !editorReturn_ && sourceOrigin_ && !picker_) {

@@ -10,6 +10,8 @@
 #include "Utils.h"
 #include "path.h"
 #include "rendering/Color.h"
+#include "rendering/PngStripWriter.h"
+#include "rendering/ImageReadback.h"
 #include "rendering/RenderPlan.h"
 #include "rendering/SimpleBatchRenderer.h"
 #include "rendering/common.h"
@@ -914,6 +916,94 @@ ResultImageExportResult ResultImageExporter::Share(
 #else
   return {.message = "Result sharing is available on mobile"};
 #endif
+}
+
+ResultImageExportResult ResultImageExporter::ExportView(
+    ApplicationContext &context, const std::string &title, View &view,
+    const result_image_export::ExportOptions &options) {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string authorizationError;
+  if (options.saveToPhotos && !RequestIOSPhotoAddAuthorization(authorizationError))
+    return {.message = authorizationError};
+#endif
+  const auto directory = options.outputDirectory.empty()
+      ? Utils::GetDocumentsPath("result_exports") : options.outputDirectory;
+  if (const auto error = ensureExportDirectoryError(directory, "Cannot create image directory"))
+    return {.message = *error};
+  const auto path = directory / (sanitizeFileNamePart(title) + "_" + makeTimestamp() + ".png");
+  const int width = view.getWidth(), height = view.getHeight();
+  const int maximum = bgfx::getCaps()->limits.maxTextureSize;
+  if (width <= 0 || width > maximum || height <= 0)
+    return {.outputPath = path, .message = "Invalid receipt canvas size"};
+  PngStripWriter writer(path, width, height);
+  if (!writer.error().empty()) return {.outputPath = path, .message = writer.error()};
+  {
+    ScopedResultImageBgfxAccess access(context);
+    const ResultImageRenderGeometryState geometry;
+    const int originalX = view.getX(), originalY = view.getY();
+    const auto originalPositionType = YGNodeStyleGetPositionType(view.getNode());
+    auto restore = makeScopeExit([&] {
+      view.setPositionNoLayout(originalX, originalY, originalPositionType);
+      restoreResultImageRenderGeometry(geometry);
+      restorePrimaryRenderViews(context);
+    });
+    const int stripHeight = std::min({2048, maximum, height});
+    const auto output = bgfx::createTexture2D(width, stripHeight, false, 1,
+        bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_RT);
+    const auto readback = bgfx::createTexture2D(width, stripHeight, false, 1,
+        bgfx::TextureFormat::BGRA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+    bgfx::FrameBufferHandle framebuffer = BGFX_INVALID_HANDLE;
+    auto cleanup = makeScopeExit([&] {
+      restore.runNow();
+      if (bgfx::isValid(framebuffer)) bgfx::destroy(framebuffer);
+      if (bgfx::isValid(readback)) bgfx::destroy(readback);
+      if (bgfx::isValid(output)) bgfx::destroy(output);
+    });
+    if (!bgfx::isValid(output) || !bgfx::isValid(readback))
+      return {.outputPath = path, .message = "Cannot create receipt render targets"};
+    framebuffer = bgfx::createFrameBuffer(1, &output, false);
+    if (!bgfx::isValid(framebuffer))
+      return {.outputPath = path, .message = "Cannot create receipt framebuffer"};
+    rendering::window_width = rendering::render_width = rendering::ui_view_width = width;
+    rendering::window_height = rendering::render_height = rendering::ui_view_height = stripHeight;
+    rendering::ui_scale_x = rendering::ui_scale_y = 1;
+    rendering::ui_offset_x = rendering::ui_offset_y = 0;
+    std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * stripHeight * 4);
+    for (int offset = 0; offset < height;) {
+      if (context.appInBackground.load())
+        return {.outputPath = path, .message = "Receipt export interrupted by backgrounding"};
+      const int rows = std::min(stripHeight, height - offset);
+      configureResultImageViews(width, stripHeight, framebuffer);
+      view.setPositionNoLayout(0, -offset);
+      context.uiBatchRenderer.beginFrame();
+      RenderContext renderContext(context.uiBatchRenderer);
+      renderContext.pushScissor(0, 0, width, stripHeight);
+      bgfx::touch(rendering::clear_view);
+      bgfx::touch(rendering::ui_view);
+      {
+        RenderContext::UiBatchScope batch(renderContext);
+        view.render(renderContext);
+      }
+      bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+      auto currentFrame = bgfx::frame();
+      const auto expectedFrame = bgfx::readTexture(readback, pixels.data());
+      while (currentFrame < expectedFrame) currentFrame = bgfx::frame();
+      rendering::normalizeBgraReadback(pixels, width, stripHeight, bgfx::getCaps()->originBottomLeft);
+      if (!writer.append(std::span(pixels.data(), static_cast<std::size_t>(width) * rows * 4), rows))
+        return {.outputPath = path, .message = writer.error()};
+      offset += rows;
+    }
+  }
+  if (!writer.finish()) return {.outputPath = path, .message = writer.error()};
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string photosError;
+  if (options.saveToPhotos) {
+    if (!SaveImageToIOSPhotos(fspath_to_utf8(path), photosError))
+      return {.outputPath = path, .message = photosError};
+    return {.success = true, .outputPath = path, .message = "Saved to Photos", .artifactRetained = false};
+  }
+#endif
+  return {.success = true, .outputPath = path, .message = "Exported"};
 }
 
 ResultImageExportResult ResultImageExporter::ExportSkin(

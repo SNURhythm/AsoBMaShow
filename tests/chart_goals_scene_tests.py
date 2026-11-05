@@ -14,7 +14,7 @@ class ChartGoalsSceneTests(unittest.TestCase):
         methods = "\n".join(extract(scene, signature) for signature in (
             "std::string rateText(", "void ChartGoalsScene::init(", "void ChartGoalsScene::showGoal(", "void ChartGoalsScene::showChartGoals(",
             "bool ChartGoalsScene::checkProfile(", "void ChartGoalsScene::later(", "void ChartGoalsScene::back(", "void ChartGoalsScene::browseCharts(",
-            "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal(", "void ChartGoalsScene::recommendGoal(", "void ChartGoalsScene::changeDraftMode("))
+            "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal(", "void ChartGoalsScene::requestRemoveAchievedGoals(", "void ChartGoalsScene::removeAchievedGoals(", "void ChartGoalsScene::recommendGoal(", "void ChartGoalsScene::changeDraftMode(", "void ChartGoalsScene::changeRecommendationMode("))
         fixture = (root / "tests/chart_goals_scene_fixture.cpp").read_text()
         fixture = fixture.replace("PRODUCTION_METHODS", methods)
         with tempfile.TemporaryDirectory(prefix="asobmashow-goals-scene-") as directory:
@@ -121,6 +121,84 @@ int main() {
             FixtureCompiler.from_environment().build([source], binary, source.parent, includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_chart_flags_route_achieved_goals_to_recommendations(self):
+        root = Path(__file__).resolve().parents[1]
+        methods = extract((root / "src/scene/MainMenuScene.cpp").read_text(), "void MainMenuScene::openChartGoal(")
+        methods += "\n" + extract((root / "src/scene/MusicSelectScene.cpp").read_text(), "void MusicSelectScene::openChartGoals(")
+        fixture = r'''
+#include <cassert>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+struct ChartMetaRecord { struct { std::string SHA256="chart", BmsPath="chart.bms"; } meta; bool unavailable=false, solidArchive=false; };
+namespace long_note_mode { int valueFromId(const std::string &) { return 0; } }
+template<class T> int scoreLongNoteModeForClearLamp(const T &, int) { return 0; }
+namespace folder_goals { struct Source {}; }
+struct Index {
+  std::optional<int> mode;
+  bool achieved=false;
+  std::optional<int> modeFor(const std::string &, int) const { return mode; }
+  bool allAchieved(const std::string &) const { return achieved; }
+};
+struct Recommendations { bool present=false; bool contains(const std::string &) const { return present; } };
+struct SceneReturnTarget { static SceneReturnTarget Retained(void *) { return {}; } };
+struct ChartGoalsScene {
+  bool recommendations;
+  template<class C, class Select, class Folder>
+  ChartGoalsScene(C &, SceneReturnTarget, std::optional<ChartMetaRecord>, Select, std::optional<int>, bool rec, Folder)
+      : recommendations(rec) {}
+};
+struct Manager { std::optional<bool> recommendations; void changeScene(std::unique_ptr<ChartGoalsScene> scene, bool) { recommendations=scene->recommendations; } };
+struct Context {
+  bool storageMaintenanceActive=false;
+  struct { struct Profile { std::string id="profile"; } profile; Profile activeProfile() { return profile; } } profileManager;
+  struct { std::string selectedLnMode="LN"; } settings;
+  struct { Index index; std::optional<Index> LoadChartGoalIndex(std::string &) { return index; } } scoreRepository;
+  Manager manager; Manager *sceneManager=&manager;
+};
+struct MainMenuScene {
+  Context context;
+  Index chartGoalIndex;
+  Recommendations chartGoalRecommendations;
+  struct { std::string longNoteMode="LN"; } profileSelections;
+  std::function<bool()> deferred;
+  std::optional<bool> opened;
+  void defer(std::function<bool()> fn, int, bool) { deferred=std::move(fn); }
+  void openChartGoals(std::optional<ChartMetaRecord>, std::optional<int>, bool rec) { opened=rec; }
+  void openChartGoal(const ChartMetaRecord &);
+};
+struct MusicSelectScene {
+  Context context;
+  bool launching_=false, failed_=false;
+  Recommendations toolbarGoalRecommendations_;
+  std::optional<std::pair<folder_goals::Source,int>> pendingFolderGoalSelection_;
+  std::string pendingFolderGoalProfile_;
+  void queueGoalSelection(const ChartMetaRecord &, int, const std::string &) {}
+  void openChartGoals(std::optional<ChartMetaRecord>, bool recommendations=false);
+};
+METHODS
+int main() {
+  ChartMetaRecord record;
+  for (const bool saved : {false,true}) for (const bool achieved : {false,true}) for (const bool recommended : {false,true}) {
+    const bool expected=recommended && (!saved || achieved);
+    Index index{saved ? std::optional<int>{0} : std::nullopt, saved && achieved};
+    MainMenuScene main; main.chartGoalIndex=index; main.chartGoalRecommendations.present=recommended;
+    main.openChartGoal(record); assert(!main.opened); main.deferred(); assert(main.opened==expected);
+    MusicSelectScene custom; custom.context.scoreRepository.index=index; custom.toolbarGoalRecommendations_.present=recommended;
+    custom.openChartGoals(record); assert(custom.context.manager.recommendations==expected);
+  }
+  MainMenuScene stale; stale.openChartGoal(record); stale.context.profileManager.profile.id="changed";
+  stale.deferred(); assert(!stale.opened);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="goals-flag-routing-") as directory:
+            source, binary = Path(directory) / "routing.cpp", Path(directory) / "routing"
+            source.write_text(fixture.replace("METHODS", methods))
+            FixtureCompiler.from_environment().build([source], binary, source.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_result_goal_target_is_frozen_for_recalled_and_live_results(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/ResultScene.cpp").read_text()
@@ -172,7 +250,7 @@ struct ChartGoalsScene {
   std::map<std::string,float> scrollOffsets_;
   float navigationOffset_=0;
   goal_navigation::ChartTab overviewTab_=goal_navigation::ChartTab::Achieved;
-  int offset_=40, achievedOffset_=20, recommendationTable_=7;
+  int offset_=40, achievedOffset_=20, recommendationTable_=7, recommendationMode_=2;
   bool recommendationSortTable_=true;
   std::optional<int> recommendationChart_, recommendationRank_=24;
   struct Group { int offset; }; std::map<int,Group> recommendations_{{24,{20}}, {26,{40}}};
@@ -185,6 +263,7 @@ int main() {
   assert(state.chartScrollOffsets.at("achieved:20")==123 && state.chartNavigationOffset==45);
   assert(state.chartRecommendationRank==24 && state.chartRecommendationOffsets.at(26)==40);
   assert(state.chartRecommendationTable==7 && state.chartRecommendationSortTable);
+  assert(state.chartRecommendationMode==2);
   s.recommendationChart_=1; s.recommendationRank_=27; s.rememberNavigation();
   assert(state.chartRecommendationRank==24); // Scoped recommendations do not replace the global overview.
 }
@@ -212,7 +291,7 @@ struct ChartGoalsScene {
  struct Record { struct { std::string SHA256; } meta; };
  std::optional<Record> recommendationChart_, pickerChart_;
  bool editing_=false, recommendationSortTable_=false;
- int recommendationTable_=0, offset_=0, achievedOffset_=0, pickerOffset_=0;
+ int recommendationTable_=0, recommendationMode_=1, offset_=0, achievedOffset_=0, pickerOffset_=0;
  struct Group { int offset=0; }; std::map<int, Group> recommendations_;
  std::string scrollKey() const;
 };
@@ -221,8 +300,10 @@ int main() {
  ChartGoalsScene s; auto ongoing=s.scrollKey(); s.offset_=20; assert(s.scrollKey()!=ongoing);
  s.overviewTab_=ChartGoalsScene::OverviewTab::Recommendations; s.recommendationRank_=24;
  s.recommendations_[24].offset=20; auto page=s.scrollKey(); s.recommendations_[24].offset=0; assert(page!=s.scrollKey());
+ auto filtered=s.scrollKey(); s.recommendationMode_=2; assert(s.scrollKey()!=filtered);
  auto ordinary=s.scrollKey(); s.recommendationChart_=ChartGoalsScene::Record{{"chart"}};
- assert(s.scrollKey()!=ordinary); s.recommendationChart_.reset(); assert(s.scrollKey()==ordinary);
+ assert(s.scrollKey()!=ordinary); auto scoped=s.scrollKey(); s.recommendationMode_=3; assert(s.scrollKey()!=scoped);
+ s.recommendationMode_=2; s.recommendationChart_.reset(); assert(s.scrollKey()==ordinary);
  s.selected_=1; s.draft_.chart.SHA256="chart"; auto detail=s.scrollKey(); s.editing_=true; assert(s.scrollKey()!=detail);
  s.editing_=false; s.draft_.id=2; assert(s.scrollKey()!=detail);
  s.draft_.longNoteMode=2; assert(s.scrollKey()!=detail);
@@ -245,20 +326,27 @@ int main() {
 #include <vector>
 #include <initializer_list>
 #include <utility>
-struct View { void setThemedColor(int) {} };
+struct View { void setThemedColor(int) {} void setStrikethrough(bool b) { strikes.push_back(b); } static inline std::vector<bool> strikes; };
 namespace goal_ui { View *targetPanel(View *v) { return v; } }
 namespace app_theme { constexpr int cyan=1; }
-namespace chart_goals { struct Target { int lamp, scoreNumerator, scoreDenominator; }; }
+namespace chart_goals { struct Target { int lamp, scoreNumerator, scoreDenominator; }; struct Progress { bool lampMet=false,scoreMet=false; }; }
 namespace kombo { std::string lampLabel(int n) { return n == 600 ? "FULL COMBO" : "HARD"; } }
 constexpr int kClearTypeFullComboRank = 600;
 std::vector<std::string> labels;
-void lamp(View *, const std::string &s, int, bool) { labels.push_back(s); }
+View *lamp(View *v, const std::string &s, int, bool) { labels.push_back(s); return v; }
 View *label(View *v, const std::string &s, int) { labels.push_back(s); return v; }
 std::string scoreTarget(const chart_goals::Target &t) { return t.scoreDenominator == 10000 ? "100.00% EX" : (t.scoreNumerator == t.scoreDenominator ? "MAX" : "AAA"); }
 namespace i18n { std::string format(const char *, std::initializer_list<std::pair<std::string,std::string>> values) { return values.begin()->second + " or above"; } }
 METHOD
 int main() {
  View v;
+ chart_goals::Progress progress{true,false};
+ targets(&v, {400,24,27}, &progress);
+ assert((View::strikes == std::vector<bool>{true,false}));
+ View::strikes.clear(); labels.clear();
+ progress={false,true}; targets(&v,{400,24,27},&progress);
+ assert((View::strikes == std::vector<bool>{false,true}));
+ View::strikes.clear(); labels.clear();
  targets(&v, {400,24,27});
  assert((labels == std::vector<std::string>{"HARD or above", "AAA or above"}));
  labels.clear(); targets(&v, {600,27,27});
@@ -293,7 +381,8 @@ struct ChartMetaQuery { std::optional<std::vector<std::string>> allowedSha256; b
 struct Charts {
   ScoreRepository *active=nullptr;
   struct Session {
-    std::vector<GoalRecommendation> GoalRecommendations(int,int,int,bool,const std::string &hash = {}) {
+    std::vector<GoalRecommendation> GoalRecommendations(int,int,int,bool,const std::string &hash = {}, int mode = 0) {
+      assert(mode == 2);
       return hash == "active-chart" ? std::vector<GoalRecommendation>{{"active-chart"}} : std::vector<GoalRecommendation>{{"other-chart"}};
     }
     void QueryChartMeta(const ChartMetaQuery &, std::vector<ChartMetaRecord> &rows) { rows.push_back({{"active-chart"}}); }
@@ -309,7 +398,7 @@ struct ChartGoalsScene {
   struct { Charts chartRepository; ScoreRepository scoreRepository; } context;
   struct Group { int offset=0; bool expanded=false; std::vector<std::pair<GoalRecommendation,ChartMetaRecord>> rows; };
   std::map<int,Group> recommendations_;
-  int recommendationTable_=0; bool recommendationSortTable_=false;
+  int recommendationTable_=0, recommendationMode_=2; bool recommendationSortTable_=false;
   std::string message_;
   std::optional<ChartMetaRecord> recommendationChart_;
   void loadRecommendations(int,int);
@@ -498,7 +587,7 @@ struct Goal { struct { std::string Title, SubTitle, SHA256; } chart; int target 
 std::string normalizedHash(const std::string &s) { return s; }
 struct GoalProgress { Goal goal; struct { bool achieved = false; } progress; };
 }
-namespace app_theme { constexpr int textSecondary=0; enum class ActionCategory { Neutral }; }
+namespace app_theme { constexpr int textSecondary=0; enum class ActionCategory { Neutral, Destructive }; }
 namespace ui_icons { constexpr int kHide=1, kPlus=2; }
 namespace i18n { std::string tr(const char *s) { return s; } std::string format(const char *s, std::initializer_list<std::pair<std::string,std::string>>) { return s; } }
 std::vector<std::string> titles, actions;
@@ -524,6 +613,9 @@ struct Scene {
   int returnTarget_=0;
   void defer(std::function<bool()> f, int, bool) { f(); }
   int offset_=0, achievedOffset_=0;
+  std::vector<chart_goals::Goal> achievedRemoval_;
+  std::string message_;
+  void requestRemoveAchievedGoals() {} void removeAchievedGoals() {}
   enum class OverviewTab { Ongoing, Recommendations, Achieved };
   OverviewTab overviewTab_=OverviewTab::Ongoing;
   void later(std::function<void()> f) { f(); }
@@ -541,6 +633,7 @@ int main() {
   assert(titles.size()==20 && titles.front()=="Active 0" && titles.back()=="Active 19");
   scene.overviewTab_=Scene::OverviewTab::Achieved; scene.achievedOffset_=20; scene.build();
   assert(titles.size()==5 && titles.front()=="Done 20" && titles.back()=="Done 24");
+  assert(std::find(actions.begin(),actions.end(),"goals.ui.remove_all_achieved")!=actions.end());
   scene.overviewTab_=Scene::OverviewTab::Ongoing; scene.offset_=20; scene.build();
   assert(titles.size()==5 && titles.front()=="Active 20");
   scene.page_.goals.clear(); scene.build();

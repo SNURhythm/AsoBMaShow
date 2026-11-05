@@ -31,19 +31,23 @@ class KomboSceneTests(unittest.TestCase):
                        "void MainMenuScene::openKomboAssignment(")
         custom = extract((root / "src/scene/MusicSelectScene.cpp").read_text(),
                          "void MusicSelectScene::openKomboAssignment(")
+        recap = extract((root / "src/scene/KomboScene.cpp").read_text(),
+                        "void KomboScene::openRecap(")
         fixture = (root / "tests/kombo_navigation_fixture.cpp").read_text()
-        fixture = fixture.replace("MAIN_NAVIGATION", main).replace("CUSTOM_NAVIGATION", custom)
+        fixture = fixture.replace("MAIN_NAVIGATION", main).replace("CUSTOM_NAVIGATION", custom).replace("RECAP_NAVIGATION", recap)
         with tempfile.TemporaryDirectory(prefix="asobmashow-kombo-navigation-") as directory:
             source = Path(directory) / "navigation.cpp"
             binary = Path(directory) / "navigation"
             source.write_text(fixture)
-            FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
+            FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent,
+                                                                       includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
     def test_level_summary_groups_tables_in_selection_order(self):
         root = Path(__file__).resolve().parents[1]
         helper = extract((root / "src/scene/KomboScene.cpp").read_text(), "std::string levelsText(")
         fixture = r'''#include "kombo/KomboModel.h"
+#include "kombo/LevelRangeText.h"
 #include <algorithm>
 #include <cassert>
 #include <charconv>

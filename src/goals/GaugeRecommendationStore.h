@@ -5,8 +5,8 @@
 #include "../scene/play/GameplayScoreState.h"
 
 namespace chart_goals {
-// Authoritative numeric bests: five gauges and one combo count per chart/LN scope. These
-// are updated with the score transaction. V15 seeds combo counts once from scores.
+// Authoritative numeric bests per chart/LN scope, updated with the score transaction.
+// V15 seeds combo and near-PERFECT counts once from eligible local scores.
 inline bool gaugeSummaryInstalled(sqlite3 *db) {
   SqliteStatementHandle query;
   if (prepareSqliteStatement(db, "SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap FROM goal_gauge_best LIMIT 0", query) != SQLITE_OK)
@@ -18,7 +18,13 @@ inline bool gaugeSummaryInstalled(sqlite3 *db) {
   if (prepareSqliteStatement(db, "SELECT chart_sha256,ln_mode,combo_break FROM goal_combo_best LIMIT 0", query) != SQLITE_OK)
     return false;
   query.reset();
-  return prepareSqliteStatement(db, "SELECT 1 FROM sqlite_master WHERE name='goal_combo_proximity' AND type='index'", query) == SQLITE_OK &&
+  if (prepareSqliteStatement(db, "SELECT 1 FROM sqlite_master WHERE name='goal_combo_proximity' AND type='index'", query) != SQLITE_OK ||
+      sqlite3_step(query) != SQLITE_ROW) return false;
+  query.reset();
+  if (prepareSqliteStatement(db, "SELECT chart_sha256,ln_mode,good FROM goal_perfect_best LIMIT 0", query) != SQLITE_OK)
+    return false;
+  query.reset();
+  return prepareSqliteStatement(db, "SELECT 1 FROM sqlite_master WHERE name='goal_perfect_proximity' AND type='index'", query) == SQLITE_OK &&
          sqlite3_step(query) == SQLITE_ROW;
 }
 inline bool ensureGaugeSummary(sqlite3 *db) {
@@ -26,6 +32,8 @@ inline bool ensureGaugeSummary(sqlite3 *db) {
          !executeSqlite(db, "CREATE INDEX IF NOT EXISTS goal_gauge_proximity ON goal_gauge_best(target,gap,death_notes,chart_sha256,ln_mode)") &&
          !executeSqlite(db, "CREATE TABLE IF NOT EXISTS goal_combo_best(chart_sha256 TEXT NOT NULL,ln_mode INTEGER NOT NULL,combo_break INTEGER NOT NULL CHECK(combo_break>=0),PRIMARY KEY(chart_sha256,ln_mode)) WITHOUT ROWID") &&
          !executeSqlite(db, "CREATE INDEX IF NOT EXISTS goal_combo_proximity ON goal_combo_best(combo_break,chart_sha256,ln_mode)") &&
+         !executeSqlite(db, "CREATE TABLE IF NOT EXISTS goal_perfect_best(chart_sha256 TEXT NOT NULL,ln_mode INTEGER NOT NULL,good INTEGER NOT NULL CHECK(good>=0),PRIMARY KEY(chart_sha256,ln_mode)) WITHOUT ROWID") &&
+         !executeSqlite(db, "CREATE INDEX IF NOT EXISTS goal_perfect_proximity ON goal_perfect_best(good,chart_sha256,ln_mode)") &&
          gaugeSummaryInstalled(db);
 }
 inline bool updateGaugeSummary(sqlite3 *db, const result_persistence::ChartScoreWrite &score,
@@ -46,6 +54,18 @@ inline bool updateGaugeSummary(sqlite3 *db, const result_persistence::ChartScore
         "WHERE excluded.combo_break<goal_combo_best.combo_break", insert) != SQLITE_OK ||
         !bindSqliteText(insert, 1, hash) || sqlite3_bind_int(insert, 2, score.longNoteMode) != SQLITE_OK ||
         sqlite3_bind_int(insert, 3, score.comboBreak) != SQLITE_OK || sqlite3_step(insert) != SQLITE_DONE) return false;
+    insert.reset();
+  }
+  if (evidence.passedNotes == total && score.maxScore % 2 == 0 &&
+      normalizeClearLamp(score.clearType) >= kClearTypeFullComboRank && score.comboBreak == 0 &&
+      score.maxCombo >= total && score.pGreat >= 0 && score.great >= 0 && score.good >= 0 &&
+      score.bad == 0 && score.poor == 0 &&
+      static_cast<std::int64_t>(score.pGreat) + score.great + score.good == total) {
+    if (prepareSqliteStatement(db,
+        "INSERT INTO goal_perfect_best(chart_sha256,ln_mode,good) VALUES(?,?,?) "
+        "ON CONFLICT(chart_sha256,ln_mode) DO UPDATE SET good=min(goal_perfect_best.good,excluded.good)", insert) != SQLITE_OK ||
+        !bindSqliteText(insert, 1, hash) || sqlite3_bind_int(insert, 2, score.longNoteMode) != SQLITE_OK ||
+        sqlite3_bind_int(insert, 3, score.good) != SQLITE_OK || sqlite3_step(insert) != SQLITE_DONE) return false;
     insert.reset();
   }
   if (prepareSqliteStatement(db,

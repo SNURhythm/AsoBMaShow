@@ -485,6 +485,14 @@ void TextView::setDeferredTextureMaterialization(bool deferred) {
   }
 }
 
+void TextView::setStrikethrough(bool enabled) {
+  if (strikethrough_ == enabled) return;
+  strikethrough_ = enabled;
+  invalidateTexture();
+  ui::invalidate();
+  if (!deferTextureMaterialization) createTexture();
+}
+
 void TextView::setGlyphAtlasEnabled(bool enabled) {
   if (enabled == bool(glyphAtlas)) return;
   if (enabled) {
@@ -498,13 +506,14 @@ void TextView::setGlyphAtlasEnabled(bool enabled) {
 }
 
 void TextView::renderImpl(RenderContext &context) {
+  RenderContext::OpacityScope strikeOpacity(context, strikethrough_ ? 0.7f : 1.0f);
   // A flex row can give a label no space. Empty clip bounds must suppress
   // drawing, not turn a hidden/marquee label into unbounded visible text.
   if (overflow != TextOverflow::Visible &&
       (getContentWidth() <= 0 || getContentHeight() <= 0)) {
     return;
   }
-  const bool useAtlas = glyphAtlas && !wrapEnabled && glyphAtlas->prepare(font, text);
+  const bool useAtlas = glyphAtlas && !strikethrough_ && !wrapEnabled && glyphAtlas->prepare(font, text);
   if (!useAtlas && !bgfx::isValid(texture)) {
     createTexture();
   }
@@ -1104,6 +1113,17 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
       SDL_BlitSurface(runSurface.get(), nullptr, surface.get(), &dst);
       x += advance;
     }
+    if (strikethrough_ && !line.empty()) {
+      // Decorate the composed line, including native fallback fonts, without
+      // changing cached/shared TTF font styles or text measurement.
+      const int lineWidth = targetWidth - spareWidth;
+      SDL_Rect strike{align == TextAlign::CENTER ? spareWidth / 2
+                          : align == TextAlign::RIGHT ? spareWidth : 0,
+          lineTop + metrics.ascent - fontRasterSize / 3,
+          lineWidth, std::max(1,fontRasterSize / 16)};
+      SDL_FillSurfaceRect(surface.get(), &strike,
+          SDL_MapSurfaceRGBA(surface.get(),color.r,color.g,color.b,color.a));
+    }
   }
 
   surfaceWidth = width;
@@ -1280,7 +1300,7 @@ void TextView::createTexture() {
   int fallbackSurfaceHeight = 0;
   // Compose explicit lines and aligned wrapping consistently across font sources.
   const bool usePrimaryFont =
-      font != nullptr && text.find_first_of("\r\n") == std::string::npos &&
+      !strikethrough_ && font != nullptr && text.find_first_of("\r\n") == std::string::npos &&
       (!wrapEnabled || align == TextAlign::LEFT) && primaryFontSupportsText(text);
   if (usePrimaryFont && wrapEnabled && rasterWrapWidth > 0) {
     surface.reset(TTF_RenderText_Blended_Wrapped(font, text.c_str(), 0, color, rasterWrapWidth));

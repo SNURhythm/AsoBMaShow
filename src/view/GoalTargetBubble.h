@@ -62,9 +62,11 @@ public:
     coverage_->setVisible(false); coverage_->setDisplay(YGDisplayNone);
     addView(coverage_); setVisible(false);
   }
-  void setTarget(int rank, const std::string &lamp, const std::string &score, const std::string &coverage = {}) {
+  void setTarget(int rank, const std::string &lamp, const std::string &score, const std::string &coverage = {}, bool lampMet = false, bool scoreMet = false) {
     hasTarget_ = !lamp.empty() || !score.empty() || !coverage.empty();
     lamp_->setText(lamp); score_->setText(score); coverage_->setText(coverage);
+    lamp_->setStrikethrough(!lamp.empty() && !score.empty() && lampMet);
+    score_->setStrikethrough(!lamp.empty() && !score.empty() && scoreMet);
     preferredHeight_ = !lamp.empty() && !score.empty() && !coverage.empty() ? 67 : 48;
     preferredWidth_ = std::clamp(std::max({lamp_->measureTextWidth(lamp) + 26,
                                         score_->measureTextWidth(score) + 10, coverage_->measureTextWidth(coverage) + 10}), 150, 280);

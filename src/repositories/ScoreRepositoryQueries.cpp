@@ -1,3 +1,4 @@
+#include "../recap/PlayRecapQuery.h"
 #include "ScoreRepository.h"
 #include "../goals/GaugeRecommendationStore.h"
 #include "../kombo/KomboStore.h"
@@ -2551,4 +2552,24 @@ std::uint64_t ScoreRepository::GetRevision() const {
 
 void score_repository_detail::IncrementRevision() {
   gScoreRevision.fetch_add(1, std::memory_order_relaxed);
+}
+
+recap::Snapshot ScoreRepository::LoadPlayRecap(recap::Range range, bool session,
+    const std::filesystem::path &expectedDatabase) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!expectedDatabase.empty() && expectedDatabase != GetResolvedDatabasePathLocked())
+    return {.range = range, .error = "Profile changed; reload the recap"};
+  if (!EnsureSessionDatabaseLocked()) return {.range = range, .error = "Score storage unavailable"};
+  if (session) {
+    std::string error;
+    const auto resolved = recap::sessionRange(impl_->sessionDatabase, range.end, &error);
+    if (!error.empty()) return {.range = range, .error = error};
+    if (!resolved) return {.range = range};
+    range = *resolved;
+  }
+  return recap::load(impl_->sessionDatabase, range,
+      score_cache_queries::detail::scoreParticipatesInBestExpr("s"),
+      score_cache_queries::detail::scoreParticipatesInBestExpr("s", true),
+      score_cache_queries::detail::fullComboClearRankExpr("s", {}, true));
 }

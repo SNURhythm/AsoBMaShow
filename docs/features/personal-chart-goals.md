@@ -12,11 +12,18 @@ Independent goals, including those in the same LN mode, and newly set harder
 targets count as separate achievements;
 a goal containing both lamp and score targets counts once when both are met.
 
+The **Achieved** tab in both Chart goals and Folder goals offers **Remove all
+achieved goals**. Confirmation shows the count for that goal type in the active
+profile, across all pages. Cancel or Back keeps the goals. Removal keeps scores,
+replays, and Kombo points, skips goals that changed or are no longer achieved,
+and commits the batch together.
+
 ## Recommendations
 
 A small red dot on a chart's flag indicates available lamp or score
-recommendations when that chart has no configured goal. Both selectors use this
-badge; saving a goal removes it, including when that goal is already achieved.
+recommendations when that chart has no unfinished goals. Both selectors use this
+badge: it appears on an empty flag when no goals are saved, or over the green
+flag when all saved goals are achieved. Any unfinished goal hides the dot.
 Tapping a red-dot flag opens a dedicated recommendation view for that chart.
 Selecting a recommendation opens its editor; Back from the editor returns to
 that chart-specific view. Back again opens the ordinary Recommendations tab
@@ -28,9 +35,12 @@ groups for best scores within 2 percentage points below their next rank. Empty
 groups are hidden. Candidates are ordered by EX points remaining, nearest first, with 20 per
 page. Tapping a recommendation opens the normal goal editor with that rank
 selected in a new independent goal; saving remains explicit. Existing goals
-remain unchanged. LN/CN/HCN
-evidence is combined into one chart card per target group. The editor provides
-a mode picker for selectable-mode charts, initially using the closest evidence;
+remain unchanged. Recommendations offer **All / LN / CN / HCN** filters,
+initially selecting the current play mode. Charts without long notes are included
+in every filter; other charts use evidence from the selected scope. Counts and
+pages follow the filter. All combines LN/CN/HCN evidence into one chart card per
+target group, using the closest evidence. The editor provides
+a mode picker for selectable-mode charts, initially using the recommendation's scope;
 changing the mode keeps the draft targets without saving.
 
 Candidates come from the profile's best-score summary, with indexed chart-hash
@@ -49,6 +59,12 @@ Incomplete plays cannot supply final groove values or claim complete survival.
 Full Combo recommendations use the lowest **combo-break count**, independently
 of Hazard, and qualify with **1–5 combo breaks** in a completed eligible play.
 They are ordered by fewest breaks and show that count on the chart card.
+Near PERFECT is an independent group for completed eligible full combos with
+**1–5 GOODs**, ordered by fewest GOODs and showing that count on the card. It uses
+the lowest GOOD count from any eligible full combo, independently of best EX.
+Already-earned PERFECT/MAX lamps and saved PERFECT/MAX goals suppress the
+recommendation in that LN mode. Existing local full-combo records are backfilled
+once; subsequent browsing reads an indexed summary rather than play history.
 
 Each group hides lamps already earned and sorts by closeness: gauge points below
 the border for groove gauges, remaining chart proportion after death for survival
@@ -104,12 +120,13 @@ goals where available.
 
 - In PLAY, tap the small flag on a chart row in the built-in selector or the flag
   in the custom selector toolbar. The row flag is filled when that chart has a goal.
-  With one saved goal, it opens that goal directly. With multiple goals, it opens
-  a chart-specific list showing each target, LN scope, and current status.
+  A red-dot flag opens that chart's recommendations. Otherwise, with one saved
+  goal it opens that goal directly; with multiple goals it opens a chart-specific
+  list showing each target, LN scope, and current status.
   **Add goal** in that list or a goal's details creates another independent goal,
   including within the same LN mode. An empty flag without a red dot opens a new
-  goal editor. The selected chart's bubble shows its target for a single goal,
-  or the number of goals when there are several. LN, CN and HCN buttons in the
+  goal editor. The selected chart's bubble includes only unfinished goals: it
+  shows the target for one, or the count when several remain. LN, CN and HCN buttons in the
   editor choose the scope of the goal being added or edited.
 - The favorite star is beside the chart title in the detail panel.
 - The **Goals** folder in either selector gathers indexed charts with goals
@@ -285,3 +302,5 @@ goal changes which target would be selected next.
 Recalled results and replay exports resolve the current goal for the recorded
 LN mode. During gameplay, GOAL takes precedence over a custom skin's saved
 target choice without changing that preference.
+
+For goals with both lamp and score conditions, each achieved condition is crossed out and dimmed to 70% opacity independently in the goal list, detail view, and selector target bubbles. Unmet conditions remain undecorated; single-condition targets keep their existing presentation.

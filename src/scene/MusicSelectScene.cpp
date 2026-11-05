@@ -3722,10 +3722,13 @@ void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial, bo
   std::optional<int> goalMode;
   if (initial) {
     std::string error;
-    if (auto index = context.scoreRepository.LoadChartGoalIndex(error))
+    bool achieved = false;
+    if (auto index = context.scoreRepository.LoadChartGoalIndex(error)) {
       goalMode = index->modeFor(initial->meta.SHA256, scoreLongNoteModeForClearLamp(
           initial->meta, long_note_mode::valueFromId(context.settings.selectedLnMode)));
-    if (error.empty() && !goalMode)
+      achieved = index->allAchieved(initial->meta.SHA256);
+    }
+    if (error.empty() && (!goalMode || achieved))
       recommendations = recommendations || toolbarGoalRecommendations_.contains(initial->meta.SHA256);
   }
   const auto profile = context.profileManager.activeProfile().id;
@@ -4178,9 +4181,11 @@ void MusicSelectScene::refreshToolbarGoal() {
   if (toolbarGoalKey_ == key) return;
   toolbarGoalKey_ = key;
   std::string error;
-  const auto goals = context.scoreRepository.LoadChartGoalsForChart(chart->meta, error);
+  auto goals = context.scoreRepository.LoadChartGoalsForChart(chart->meta, error);
   if (!error.empty()) SDL_Log("Cannot load toolbar goal: %s", error.c_str());
-  if (!goals || goals->empty()) {
+  const bool present = goals && !goals->empty();
+  const bool achieved = present && std::ranges::all_of(*goals, [](const auto &goal) { return goal.progress.achieved; });
+  if (!present || achieved) {
     bool recommended = false;
     if (error.empty() && chartSession_) try {
       toolbarGoalRecommendations_.refresh(context.profileManager.activeProfile().id,
@@ -4190,16 +4195,17 @@ void MusicSelectScene::refreshToolbarGoal() {
     } catch (const std::exception &failure) {
       SDL_Log("Cannot load toolbar recommendations: %s", failure.what());
     }
-    toolbar_->setGoalState(false, false, -1, {}, {}, recommended);
+    toolbar_->setGoalState(present, achieved, -1, {}, {}, recommended);
     return;
   }
-  const bool achieved = std::ranges::all_of(*goals, [](const auto &goal) { return goal.progress.achieved; });
+  std::erase_if(*goals, [](const auto &goal) { return goal.progress.achieved; });
   if (goals->size() > 1) {
     toolbar_->setGoalState(true, achieved, -1, {},
         i18n::format("goals.ui.count", {{"count", std::to_string(goals->size())}}));
   } else {
     const auto labels = chart_goals::targetLabels(goals->front().goal.target);
-    toolbar_->setGoalState(true, achieved, labels.lampRank, labels.lamp, labels.score);
+    toolbar_->setGoalState(true, achieved, labels.lampRank, labels.lamp, labels.score, false, {},
+        goals->front().progress.lampMet, goals->front().progress.scoreMet);
   }
 }
 

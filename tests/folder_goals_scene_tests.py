@@ -14,6 +14,7 @@ class FolderGoalsSceneTests(unittest.TestCase):
             'bool FolderGoalsScene::checkProfile(', 'void FolderGoalsScene::choose(',
             'void FolderGoalsScene::selectScoreTarget(', 'void FolderGoalsScene::saveGoal(', 'void FolderGoalsScene::removeGoal(',
             'void FolderGoalsScene::openSource(', 'void FolderGoalsScene::addGoal(',
+            'void FolderGoalsScene::requestRemoveAchievedGoals(', 'void FolderGoalsScene::removeAchievedGoals(',
             'void FolderGoalsScene::changeScope(',
             'void FolderGoalsScene::cancelEditor(', 'void FolderGoalsScene::back(',
             'void FolderGoalsScene::rememberScroll('))
@@ -38,18 +39,22 @@ struct FolderGoalsScene {
   struct { std::string selectedLnMode="LN"; } settings;
   struct { struct Profile {std::string id="one";} p; Profile &activeProfile(){return p;} } profileManager;
   struct {
-   int saves=0,removes=0; bool fail=false; folder_goals::Goal saved;
+   int saves=0,removes=0,bulkRemoves=0; std::vector<folder_goals::Goal> removedBatch; bool fail=false; folder_goals::Goal saved;
    std::optional<folder_goals::GoalProgress> PreviewFolderGoal(const folder_goals::Goal &g,std::string &error) {
     if(fail){error="unavailable";return {};}
     return folder_goals::GoalProgress{g,{.available=4}};
    }
    bool SaveFolderGoal(folder_goals::Goal &g,std::string &error){if(fail){error="failed";return false;}++saves;if(g.id.empty())g.id="saved-"+std::to_string(saves);saved=g;return true;}
    bool RemoveFolderGoal(const folder_goals::Goal &,std::string &){++removes;return true;}
+   bool RemoveAchievedFolderGoals(const std::vector<folder_goals::Goal> &goals,std::string &error) {
+    ++bulkRemoves;if(fail){error="failed";return false;}removedBatch=goals;return true;
+   }
   } scoreRepository;
  } context;
  std::shared_ptr<goal_navigation::State> navigationState_=std::make_shared<goal_navigation::State>();
  std::optional<folder_goals::Source> initial_;
  std::vector<folder_goals::GoalProgress> goals_;
+ std::vector<folder_goals::Goal> achievedRemoval_;
  folder_goals::Goal draft_;
  std::optional<folder_goals::Progress> progress_;
  std::string profile_="one",message_,rate_="100",scoreRate_="100";
@@ -66,6 +71,7 @@ struct FolderGoalsScene {
  void choose(folder_goals::Goal);
  void selectScoreTarget(const std::string &);
  void saveGoal();void removeGoal();
+ void requestRemoveAchievedGoals();void removeAchievedGoals();
  void later(std::function<void()> f){f();}
  void defer(std::function<bool()> f,int,bool){f();}
  void back();void rememberScroll();
@@ -74,6 +80,18 @@ struct FolderGoalsScene {
 };
 METHODS
 int main(){
+ FolderGoalsScene bulk;
+ for(int i=0;i<25;++i) bulk.goals_.push_back({.goal={.id=std::to_string(i)},.progress={.achieved=true}});
+ bulk.goals_.push_back({.goal={.id="active"},.progress={.achieved=false}});bulk.offset_=20;
+ bulk.removeAchievedGoals();assert(bulk.context.scoreRepository.bulkRemoves==0);
+ bulk.requestRemoveAchievedGoals();assert(bulk.achievedRemoval_.size()==25);
+ bulk.back();assert(bulk.achievedRemoval_.empty() && returned==0);
+ bulk.requestRemoveAchievedGoals();bulk.context.scoreRepository.fail=true;bulk.removeAchievedGoals();
+ assert(bulk.achievedRemoval_.size()==25 && bulk.offset_==20 && !bulk.message_.empty());
+ bulk.context.scoreRepository.fail=false;bulk.removeAchievedGoals();
+ assert(bulk.achievedRemoval_.empty() && bulk.offset_==0 && bulk.context.scoreRepository.removedBatch.size()==25);
+ bulk.requestRemoveAchievedGoals();bulk.context.profileManager.p.id="two";bulk.removeAchievedGoals();
+ assert(bulk.achievedRemoval_.empty() && bulk.context.scoreRepository.bulkRemoves==2);
  FolderGoalsScene s;
  folder_goals::Source source{.kind=folder_goals::SourceKind::Level,.identity="url",.level="1",.name="Level 1"};
  s.choose({.source=source,.longNoteMode=2,.target={.type=folder_goals::Type::Lamp}});

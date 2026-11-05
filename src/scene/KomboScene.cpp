@@ -1,4 +1,6 @@
 #include "KomboScene.h"
+#include "../kombo/LevelRangeText.h"
+#include "PlayRecapScene.h"
 #include "SceneManager.h"
 #include "../Uuid.h"
 #include "../LongNoteModeUtils.h"
@@ -167,49 +169,7 @@ int integer(const std::string &value) {
 }
 std::string levelsText(const kombo::Assignment &a,
                       const std::map<std::string, std::map<std::string, int>> &order) {
-  struct Entry { std::string name; std::optional<int> position; };
-  struct Group { std::string source, table; std::vector<Entry> levels; };
-  std::vector<Group> groups;
-  const std::string separator = " · ";
-  for (const auto &level : a.levels) {
-    const auto split = level.label.rfind(separator);
-    const auto table = split == std::string::npos ? std::string{} : level.label.substr(0, split);
-    const auto name = split == std::string::npos
-        ? (level.label.empty() ? level.level : level.label) : level.label.substr(split + separator.size());
-    Entry entry{.name=name};
-    if (const auto source = order.find(level.source); source != order.end()) {
-      if (const auto position = source->second.find(level.level); position != source->second.end())
-        entry.position = position->second;
-    }
-    auto group = std::find_if(groups.begin(), groups.end(), [&](const auto &g) {
-      return g.source == level.source && g.table == table;
-    });
-    if (group == groups.end()) groups.push_back({level.source, table, {std::move(entry)}});
-    else group->levels.push_back(std::move(entry));
-  }
-  std::string text;
-  for (auto &group : groups) {
-    if (!text.empty()) text += " / ";
-    if (!group.table.empty()) text += group.table + separator;
-    std::stable_sort(group.levels.begin(), group.levels.end(), [](const auto &left, const auto &right) {
-      if (left.position.has_value() != right.position.has_value()) return left.position.has_value();
-      return left.position && *left.position < *right.position;
-    });
-    for (std::size_t first = 0; first < group.levels.size();) {
-      std::size_t last = first;
-      while (last + 1 < group.levels.size()) {
-        const auto &current = group.levels[last];
-        const auto &next = group.levels[last + 1];
-        if (!current.position || !next.position || *current.position + 1 != *next.position) break;
-        ++last;
-      }
-      if (first > 0) text += ", ";
-      text += group.levels[first].name;
-      if (last > first) text += "~" + group.levels[last].name;
-      first = last + 1;
-    }
-  }
-  return text;
+  return kombo::formatLevelRanges(a,order);
 }
 std::string lampText(int rank) {
   if (rank == -2) return i18n::tr("kombo.ui.any_previous_lamp");
@@ -270,8 +230,9 @@ KomboScene::KomboScene(ApplicationContext &context, SceneReturnTarget target,
       openGoals_(std::move(openGoals)) {}
 void KomboScene::configureTab(float topInset, std::function<void()> onClose,
                                std::function<void(const std::string &)> openAssignment,
-                               std::function<void()> openGoals) {
+                               std::function<void()> openGoals, Scene *returnOwner) {
   embeddedTab_ = true;
+  tabReturnOwner_ = returnOwner;
   tabClose_ = std::move(onClose);
   openAssignment_ = std::move(openAssignment);
   openGoals_ = std::move(openGoals);
@@ -414,6 +375,8 @@ void KomboScene::dashboard(View *body) {
       navigate(); return keepAlive;
     }, 0, true);
   });
+  action(body, i18n::tr("recap.ui.title"), [this] { openRecap(); },
+         app_theme::ActionCategory::Information);
   if constexpr (reminders::supported)
     action(body, i18n::tr("kombo.reminders.settings"), [this] {
       later([this] { reminders::refreshPermission(); page_ = Page::Reminders; });
@@ -989,6 +952,18 @@ void KomboScene::reminderSettings(View *body) {
   if (state_.days.empty()) label(panel, i18n::tr("kombo.reminders.need_routine"), 19);
 }
 
+void KomboScene::openRecap() {
+  defer([this] {
+    if (context.storageMaintenanceActive.load()) return true;
+    // The embedded tab is owned by the selector; retain that scene so Back
+    // restores the selected Kombo tab, not an unregistered child scene.
+    Scene *owner = embeddedTab_ ? tabReturnOwner_ : this;
+    if (!owner) return true;
+    context.sceneManager->changeScene(std::make_unique<PlayRecapScene>(
+        context, SceneReturnTarget::Retained(owner)), true);
+    return true;
+  }, 0, true);
+}
 void KomboScene::back() {
   if (page_ == Page::Assignment) { later([this] { page_ = adjustingToday_ ? Page::Dashboard : Page::Routine; adjustingToday_ = false; fieldErrors_.clear(); message_.clear(); }); return; }
   if (page_ == Page::Routine || page_ == Page::Reminders || page_ == Page::ReminderPrompt) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
