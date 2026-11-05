@@ -678,6 +678,7 @@ private:
   GameplayBgaMissStateTracker bgaMissTracker_;
   completion_celebration::Tracker completionTracker_;
   std::optional<completion_celebration::State> authoritativeCompletionCelebration_;
+  std::optional<long long> completionFinalTailMicros_;
   std::uint64_t judgeSequence_ = 0;
   JudgeResult lastJudge_ = JudgeResult(None, 0);
   long long lastJudgeVisualMicros_ = kPlayfieldTimestampOff;

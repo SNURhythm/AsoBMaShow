@@ -2217,6 +2217,45 @@ void testMultiBadLeavesChargeTailForItsOwnMiss() {
   }
 }
 
+void testFinishReplayWaitsForLongNoteTail() {
+  for (const auto type : {bms_parser::LongNoteType::LongNote,
+                          bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    for (const auto action : {ReplayEventAction::Miss, ReplayEventAction::Release}) {
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = 7;
+      chart.Meta.TotalNotes = type == bms_parser::LongNoteType::LongNote ? 1 : 2;
+      addLongNotePair(chart, type, 1, 1'000, 2'000);
+      AppSettings settings;
+      PlayfieldPresentationConfig configuration;
+      TestBga bga;
+      const auto created = ReplayPlayfieldPresentation::create(
+          createInfo(chart, settings, configuration, bga));
+      if (!created.presentation) { expect(false, "Finish tail replay adapter created"); return; }
+      created.presentation->applyAuthorityUpdate({.completionCelebrationEligible = true});
+      (void)created.presentation->applyReplayEvent(
+          {.action = ReplayEventAction::Press, .lane = 1, .noteTimeMicros = 1'000,
+           .songTimeMicros = 1'000, .judgeTimeMicros = 1'000, .judgement = PGreat},
+          {1'000, 900, 1'000}, true);
+      (void)created.presentation->applyReplayEvent(
+          {.action = action, .lane = 1, .noteTimeMicros = 2'000,
+           .songTimeMicros = 1'500, .judgeTimeMicros = 1'500, .judgement = Bad},
+          {1'500, 1'400, 1'500}, true);
+      const auto before = created.presentation->captureVisualStateForTesting(
+          {.visualTimeMicros = 1'400, .gameplayTimeMicros = 1'500});
+      expect(before.completionCelebration == completion_celebration::State{
+                 completion_celebration::Achievement::Finish, 1'900} &&
+                 before.clock.visualTimeMicros < before.completionCelebration.startMicros,
+             "missed or early-released LN/CN/HCN schedules Finish at its authored tail");
+      const auto after = created.presentation->captureVisualStateForTesting(
+          {.visualTimeMicros = 1'900, .gameplayTimeMicros = 2'000});
+      expect(after.completionCelebration == before.completionCelebration &&
+                 after.score == before.score && after.combo == before.combo,
+             "Finish reaches age zero at the tail without another replay event or score change");
+    }
+  }
+}
+
 void testLongTailMissPreservesExporterEndpointSemantics() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2840,6 +2879,7 @@ int main() {
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
   testMultiBadLeavesChargeTailForItsOwnMiss();
   testLongTailMissPreservesExporterEndpointSemantics();
+  testFinishReplayWaitsForLongNoteTail();
   testChargeLongReleaseClearsBothEndpointsWithoutReactivation();
   testHcnBodyInputReprojectsBothEndpointStates();
   testMissedHcnHeadRecoversFromRecordedLanePress();

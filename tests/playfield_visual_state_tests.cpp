@@ -1410,6 +1410,62 @@ void testLargeRealtimePresentationReusesStorageAfterFrameRelease() {
   }
 }
 
+void testFinishWaitsForAuthoredLongNoteTails() {
+  using completion_celebration::Achievement;
+  PlayfieldChartVisualModel model;
+  model.staticMetadata.totalNotes = 2;
+  model.laneOrder = {0, 1};
+  model.timelines = {{.id = 1, .timeMicros = 1'000},
+                     {.id = 2, .timeMicros = 2'000},
+                     {.id = 3, .timeMicros = 5'000}};
+  model.notes = {
+      {.id = 1, .timelineId = 1, .pairId = 2, .lane = 0, .kind = ChartVisualNoteKind::LongHead},
+      {.id = 2, .timelineId = 2, .pairId = 1, .lane = 0, .kind = ChartVisualNoteKind::LongTail,
+       .inActiveSlot = false},
+      {.id = 3, .timelineId = 1, .pairId = 4, .lane = 1, .kind = ChartVisualNoteKind::LongHead,
+       .inActiveSlot = false},
+      {.id = 4, .timelineId = 3, .pairId = 3, .lane = 1, .kind = ChartVisualNoteKind::LongTail,
+       .inActiveSlot = false}};
+  PlayfieldVisualStateStore store(model);
+  PlayfieldAuthorityUpdate authority;
+  authority.completionCelebrationEligible = true;
+  for (const bool worker : {false, true}) {
+    for (const long long offset : {-200, 200}) {
+      for (const long long resolved : {1'200, 2'200}) {
+        store.resetModel(model);
+        store.applyAuthorityUpdate(authority);
+        if (worker) store.setAuthoritativeCompletionCelebration({Achievement::Finish, resolved - offset});
+        else store.observeCompletionProgress(2, resolved - offset);
+        const auto before = store.capture({.visualTimeMicros = 1'500 - offset, .gameplayTimeMicros = 1'500});
+        const auto expected = std::max(2'000LL, resolved) - offset;
+        require(before.completionCelebration == completion_celebration::State{Achievement::Finish, expected} &&
+                    before.completionCelebration.startMicros > before.clock.visualTimeMicros,
+                "Finish waits for an active head's tail, including pair-only tails and visual offsets");
+        const auto after = store.capture({.visualTimeMicros = 2'500 - offset, .gameplayTimeMicros = 2'500});
+        require(after.completionCelebration == before.completionCelebration,
+                "crossing the tail preserves the scheduled onset; late resolution is never moved earlier");
+      }
+    }
+  }
+  store.resetModel(model);
+  store.applyAuthorityUpdate(authority);
+  store.setAuthoritativeCompletionCelebration({Achievement::Max, 1'200});
+  const PlayfieldFrameClock clock{.visualTimeMicros = 1'500, .gameplayTimeMicros = 1'500};
+  require(store.capture(clock).completionCelebration.startMicros == 1'200,
+          "the Finish tail gate does not change earned achievement timing");
+  authority.completionCelebrationEligible = false;
+  authority.completionFinishEligible = true;
+  store.applyAuthorityUpdate(authority);
+  require(store.capture(clock).completionCelebration == completion_celebration::State{Achievement::Finish, 2'000},
+          "assisted achievements downgraded to Finish also wait for the tail");
+  model.notes.clear();
+  store.resetModel(model);
+  store.applyAuthorityUpdate(authority);
+  store.observeCompletionProgress(2, 1'200);
+  require(store.capture(clock).completionCelebration.startMicros == 1'200,
+          "a new chart without long notes does not retain the previous tail deadline");
+}
+
 void testCompletionCelebrationLifecycle() {
   using completion_celebration::Achievement;
   PlayfieldChartVisualModel model;
@@ -1515,6 +1571,7 @@ void testCompletionCelebrationLifecycle() {
 
 int main() {
   testCompletionCelebrationLifecycle();
+  testFinishWaitsForAuthoredLongNoteTails();
   testPresentationMetadataCacheAndSnapshotLifetime();
   testReplayProgressionsShareAcrossAuthorityCaptureWithoutAllocations();
   testReplayProgressionValueEqualityAndFallbacks();

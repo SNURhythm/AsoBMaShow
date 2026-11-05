@@ -16,7 +16,14 @@ also requires the surviving combo to cover the stage, preserving its empty-POOR 
 
 Below those achievements, resolved-note progress latches a neutral `FINISH`.
 It waits for actual resolution rather than counting nonvanishing BAD samples;
-a final suppressed PMS miss still supplies its event timestamp. Incomplete or
+a final suppressed PMS miss still supplies its event timestamp. FINISH also waits
+until the latest authored tail of an active playable long note, even when a miss
+or early release resolved its score sooner. The presentation store caches this
+tail boundary per chart and maps it into the frame's visual clock. Its start is
+the later of final resolution and that tail, so no later judgement is needed
+and the full animation still plays. The same rule covers worker snapshots,
+replays/exports, and assisted achievements shown as FINISH. Earned MAX, Perfect,
+and Full Combo retain their judgement timing. Incomplete or
 aborted attempts cannot reach that progress threshold. FINISH is not a clear
 lamp and does not alter stored results.
 
