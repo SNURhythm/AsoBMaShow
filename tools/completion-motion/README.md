@@ -22,6 +22,16 @@ Sound design is intentionally not included in this visual comparison.
 
 ## Remotion
 
+### Lane-space prototypes
+
+Run `node make-review.mjs --lanes` to create `out/lane-review.html`.
+Wave, Rails, and Fan compare perspective-clipped completion effects beneath
+the same Rise title. Each includes Full Combo, Perfect, and a reduced-motion
+variant. The final hit and timing are synthetic. These are authoring experiments
+only; no lane-space completion effect has been added to the native renderer.
+Matching `Lane-Wave-*`, `Lane-Rails-*`, and `Lane-Fan-*` compositions are available
+in Remotion, using the same analytic frame model as the reviewer.
+
 ```sh
 npm run dev
 # Optional export, only when requested:

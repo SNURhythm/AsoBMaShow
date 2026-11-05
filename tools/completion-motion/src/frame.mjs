@@ -207,10 +207,11 @@ function perfectCelebration(t,reduced) {
   return s;
 }
 
-export function sceneSvg(seconds,kind=0,perfect=false,reduced=false) {
+export function sceneSvg(seconds,kind=0,perfect=false,reduced=false,laneOverlay='') {
   const t=seconds-impactTime,color=perfect?teal:lime;
   const defs=`<defs><radialGradient id="achievementGlow"><stop stop-color="${color}" stop-opacity=".12"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></radialGradient><radialGradient id="hitGlow"><stop stop-color="#f8fdff" stop-opacity=".85"/><stop offset=".22" stop-color="#56d2ca" stop-opacity=".7"/><stop offset="1" stop-color="#56d2ca" stop-opacity="0"/></radialGradient><linearGradient id="laneLight" x2="0" y2="1"><stop stop-color="${color}" stop-opacity="0"/><stop offset="1" stop-color="${color}" stop-opacity=".7"/></linearGradient></defs>`;
   let s=stage(seconds,perfect,reduced);
+  s+=laneOverlay;
   if(t>=0&&t<(perfect?2.8:2.5)) {
     let effect='';
     // Local low-opacity light separates the title from a busy BGA; no panel.

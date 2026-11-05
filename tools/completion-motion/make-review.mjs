@@ -2,11 +2,13 @@ import {readFileSync, writeFileSync, mkdirSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
 const root = dirname(fileURLToPath(import.meta.url));
-const code = readFileSync(resolve(root,'src/frame.mjs'),'utf8').replaceAll('export ', '');
+const lanes = process.argv.includes('--lanes');
+let code = readFileSync(resolve(root,'src/frame.mjs'),'utf8').replaceAll('export ', '');
+if (lanes) code += '\n' + readFileSync(resolve(root,'src/lane-frame.mjs'),'utf8').replace(/^import .*;$/m,'').replaceAll('export ', '');
 const font = readFileSync(resolve(root,'../../assets/fonts/roboto-condensed-bold.ttf')).toString('base64');
 const judgementFont = readFileSync(resolve(root,'src/fonts/judgement-ascii.ttf')).toString('base64');
 const achievementFont = readFileSync(resolve(root,'src/fonts/judgement-bold-ascii.otf')).toString('base64');
-const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Completion motion studies</title>
+let html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Completion motion studies</title>
 <style>
 :root{color-scheme:dark;--foreground:#edf0f7;--muted-foreground:#99a4b6;--card:#141b27;--border:#303b50;--primary:#abeaf6;--primary-foreground:#0a1520;--radius:12px;--font-sans:system-ui,sans-serif}
 @font-face{font-family:MotionCondensed;src:url(data:font/ttf;base64,${font}) format('truetype');font-weight:900}
@@ -35,6 +37,14 @@ function tick(now){if(playing){seconds=Math.min(duration,seconds+(now-previous)/
 document.addEventListener('visibilitychange',()=>{if(document.hidden){playing=false;draw();}previous=performance.now();});
 draw();requestAnimationFrame(tick);
 </script></body></html>`;
+if (lanes) {
+  html=html.replaceAll('01 / Impact','01 / Wave').replaceAll('02 / Sweep','02 / Rails').replaceAll('03 / Rise','03 / Fan')
+    .replace('innerHTML=sceneSvg(', 'innerHTML=laneSceneSvg(')
+    .replace('textContent=directions[kind]', 'textContent=laneDirections[kind]')
+    .replace('Completion motion studies', 'Lane-space completion studies')
+    .replace('let seconds=0.95', 'let seconds=0.85')
+    .replace('extra finishing motion', 'stronger lane-space motion');
+}
 mkdirSync(resolve(root,'out'),{recursive:true});
-writeFileSync(resolve(root,'out/review.html'),html);
-console.log(resolve(root,'out/review.html'));
+writeFileSync(resolve(root,lanes?'out/lane-review.html':'out/review.html'),html);
+console.log(resolve(root,lanes?'out/lane-review.html':'out/review.html'));
