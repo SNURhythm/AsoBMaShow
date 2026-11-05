@@ -1410,9 +1410,82 @@ void testLargeRealtimePresentationReusesStorageAfterFrameRelease() {
   }
 }
 
+void testCompletionCelebrationLifecycle() {
+  using completion_celebration::Achievement;
+  PlayfieldChartVisualModel model;
+  model.staticMetadata.totalNotes = 2;
+  PlayfieldVisualStateStore store(model);
+  PlayfieldAuthorityUpdate authority;
+  authority.completionCelebrationEligible = true;
+  authority.gameplayMode = PlayfieldGameplayMode::Play;
+  store.applyAuthorityUpdate(authority);
+  store.onJudge({PGreat, 0}, 1, 2, makePlayfieldJudgeEventClock(100'000, 20'000), true);
+  require(store.capture({}).completionCelebration.achievement == Achievement::None,
+          "a chart prefix must not celebrate");
+  // Classic LN heads publish input timing, not a scoring judgement.
+  store.onTimingSample({PGreat, 0}, makePlayfieldJudgeEventClock(200'000, 20'000));
+  require(store.capture({}).completionCelebration.achievement == Achievement::None,
+          "a final long-note head must wait for its resolved tail");
+  store.onJudge({Great, 0}, 2, 3, makePlayfieldJudgeEventClock(300'000, 20'000), false);
+  const auto completed = store.capture({}).completionCelebration;
+  require(completed.achievement == Achievement::Perfect && completed.startMicros == 280'000,
+          "PGREAT/GREAT completion uses Perfect and the judgement visual clock");
+  store.onJudge({Kpoor, 0}, 0, 3, makePlayfieldJudgeEventClock(400'000, 20'000), true);
+  require(store.capture({}).completionCelebration == completed,
+          "later empty poor must not retrigger or rewrite the celebration");
+  store.resetModel(model);
+  store.applyAuthorityUpdate(authority);
+  require(store.capture({}).completionCelebration.achievement == Achievement::None,
+          "retry/seek reset clears completion state");
+  store.onJudge({Good, 0}, 1, 0, {}, true);
+  store.onJudge({PGreat, 0}, 2, 2, {10, 10, 10}, true);
+  require(store.capture({}).completionCelebration.achievement == Achievement::FullCombo,
+          "GOOD completion earns Full Combo, not Perfect");
+  authority.completionCelebrationEligible = false;
+  store.applyAuthorityUpdate(authority);
+  require(store.capture({}).completionCelebration.achievement == Achievement::None,
+          "practice/assist eligibility suppresses the native celebration");
+  for (const auto failure : {Bad, Poor}) {
+    store.resetModel(model);
+    authority.completionCelebrationEligible = true;
+    store.applyAuthorityUpdate(authority);
+    store.onJudge({failure, 0}, 0, 0, {}, true);
+    store.onJudge({PGreat, 0}, 1, 2, {10, 10, 10}, true);
+    require(store.capture({}).completionCelebration.achievement == Achievement::None,
+            "a resolved failed chart must not celebrate");
+  }
+  store.resetModel(model);
+  authority.gaugeRules.ruleset = GameplayRuleset::Beatoraja;
+  store.applyAuthorityUpdate(authority);
+  store.onJudge({PGreat, 0}, 1, 2, {}, true);
+  store.onJudge({Kpoor, 0}, 0, 2, {5, 5, 5}, true);
+  store.onJudge({PGreat, 0}, 1, 4, {10, 10, 10}, true);
+  require(store.capture({}).completionCelebration.achievement == Achievement::None,
+          "combo-breaking empty poor must prevent Beatoraja completion");
+  store.resetModel(model);
+  store.applyAuthorityUpdate(authority);
+  store.onJudge({PGreat, 0}, 2, 4, {100, 80, 100}, false);
+  store.setAuthoritativeCompletionCelebration({Achievement::Perfect, 80});
+  require(store.captureForPresentation({}).completionCelebration ==
+              completion_celebration::State{Achievement::Perfect, 80},
+          "worker completion replaces incomplete visual event history without retiming");
+  authority.failureAnimationActive = true;
+  store.applyAuthorityUpdate(authority);
+  require(store.capture({}).completionCelebration.achievement == Achievement::None,
+          "active failure suppresses a previously latched completion");
+  authority.failureAnimationActive = false;
+  model.staticMetadata.totalNotes = 0;
+  store.resetModel(model);
+  store.applyAuthorityUpdate(authority);
+  store.onJudge({Kpoor, 0}, 0, 0, {}, true);
+  require(store.capture({}).completionCelebration.achievement == Achievement::None,
+          "empty charts must not celebrate");
+}
+
 } // namespace
 
 int main() {
+  testCompletionCelebrationLifecycle();
   testPresentationMetadataCacheAndSnapshotLifetime();
   testReplayProgressionsShareAcrossAuthorityCaptureWithoutAllocations();
   testReplayProgressionValueEqualityAndFallbacks();

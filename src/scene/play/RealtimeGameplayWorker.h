@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameplaySimulation.h"
+#include "CompletionCelebration.h"
 #include "../../replay/ReplayPlayback.h"
 
 #include <array>
@@ -111,6 +112,9 @@ struct RealtimeGameplaySnapshot {
   std::vector<bool> lanePressed;
   std::vector<bool> longNoteHoldingByLane;
   GameplayAttemptSnapshot attempt;
+  // Retained independently of the bounded presentation transaction history.
+  // The timestamp is song time here; the scene applies its visual offset.
+  completion_celebration::State completionCelebration;
   quick_retry::Projection quickRetryProjection;
   SkinGameplayDynamicGraphState skinGameplayGraph;
   GaugeStateSnapshot gaugeState;
@@ -312,6 +316,7 @@ private:
   GameplayDefinition definition_;
   RealtimeGameplayWorkerConfig config_;
   GameplaySimulation simulation_;
+  completion_celebration::Tracker completionTracker_;
   std::vector<OwnedLaneState> ownedInputLanes_;
   std::uint64_t ownedInputClaimSequence_ = 0;
   std::vector<QueuedInput> queuedInputs_;

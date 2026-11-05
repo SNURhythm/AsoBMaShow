@@ -2428,6 +2428,36 @@ void testAutoplayCommitsGameplayAndKeysoundWithoutFramePump() {
   worker.stop();
 }
 
+void testCompletionSurvivesPresentationHistoryOverflow() {
+  constexpr int notes = 300;
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = notes;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  for (int i = 0; i < notes; ++i)
+    addTimeline(*measure, 1'000'000 + i * 1'000)->SetNote(1, new bms_parser::Note(11));
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.attempt.autoPlay = true;
+  gameplay::RealtimeGameplayWorker worker(gameplay::buildGameplayDefinition(chart, 0), std::move(config));
+  require(worker.start(), "completion overflow worker starts");
+  clock.nowMicros.store(1'300'000, std::memory_order_release);
+  require(waitUntil([&] {
+    const auto snapshot = worker.acquireLatestSnapshot();
+    return snapshot && snapshot->attempt.stagePassedNotes == notes;
+  }), "dense autoplay finishes without consuming presentation transactions");
+  worker.stop();
+  const auto snapshot = worker.acquireLatestSnapshot();
+  require(snapshot->transactionCount == gameplay::kRealtimeGameplayTransactionHistorySize &&
+              snapshot->transactions.front().sequence > 1,
+          "fixture really overwrites older visual transactions");
+  require(snapshot->completionCelebration.achievement == completion_celebration::Achievement::Perfect &&
+              snapshot->completionCelebration.startMicros == 1'299'000,
+          "worker retains exact final-judgement completion independently of visual history");
+}
+
 void testStoppedWorkerTransfersCompleteGaugeHistory() {
   FakeClock clock;
   FakeAudio audio;
@@ -3602,6 +3632,7 @@ int main() {
   testPracticeAutoplayCompletesWithoutFramePump();
   testAutoplayCommitsGameplayAndKeysoundWithoutFramePump();
   testStoppedWorkerTransfersCompleteGaugeHistory();
+  testCompletionSurvivesPresentationHistoryOverflow();
   testLr2MultiBadPublishesEveryTransactionWithOneKeysound();
   return 0;
 }

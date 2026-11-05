@@ -3137,6 +3137,13 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     session.appliedTransactionSequence = transaction.sequence;
   }
 
+  auto completion = snapshot->completionCelebration;
+  if (completion.achievement != completion_celebration::Achievement::None) {
+    completion.startMicros = playfieldVisualEventTimeMicros(
+        completion.startMicros, getVisualOffsetMicros());
+  }
+  playfieldVisualStateStore->setAuthoritativeCompletionCelebration(completion);
+
   const auto lanes = chart->Meta.GetTotalLaneIndices();
   for (const int lane : lanes) {
     if (lane < 0 ||
@@ -6646,6 +6653,10 @@ void GamePlayScene::capturePlayfieldVisualState(
       .autoPlayMarkVisible =
           options.autoPlay ||
           (options.replayData != nullptr && options.replayData->autoPlay),
+      .completionCelebrationEligible =
+          gameplayMode != PlayfieldGameplayMode::Practice &&
+          !state->assistClearMark && !state->lightAssistClearMark &&
+          !clear_policy::assistClearRequired(options.playback),
       .gameplayMode = gameplayMode,
       .loadingState = PlayfieldLoadingState::Loaded,
       .courseMode = isCoursePlayback(),

@@ -83,6 +83,7 @@ RealtimeGameplayWorker::RealtimeGameplayWorker(
         simulationConfig.trackQuickRetry = config_.publishQuickRetryProjection;
         return simulationConfig;
       }()) {
+  completionTracker_.reset(definition_.metadata().totalNotes);
   std::size_t laneStorageSize = 0;
   for (const auto &lane : definition_.lanes()) {
     if (lane.lane >= 0) {
@@ -953,6 +954,11 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
 
 void RealtimeGameplayWorker::recordTransaction(
     const GameplayInputResult &result) noexcept {
+  if (result.hasJudge && result.hasReplayEvent) {
+    completionTracker_.observe(result.judge.judgement, result.replayEvent.combo,
+        result.replayEvent.songTimeMicros,
+        simulation_.scoreState().gaugeRules().ruleset == GameplayRuleset::Beatoraja);
+  }
   latestTransaction_ = result;
   ++transactionSequence_;
   transactionHistory_[(transactionSequence_ - 1) %
@@ -1000,6 +1006,7 @@ void RealtimeGameplayWorker::publishSnapshot() {
       snapshot.longNoteHoldingByLane[lane] = holdingCounts[lane] != 0;
     }
     snapshot.attempt = simulation_.snapshot();
+    snapshot.completionCelebration = completionTracker_.state();
     if (config_.publishQuickRetryProjection)
       snapshot.quickRetryProjection = simulation_.quickRetryProjection();
     const auto &graph = simulation_.skinGameplayGraphState();

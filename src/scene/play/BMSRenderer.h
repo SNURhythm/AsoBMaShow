@@ -190,6 +190,9 @@ private:
   std::optional<PresentationFailure> presentationFailure;
   std::unique_ptr<TextView> titleText;
   std::unique_ptr<TextView> judgeText;
+  // Pre-rasterized white glyphs: FULL COMBO (10 slots), PERFECT (7 slots).
+  std::array<std::unique_ptr<TextView>, 17> completionGlyphs;
+  void drawCompletionCelebration(RenderContext &, const PlayfieldVisualState &);
   std::unique_ptr<TextView> pacemakerDeltaText;
   std::unique_ptr<TextView> judgementTimingDirectionText;
   std::unique_ptr<TextView> judgementTimingMsText;

@@ -6,6 +6,7 @@
 #include "../../ReplayData.h"
 #include "../../audio/GameplayBgaMissStateTracker.h"
 #include "GameplayGaugeRules.h"
+#include "CompletionCelebration.h"
 #include "GameplayScoreState.h"
 #include "GameplaySkinIrTarget.h"
 #include "Pacemaker.h"
@@ -337,6 +338,9 @@ struct PlayfieldAuthorityUpdate {
   int currentFramesPerSecond = 0;
   std::int64_t applicationUptimeMillis = 0;
   bool autoPlayMarkVisible = false;
+  // Whole-chart, unassisted attempts only. Autoplay/replay may demonstrate it;
+  // practice ranges and settings previews must not claim an achievement.
+  bool completionCelebrationEligible = false;
   PlayfieldGameplayMode gameplayMode = PlayfieldGameplayMode::Unknown;
   PlayfieldLoadingState loadingState = PlayfieldLoadingState::Unknown;
   // Captured from the active CoursePlaySession or replay-export stage loop.
@@ -513,6 +517,7 @@ struct PlayfieldVisualState {
   // Seed for rebuilding the running average before the retained marker history.
   judgement_indicator::TimingAverageHistory judgementIndicatorAverageBeforeSamples;
   GameplayBgaMissState bgaMiss;
+  completion_celebration::State completionCelebration;
   int combo = 0;
   int score = 0;
   int fastSlowMicros = 0;
@@ -583,6 +588,10 @@ public:
   void resetModel(const PlayfieldChartVisualModel &model);
   void setConfiguration(const PlayfieldPresentationConfig &configuration);
   void applyAuthorityUpdate(const PlayfieldAuthorityUpdate &update);
+  // Realtime snapshots retain this even when their visual history rolls over.
+  void setAuthoritativeCompletionCelebration(completion_celebration::State state) {
+    authoritativeCompletionCelebration_ = state;
+  }
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &state);
   void setNoteState(NotePresentationState state);
   void setNoteStates(std::vector<NotePresentationState> states);
@@ -661,6 +670,8 @@ private:
   mutable TouchLifecycle liveTouches_;
   mutable std::vector<PresentationTouchPoint> touches_;
   GameplayBgaMissStateTracker bgaMissTracker_;
+  completion_celebration::Tracker completionTracker_;
+  std::optional<completion_celebration::State> authoritativeCompletionCelebration_;
   std::uint64_t judgeSequence_ = 0;
   JudgeResult lastJudge_ = JudgeResult(None, 0);
   long long lastJudgeVisualMicros_ = kPlayfieldTimestampOff;

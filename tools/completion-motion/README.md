@@ -1,6 +1,7 @@
 # Completion motion studies
 
-Throwaway visual prototypes, not a native game feature. Three original directions
+Visual authoring prototypes. Rise is now implemented in the built-in native
+renderer; Impact and Sweep remain alternatives. All three directions
 have Full Combo and Perfect variants. The reconstructed perspective playfield is
 informed by the built-in gameplay fixture, not captured successful gameplay.
 
@@ -45,12 +46,13 @@ These tools are outside CMake and do not add runtime dependencies to the game.
 
 ## Handoff
 
-After a direction is chosen, turn its frame model into a native implementation
-spec following [the visual guide](../../docs/design/visual-implementation-guide.md).
+Rise's native timing, lifecycle, scoring policy, and verification are documented
+in [the native handoff](../../docs/design/completion-rise.md), following
+[the visual guide](../../docs/design/visual-implementation-guide.md).
 The preview's color, geometry, timing, and layering are design evidence; its
-browser performance is not a native mobile performance measurement. Immediate
-last-note detection, ruleset classification, skin coordination, retries, and
-replay timing still require native implementation and validation.
+browser performance is not a native mobile performance measurement. The native
+implementation uses committed judgements and the existing clear policy rather
+than the synthetic counters in these studies.
 
 ## Font subset
 

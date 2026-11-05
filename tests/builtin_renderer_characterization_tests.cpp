@@ -2825,6 +2825,72 @@ void verifyKeybombPreview(const RenderTarget &target) {
   }
 }
 
+void verifyCompletionCelebration(const RenderTarget &target) {
+  using completion_celebration::Achievement;
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(*fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+  store.setConfiguration(presentationConfig(0));
+  store.applyAuthorityUpdate(authorityFor(*fixture.chart, 0));
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 2500, true);
+  PlayfieldProjection projector;
+  rendering::UiBatchRenderer batch;
+  std::uint64_t serial = 0;
+  constexpr long long completionFrameMicros = 9'000'000;
+  const auto render = [&](Achievement achievement, long long age) {
+    bgfx::touch(rendering::clear_view);
+    auto state = store.capture({.serial = ++serial, .visualTimeMicros = completionFrameMicros});
+    state.completionCelebration = {achievement, completionFrameMicros - age};
+    // Keep the background fixed to compare the actual native celebration only.
+    renderer.configure(state.configuration);
+    const auto projection = projector.project(model, state,
+        {.latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+         .builtInTraversal = renderer.builtInProjectionTraversal()});
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, state, projection);
+    }
+    return readPixels(target);
+  };
+  const auto baseline = render(Achievement::None, 0);
+  const auto fullCombo = render(Achievement::FullCombo, 250'000);
+  const auto perfect = render(Achievement::Perfect, 250'000);
+  expect(fullCombo != baseline && perfect != fullCombo,
+         "native Rise renders distinct Full Combo and Perfect celebrations");
+  expect(render(Achievement::Perfect, 650'000) != perfect,
+         "native celebration advances with the captured visual clock");
+  expect(render(Achievement::Perfect, 3'000'000) == baseline &&
+             render(Achievement::FullCombo, -1) == baseline,
+         "native celebration is absent before its event and after its exit");
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "completion-full-combo.png").string(),
+                           fullCombo, kDrawableWidth, kDrawableHeight) == 0 &&
+               lodepng::encode((std::filesystem::path(directory) / "completion-perfect.png").string(),
+                           perfect, kDrawableWidth, kDrawableHeight) == 0,
+           "native completion inspection images encode");
+  }
+  // Optional local motion capture; ordinary tests need only the boundary frames.
+  if (const char *directory = std::getenv("ASOBMASHOW_COMPLETION_ANIMATION_DIR")) {
+    for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect}) {
+      const auto folder = std::filesystem::path(directory) /
+          (achievement == Achievement::Perfect ? "perfect" : "full-combo");
+      std::filesystem::create_directories(folder);
+      for (int frame = 0; frame < 102; ++frame) {
+        const auto pixels = render(achievement, frame * 1'000'000LL / 30 - 300'000);
+        char name[32];
+        std::snprintf(name, sizeof(name), "%03d.png", frame);
+        expect(lodepng::encode((folder / name).string(), pixels, kDrawableWidth, kDrawableHeight) == 0,
+               "native completion animation frame encodes");
+      }
+    }
+  }
+}
+
 void verifyKeybombRendering(const RenderTarget &target) {
   const auto render = [&](Judgement judgement, keybomb::Style style = {},
                            long long age = 80'000, bool captured = false,
@@ -5138,6 +5204,7 @@ int main() {
       verifyKeybombVertexReuse(target);
       verifyKeybombPreview(target);
       verifyKeybombRendering(target);
+      verifyCompletionCelebration(target);
       verifyJudgementIndicatorContinuousAverage(target);
       verifyCapturedFrameRetainsContinuousAverage(target);
       verifySelectedSkinTimingPointerStaysOnScreen(target);

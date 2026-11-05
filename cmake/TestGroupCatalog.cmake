@@ -152,6 +152,7 @@ asobmashow_label_tests(area_gameplay
     play_option_summary_tests
     play_options_panel_view_tests
     playfield_chart_visual_model_tests
+    playfield_visual_state_tests
     portrait_playfield_framing_tests
     preparation_plan_tests
     realtime_gameplay_authority_policy_tests

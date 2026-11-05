@@ -1745,6 +1745,7 @@ void testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn() {
 void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
   auto *measure = new bms_parser::Measure;
   chart.Measures.push_back(measure);
   auto *headTimeline = new bms_parser::TimeLine(8, false);
@@ -1772,6 +1773,7 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   if (!created.presentation) {
     return;
   }
+  created.presentation->applyAuthorityUpdate({.completionCelebrationEligible = true});
   const ReplayEvent event{.action = ReplayEventAction::Press,
                           .lane = 1,
                           .noteTimeMicros = 1'000,
@@ -1792,6 +1794,8 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   expect(beforeTail.notes.size() == 2 && beforeTail.notes[0].longActive &&
              beforeTail.notes[1].longActive && !beforeTail.notes[1].judged,
          "classic long-note tail stays held before its authored release time");
+  expect(beforeTail.completionCelebration.achievement == completion_celebration::Achievement::None,
+         "classic LN head does not fire the native completion effect");
   expect(beforeTail.judgementIndicatorSampleCount == 1 &&
              beforeTail.judgementIndicatorSamples[0].judge.Diff == 10 &&
              beforeTail.judgementIndicatorSamples[0].visualTimeMicros == 1'050 &&
@@ -1818,6 +1822,9 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   expect(completed.judgementIndicatorSampleCount == 1 && completed.combo == 1 &&
              completed.score == 1,
          "classic LN completion does not duplicate its head timing sample");
+  expect(completed.completionCelebration.achievement == completion_celebration::Achievement::Perfect &&
+             completed.completionCelebration.startMicros == clock.visualTimeMicros,
+         "classic LN final judgement fires Perfect in the replay visual clock domain");
   RenderContext context;
   const auto frame = created.presentation->renderFrame(
       context, {.serial = 1, .visualTimeMicros = 1'050}, {});
@@ -2575,6 +2582,7 @@ void testReplayAdapterMatchesEmptyPoorAndPmsPassedNotes() {
 void testReplayAdapterCarriesStageFullComboAuthority() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
   auto *measure = new bms_parser::Measure;
   chart.Measures.push_back(measure);
   auto *first = new bms_parser::TimeLine(8, false);
@@ -2617,11 +2625,14 @@ void testReplayAdapterCarriesStageFullComboAuthority() {
        .visualTimeMicros = 2'000,
        .bgaTimeMicros = 2'000},
       true);
-  created.presentation->applyAuthorityUpdate({.comboBreak = 0});
+  created.presentation->applyAuthorityUpdate({.comboBreak = 0, .completionCelebrationEligible = true});
   const auto state = created.presentation->captureVisualStateForTesting({});
   expect(state.authority.stagePassedNotes == 2 &&
              state.authority.stageCombo == 2,
          "replay reducer retains stage-local full-combo authority instead of course combo");
+  expect(state.completionCelebration.achievement == completion_celebration::Achievement::Perfect &&
+             state.completionCelebration.startMicros == 2'000,
+         "stage celebration uses local judgements despite the carried course combo");
 }
 
 void testAutoplayReplayReducerMatchesEffectiveScorableTotal() {
@@ -2660,7 +2671,7 @@ void testAutoplayReplayReducerMatchesEffectiveScorableTotal() {
          .bgaTimeMicros = event.songTimeMicros},
         true);
   }
-  created.presentation->applyAuthorityUpdate({});
+  created.presentation->applyAuthorityUpdate({.completionCelebrationEligible = true});
   const auto state = created.presentation->captureVisualStateForTesting({});
   expect(expected == 5 && chart.Meta.TotalNotes == expected &&
              state.authority.stagePassedNotes == expected &&
@@ -2668,6 +2679,9 @@ void testAutoplayReplayReducerMatchesEffectiveScorableTotal() {
              state.score == expected * 2,
          "autoplay export reduces normal, CN, and HCN endpoints to the same "
          "Beatoraja scorable total as the selected skin");
+  expect(state.completionCelebration.achievement == completion_celebration::Achievement::Perfect &&
+             state.completionCelebration.startMicros == 5'000,
+         "autoplay CN/HCN completion waits for the last tail judgement");
 }
 
 void testReplayExportPreparesSavedLongNoteScoreMetadata() {

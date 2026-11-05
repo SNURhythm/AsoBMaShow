@@ -196,6 +196,9 @@ struct FixturePresentation {
       timingState->onLaneJudge(lane, judge, combo, score, clock, recordTimingSample);
   }
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &) {}
+  void setAuthoritativeCompletionCelebration(completion_celebration::State state) {
+    if (timingState) timingState->setAuthoritativeCompletionCelebration(state);
+  }
   void clearLiveTouchPoints() {}
 };
 

@@ -82,6 +82,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          skinTargetList == other.skinTargetList &&
          applicationUptimeMillis == other.applicationUptimeMillis &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
+         completionCelebrationEligible == other.completionCelebrationEligible &&
          gameplayMode == other.gameplayMode &&
          loadingState == other.loadingState &&
          courseMode == other.courseMode &&
@@ -166,6 +167,8 @@ void PlayfieldVisualStateStore::resetModel(
   liveTouches_ = {};
   touches_.clear();
   bgaMissTracker_.reset();
+  completionTracker_.reset(model.staticMetadata.totalNotes);
+  authoritativeCompletionCelebration_.reset();
   judgeSequence_ = 0;
   lastJudge_ = JudgeResult(None, 0);
   lastJudgeVisualMicros_ = kPlayfieldTimestampOff;
@@ -401,6 +404,10 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
       .lastJudge = lastJudge_,
       .lastJudgeVisualMicros = lastJudgeVisualMicros_,
       .bgaMiss = bgaMissTracker_.snapshot(),
+      .completionCelebration = authority_.completionCelebrationEligible &&
+              !authority_.failureAnimationActive
+          ? authoritativeCompletionCelebration_.value_or(completionTracker_.state())
+          : completion_celebration::State{},
       .combo = combo_,
       .score = score_,
       .fastSlowMicros = fastSlowMicros_,
@@ -543,6 +550,8 @@ void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
   }
   lastJudge_ = judge;
   lastJudgeVisualMicros_ = clock.visualTimeMicros;
+  completionTracker_.observe(judge.judgement, combo, clock.visualTimeMicros,
+                              authority_.gaugeRules.ruleset == GameplayRuleset::Beatoraja);
   if (recordTimingSample) {
     onTimingSample(judge, clock);
   }
