@@ -35,8 +35,10 @@ bool testGlyphTexturesAreSharedAndReused() {
   struct Capture final : rendering::UiBatchBackend {
     std::vector<uint16_t> textures;
     std::size_t vertices = 0;
+    float opacity = 1.0f;
     bool submit(const rendering::UiBatchSubmission &draw) noexcept override {
       textures.push_back(draw.state.texture.idx);
+      opacity = draw.state.textureOpacity;
       vertices += draw.texturedVertices.size();
       return true;
     }
@@ -77,6 +79,13 @@ bool testGlyphTexturesAreSharedAndReused() {
   second.setWrap(false);
   draw(second);
   if (capture.textures != pages || bgfx::isValid(second.textureHandle())) return false;
+  second.setStrikethrough(true);
+  draw(second);
+  if (capture.textures.empty() || std::abs(capture.opacity - 0.7f) > 0.001f ||
+      context.getOpacity() != 1.0f) return false;
+  second.setStrikethrough(false);
+  draw(second);
+  if (capture.textures.empty() || capture.opacity != 1.0f) return false;
   second.setText("");
   draw(second);
   return capture.textures.empty();

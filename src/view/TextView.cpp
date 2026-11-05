@@ -506,6 +506,7 @@ void TextView::setGlyphAtlasEnabled(bool enabled) {
 }
 
 void TextView::renderImpl(RenderContext &context) {
+  RenderContext::OpacityScope strikeOpacity(context, strikethrough_ ? 0.7f : 1.0f);
   // A flex row can give a label no space. Empty clip bounds must suppress
   // drawing, not turn a hidden/marquee label into unbounded visible text.
   if (overflow != TextOverflow::Visible &&

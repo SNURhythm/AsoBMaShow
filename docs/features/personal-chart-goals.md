@@ -286,4 +286,4 @@ Recalled results and replay exports resolve the current goal for the recorded
 LN mode. During gameplay, GOAL takes precedence over a custom skin's saved
 target choice without changing that preference.
 
-For goals with both lamp and score conditions, each achieved condition is crossed out independently in the goal list, detail view, and selector target bubbles. Unmet conditions remain undecorated; single-condition targets keep their existing presentation.
+For goals with both lamp and score conditions, each achieved condition is crossed out and dimmed to 70% opacity independently in the goal list, detail view, and selector target bubbles. Unmet conditions remain undecorated; single-condition targets keep their existing presentation.
