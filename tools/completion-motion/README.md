@@ -40,8 +40,9 @@ lettering, static star, underline, and soft backdrop/glow, without the moving
 rings, shards, lane effects, or scale/lift entrance.
 The final judgement occurs at the same synthetic 0.65 s cue. MAX's counters show
 all PGREAT; Perfect includes GREATs and Full Combo includes GOODs. These are
-visual studies, not scoring implementations. Native MAX still uses Perfect
-until a direction is selected and implemented. No sound is included.
+visual studies, not scoring implementations. The approved Focus direction is
+now implemented natively for eligible all-PGREAT completion; Lift remains an
+authoring alternative. No sound is included.
 `MAX-Focus` and `MAX-Lift` share this frame model in Remotion.
 
 ### Calm Finish prototype

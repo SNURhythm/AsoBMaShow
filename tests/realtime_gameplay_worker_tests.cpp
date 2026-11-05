@@ -2454,7 +2454,7 @@ void testCompletionSurvivesPresentationHistoryOverflow() {
     require(snapshot->transactionCount == gameplay::kRealtimeGameplayTransactionHistorySize &&
                 snapshot->transactions.front().sequence > 1,
             "fixture really overwrites older visual transactions");
-    require(snapshot->completionCelebration.achievement == (autoPlay ? completion_celebration::Achievement::Perfect : completion_celebration::Achievement::Finish) &&
+    require(snapshot->completionCelebration.achievement == (autoPlay ? completion_celebration::Achievement::Max : completion_celebration::Achievement::Finish) &&
                 (!autoPlay || snapshot->completionCelebration.startMicros == 1'299'000),
             "worker retains exact final-judgement completion independently of visual history");
   }

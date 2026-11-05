@@ -2636,7 +2636,7 @@ void testReplayAdapterCarriesStageFullComboAuthority() {
   expect(state.authority.stagePassedNotes == 2 &&
              state.authority.stageCombo == 2,
          "replay reducer retains stage-local full-combo authority instead of course combo");
-  expect(state.completionCelebration.achievement == completion_celebration::Achievement::Perfect &&
+  expect(state.completionCelebration.achievement == completion_celebration::Achievement::Max &&
              state.completionCelebration.startMicros == 2'000,
          "stage celebration uses local judgements despite the carried course combo");
 }
@@ -2685,7 +2685,7 @@ void testAutoplayReplayReducerMatchesEffectiveScorableTotal() {
              state.score == expected * 2,
          "autoplay export reduces normal, CN, and HCN endpoints to the same "
          "Beatoraja scorable total as the selected skin");
-  expect(state.completionCelebration.achievement == completion_celebration::Achievement::Perfect &&
+  expect(state.completionCelebration.achievement == completion_celebration::Achievement::Max &&
              state.completionCelebration.startMicros == 5'000,
          "autoplay CN/HCN completion waits for the last tail judgement");
 }

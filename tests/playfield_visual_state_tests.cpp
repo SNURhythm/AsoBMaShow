@@ -1437,6 +1437,20 @@ void testCompletionCelebrationLifecycle() {
   store.applyAuthorityUpdate(authority);
   require(store.capture({}).completionCelebration.achievement == Achievement::None,
           "retry/seek reset clears completion state");
+  store.onJudge({PGreat, 0}, 1, 2, {100, 80, 100}, true);
+  store.onJudge({PGreat, 0}, 2, 4, {200, 180, 200}, true);
+  require(store.capture({}).completionCelebration ==
+              completion_celebration::State{Achievement::Max, 180},
+          "all-PGREAT completion earns MAX on the final visual clock");
+  authority.completionCelebrationEligible = false;
+  authority.completionFinishEligible = true;
+  store.applyAuthorityUpdate(authority);
+  require(store.capture({}).completionCelebration.achievement == Achievement::Finish,
+          "assisted MAX is presented as neutral Finish");
+  store.resetModel(model);
+  authority.completionCelebrationEligible = true;
+  authority.completionFinishEligible = false;
+  store.applyAuthorityUpdate(authority);
   store.onJudge({Good, 0}, 1, 0, {}, true);
   store.onJudge({PGreat, 0}, 2, 2, {10, 10, 10}, true);
   require(store.capture({}).completionCelebration.achievement == Achievement::FullCombo,

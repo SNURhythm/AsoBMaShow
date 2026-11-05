@@ -760,7 +760,8 @@ BMSRenderer::BMSRenderer(
   if (renderHud) {
     for (const auto achievement : {completion_celebration::Achievement::FullCombo,
                                    completion_celebration::Achievement::Perfect,
-                                   completion_celebration::Achievement::Finish}) {
+                                   completion_celebration::Achievement::Finish,
+                                   completion_celebration::Achievement::Max}) {
       const auto label = completion_celebration::word(achievement);
       for (std::size_t i = 0; i < label.size(); ++i) {
         if (label[i] == ' ') continue;

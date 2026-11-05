@@ -8,7 +8,7 @@
 #include <limits>
 
 namespace completion_celebration {
-enum class Achievement : std::uint8_t { None, FullCombo, Perfect, Finish };
+enum class Achievement : std::uint8_t { None, FullCombo, Perfect, Finish, Max };
 
 struct State {
   Achievement achievement = Achievement::None;
@@ -42,7 +42,8 @@ public:
         counts_[2], counts_[3], counts_[4], 0);
     if (rank >= kClearTypeFullComboRank &&
         (!requireSurvivingCombo || combo >= totalNotes_)) {
-      state_ = {rank >= kClearTypePerfectRank ? Achievement::Perfect : Achievement::FullCombo,
+      state_ = {rank >= kClearTypeMaxRank ? Achievement::Max :
+                    rank >= kClearTypePerfectRank ? Achievement::Perfect : Achievement::FullCombo,
                 timeMicros};
     }
   }

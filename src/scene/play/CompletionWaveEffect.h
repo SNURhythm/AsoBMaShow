@@ -16,6 +16,7 @@ template <typename Batch>
 void draw(Batch &batch, Achievement achievement, float age,
           float left, float width, float judgeY, float upperBound) {
   const bool perfect = achievement == Achievement::Perfect;
+  const bool max = achievement == Achievement::Max;
   if (achievement == Achievement::Finish) {
     if (age <= 0 || age >= .8F || width <= 0 || upperBound <= judgeY) return;
     const auto smooth = [](float value) {
@@ -29,16 +30,30 @@ void draw(Batch &batch, Achievement achievement, float age,
                                      shade, 0x00E1D9CDU);
     return;
   }
-  const float duration = perfect ? .65F : .55F;
-  if (achievement == Achievement::None || age <= 0 || age >= duration ||
+  const float duration = max ? .95F : perfect ? .65F : .55F;
+  if (achievement == Achievement::None || age <= (max ? .14F : 0) || age >= duration ||
       width <= 0 || upperBound <= judgeY) return;
-  const float q = age / duration;
-  const float fade = ease(age / .045F) *
+  const float q = max ? (age - .14F) / .8F : age / duration;
+  const float exit = std::clamp((age - .55F) / .4F, 0.0F, 1.0F);
+  const float fade = max ? ease((age - .14F) / .06F) * (1 - exit * exit * (3 - 2 * exit)) : ease(age / .045F) *
       std::pow(1 - std::clamp((q - .55F) / .45F, 0.0F, 1.0F), 1.4F);
-  const float depth = 1 - ease(q) * 1.12F;
-  const float front = depth - .12F;
-  const float length = .12F + (perfect ? .62F : .52F);
+  const float depth = 1 - ease(q) * (max ? 600.0F / 499 : 1.12F);
+  const float front = depth - (max ? 0 : .12F);
+  const float length = max ? 290.0F / 499 : .12F + (perfect ? .62F : .52F);
   const auto color = [&](float offset) {
+    if (max) {
+      // Focus's travelling wash: a white/teal crest and a long soft wake.
+      // Stops are measured from its upper edge, opposite SVG's bottom-to-top gradient.
+      const float blend = offset < .25F ? offset / .25F :
+                          1 - std::clamp((offset - .25F) / .3F, 0.0F, 1.0F);
+      const float alpha = (offset < .25F ? .7F * blend : offset < .55F ?
+          .5F + .2F * blend : .5F * (1 - offset) / .45F) * fade;
+      const auto channel = [blend](float teal, float white) {
+        return static_cast<unsigned>(teal + (white - teal) * blend);
+      };
+      return channel(86, 232) | (channel(210, 255) << 8) | (channel(202, 252) << 16) |
+          (static_cast<unsigned>(std::clamp(alpha, 0.0F, 1.0F) * 255) << 24);
+    }
     const float sigma = offset < .22F ? .11F : .29F;
     const float distance = (offset - .22F) / sigma;
     const float alpha = offset <= 0 || offset >= 1 ? 0 :

@@ -1,6 +1,6 @@
 # Native completion celebration
 
-The built-in renderer implements the Rise direction from
+The built-in renderer implements Rise, calm FINISH, and MAX Focus from
 [`tools/completion-motion`](../../tools/completion-motion/README.md).
 The authoring project remains useful for visual iteration; no JavaScript,
 Remotion, or new effect runtime is shipped in the game.
@@ -10,9 +10,9 @@ Remotion, or new effect runtime is shipped in the game.
 `completion_celebration::Tracker` observes committed judgement events. Stage-local
 PGREAT/GREAT/GOOD/BAD/POOR counts must cover the chart's effective scorable
 total. The shared `clear_policy::completedClearRank` determines the class:
-GOOD permits Full Combo; only PGREAT/GREAT earns Perfect. An all-PGREAT MAX
-uses the Perfect animation. Beatoraja also requires the surviving combo to
-cover the stage, preserving its empty-POOR rules.
+GOOD permits Full Combo; PGREAT/GREAT earns Perfect. All-PGREAT completion
+earns the distinct MAX Focus animation through the same MAX clear rank. Beatoraja
+also requires the surviving combo to cover the stage, preserving its empty-POOR rules.
 
 Below those achievements, resolved-note progress latches a neutral `FINISH`.
 It waits for actual resolution rather than counting nonvanishing BAD samples;
@@ -60,14 +60,20 @@ custom skins retain their authored timers and animations.
   fourteen side shards, and a single gold elliptical pulse centered on the
   visible lettering. The mark stays 88 design units above the word. The pulse
   decays without a second emission. Exit fades from 2.35 to 2.75 seconds.
+- MAX implements the approved Focus direction in `max-frame.mjs`. Short strokes
+  gather over 140 ms; 140 px lettering enters over 200 ms and settles from 1.24×
+  scale over 320 ms. An eight-point white/gold/teal star sits 118 design units
+  above the word. Twenty-four shards and two teal/gold rings share the 140 ms
+  burst onset, then clear while the title and star hold. Exit fades from 2.55 to
+  3.05 seconds. The local scrim and two glows match the approved prototype.
 - FINISH uses muted 62 px lettering with a 6 px lift over 320 ms, a hold until
   1.45 seconds, and a 450 ms exit. A soft dark backdrop and faint neutral halo
   support readability. Its stationary low lane glow fades within 800 ms; it has
   no travelling Wave, pulse, mark, shards, or underline.
 - `CompletionCelebrationEffect.h` evaluates bounded geometry directly. It emits
-  at most 1344 colored vertices plus six, seven, or nine textured glyph quads. There
+  at most 2192 colored vertices plus three, six, seven, or nine textured glyph quads. There
   are no particle containers, blur passes, shaders to compile, or audio cues.
-- The renderer pre-rasterizes the twenty-two visible glyph slots at construction.
+- The renderer pre-rasterizes the twenty-five visible glyph slots at construction.
   Frames reuse those textures and the existing batch buffers; motion changes
   quad geometry and opacity, not font rasterization or text layout.
 - A local black scrim sits behind the native celebration, reaching 68% opacity
@@ -82,6 +88,8 @@ custom skins retain their authored timers and animations.
   `CompletionWaveEffect.h` clips 24 gradient strips to the lane bounds (at most
   96 additional vertices); the gameplay camera supplies perspective. No blur
   pass, texture, screen-space overlay, or new completion event is needed.
+  MAX uses the same clipped 24-strip path for its stronger white/teal crest and
+  soft wake: starts at 140 ms, travels over 800 ms, and clears by 950 ms.
 - The authoring review's reduced-motion switch remains a prototype option.
   Native gameplay has no corresponding motion preference yet.
 
@@ -96,7 +104,7 @@ and completed exit against a fixed synthetic playfield.
 
 For optional local inspection, set `ASOBMASHOW_BUILTIN_ARTIFACT_DIR` to write
 representative PNGs. Also setting `ASOBMASHOW_COMPLETION_ANIMATION_DIR` writes
-30 fps PNG sequences under `finish/`, `full-combo/`, and `perfect/`. These opt-in captures
+30 fps PNG sequences under `finish/`, `full-combo/`, `perfect/`, and `max/`. These opt-in captures
 do not slow normal test runs and are not successful-play recordings.
 
 Desktop captures do not establish device GPU performance; iOS and Android
