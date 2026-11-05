@@ -27,13 +27,17 @@ Sound design is intentionally not included in this visual comparison.
 Run `node make-review.mjs --max` to create `out/max-review.html`.
 Two alternatives compare against the existing Perfect animation:
 
-- **Focus** contracts short strokes over 140 ms, then releases them once as
-  108 px MAX lettering settles from 1.18× scale. It uses white and PGREAT teal.
-- **Lift** raises three tapered trails from the judgement line, lifts the word
-  30 px over 340 ms, and opens short side strokes as the trails disappear.
+- **Focus** contracts short strokes over 140 ms, then releases a wide,
+  synchronized burst: 140 px MAX lettering settling from 1.24× scale, two
+  expanding teal/gold rings, 24 white/teal/gold shards, and a travelling lane wash.
+- **Lift** launches seven tapered trails from the judgement line, lifts the
+  larger word 40 px over 340 ms, and sends the shards upward before they fall away.
 
-Both hold the independent (640, 285) anchor, fade from 2.45 to 2.9 seconds,
-and retain only lettering, underline, and a soft backdrop/glow in reduced motion.
+Both add an eight-point star above the word and a broader glow, making MAX
+more celebratory than Perfect. They hold the independent (640, 285) title
+anchor and fade from 2.55 to 3.05 seconds. Reduced motion keeps the larger
+lettering, static star, underline, and soft backdrop/glow, without the moving
+rings, shards, lane effects, or scale/lift entrance.
 The final judgement occurs at the same synthetic 0.65 s cue. MAX's counters show
 all PGREAT; Perfect includes GREATs and Full Combo includes GOODs. These are
 visual studies, not scoring implementations. Native MAX still uses Perfect

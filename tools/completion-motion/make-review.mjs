@@ -62,6 +62,7 @@ if (max) {
     .replace('innerHTML=sceneSvg(', 'innerHTML=maxSceneSvg(')
     .replace('textContent=directions[kind]', 'textContent=maxDirections[kind]')
     .replace('Completion motion studies', 'MAX motion studies')
+    .replace('let seconds=0.95', 'let seconds=1.05')
     .replace('class="mode"', 'class="mode" style="display:none"')
     .replace('Replay to judge motion; use Perfect to compare the extra finishing motion.', 'MAX = all PGREAT. Compare both directions with Perfect; native gameplay is unchanged.');
 }
