@@ -59,6 +59,21 @@ std::string localStamp(std::int64_t seconds) {
   std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M", &time);
   return buffer;
 }
+std::map<std::string,std::map<std::string,int>> selectedLevelOrder(
+    ChartRepository &charts, const kombo::Assignment &selection) {
+  std::map<std::string,std::map<std::string,int>> order;
+  if (selection.levels.empty()) return order;
+  auto session = charts.OpenSession();
+  if (!session) return order;
+  for (const auto &table : session->SelectDifficultyTables()) {
+    if (std::none_of(selection.levels.begin(),selection.levels.end(),
+        [&](const auto &level) { return level.source == table.sourceUrl; })) continue;
+    int position = 0;
+    for (const auto &level : session->SelectDifficultyLevels(table.id))
+      order[table.sourceUrl].emplace(level.level,position++);
+  }
+  return order;
+}
 void filterRecap(recap::Snapshot &snapshot, ChartRepository &charts,
                  const std::vector<kombo::Level> &levels, bool includeNew) {
   std::optional<std::unordered_set<std::string>> hashes;
@@ -217,6 +232,12 @@ void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &up
     if (!narrow) change->setWidth(280);
   }
 }
+std::string PlayRecapScene::filterText() const {
+  const auto difficulties = difficultyFilter_.levels.empty() ? tr("recap.ui.all_difficulties")
+      : kombo::formatLevelRanges(difficultyFilter_,selectedLevelOrder(context.chartRepository,difficultyFilter_));
+  return tr("recap.ui.difficulties") + ": " + difficulties + " · " +
+      tr(includeNew_ ? "recap.ui.new_on" : "recap.ui.new_off");
+}
 void PlayRecapScene::buildFilters(View *body) {
   auto *controls = row(body);
   button(controls,tr("recap.ui.difficulties"),[this] { later([this] {
@@ -225,6 +246,7 @@ void PlayRecapScene::buildFilters(View *body) {
   button(controls,tr(includeNew_ ? "recap.ui.new_on" : "recap.ui.new_off"),[this] { later([this] {
     includeNew_ = !includeNew_; reload();
   }); },includeNew_);
+  label(body,filterText(),16)->setThemedColor(app_theme::textSecondary);
   if (!filtersExpanded_) return;
   const auto select = [this](View *parent,const std::string &caption,
       std::vector<DropdownView::Option> options,std::string selected,
@@ -285,14 +307,7 @@ void PlayRecapScene::buildFilters(View *body) {
       else message_ = tr("kombo.ui.invalid_levels");
     }); })->setEnabled(first >= 0 && last >= first);
   }
-  std::map<std::string,std::map<std::string,int>> order;
-  for (const auto &table : tables) {
-    if (std::none_of(difficultyFilter_.levels.begin(),difficultyFilter_.levels.end(),
-        [&](const auto &level) { return level.source == table.sourceUrl; })) continue;
-    int position = 0;
-    for (const auto &level : session->SelectDifficultyLevels(table.id))
-      order[table.sourceUrl].emplace(level.level,position++);
-  }
+  const auto order = selectedLevelOrder(context.chartRepository,difficultyFilter_);
   std::vector<kombo::LevelRange> ranges;
   kombo::formatLevelRanges(difficultyFilter_,order,&ranges);
   for (const auto &range : ranges) {
@@ -413,7 +428,7 @@ void PlayRecapScene::beginExport(bool share) {
 }
 void PlayRecapScene::exportReceipt() {
   recap::ReceiptContent receipt{.title = tr("recap.ui.title"), .profile = profileName_,
-      .period = periodText(), .footer = tr("recap.ui.image_footer")};
+      .period = periodText() + "\n" + filterText(), .footer = tr("recap.ui.image_footer")};
   for (int kind = 0; kind < 3; ++kind) {
     auto &section = receipt.sections[kind];
     section.title = tr(sectionKeys[kind]); section.empty = tr("recap.ui.empty");
