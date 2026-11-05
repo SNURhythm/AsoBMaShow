@@ -7385,6 +7385,16 @@ void GamePlayScene::update(float dt) {
 
   SDL_Log("Pinned Beatoraja gameplay playtime elapsed");
   state->isEnding = true;
+  // Ending rejects further key/finger releases, and the stopped worker may
+  // retain held lanes. Retire their presentation after its final snapshot,
+  // without judging releases or adding input to the completed replay.
+  const auto releaseVisualMicros = getVisualTimeMicros(gameplayTimeMicros);
+  for (auto &[lane, pressed] : lanePressed) {
+    if (!pressed) continue;
+    pressed = false;
+    presentationEventFanout->onLaneReleased(lane, releaseVisualMicros);
+  }
+  updateLaneStateText();
   finishReplayRecording();
   recordedAttemptCompleted = options.practiceMode;
   publishPracticeGhost();

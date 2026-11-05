@@ -185,8 +185,12 @@ struct FixturePresentation {
   void setNoteState(NotePresentationState state) {
     noteStates.insert_or_assign(state.id, state);
   }
-  void onLanePressed(int, JudgeResult, long long) {}
-  void onLaneReleased(int, long long) {}
+  void onLanePressed(int lane, JudgeResult judge, long long time) {
+    if (timingState) timingState->onLanePressed(lane, judge, time);
+  }
+  void onLaneReleased(int lane, long long time) {
+    if (timingState) timingState->onLaneReleased(lane, time);
+  }
   void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) {
     if (timingState) timingState->onTimingSample(judge, clock);
   }
@@ -1629,6 +1633,48 @@ void testRealtimeTimingSamplesFollowInputEvents() {
           "recorded autoplay does not inject synthetic timing during replay");
 }
 
+void testGameplayEndReleasesHeldLaneBeams() {
+  for (const bool realtime : {false, true}) {
+    GamePlayScene scene;
+    scene.sourcePlaytime = 4'000;
+    scene.state->commitJudge({PGreat, 0});
+    scene.state->commitJudge({PGreat, 0});
+    scene.lanePressed[0] = true;
+    auto model = buildPlayfieldChartVisualModel(*scene.chart, 0);
+    const auto laneIndex = std::find(model.laneOrder.begin(), model.laneOrder.end(), 0) -
+                          model.laneOrder.begin();
+    scene.presentationEventFanout->timingState =
+        std::make_unique<PlayfieldVisualStateStore>(model);
+    auto &store = *scene.presentationEventFanout->timingState;
+    store.onLanePressed(0, {None, 0}, 999'000);
+    scene.context.jukebox.time = 1'000'000;
+    scene.update(0.016F);
+    require(!scene.state->isEnding && scene.lanePressed[0] &&
+                store.capture({}).lanes.at(laneIndex).pressed,
+            "held beam stays active until the gameplay timer ends");
+    if (realtime) {
+      scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+      scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+      scene.realtimeGameplaySession->worker->snapshot.terminalReason =
+          gameplay::GameplayTerminalReason::ChartComplete;
+      scene.stoppedSnapshot = std::make_unique<RhythmState>(*scene.state);
+    }
+    scene.context.jukebox.time = 4'001'000;
+    scene.update(0.016F);
+    const auto lane = store.capture({}).lanes.at(laneIndex);
+    require(scene.state->isEnding && !scene.lanePressed[0] && !lane.pressed &&
+                lane.releaseMicros == 4'001'000,
+            "gameplay end releases held beams before key/finger releases stop being accepted");
+    require(scene.state->getScore() == 4 && scene.state->judgeCount[Poor] == 0 &&
+                scene.recordedReplay.events.empty(),
+            "terminal beam cleanup does not judge notes or append replay input");
+    scene.context.jukebox.time += 100'000;
+    scene.update(0.016F);
+    require(store.capture({}).lanes.at(laneIndex).releaseMicros == lane.releaseMicros,
+            "ending updates do not restart the release fade");
+  }
+}
+
 void testRealtimeTerminalRouting() {
   for (const bool practice : {false, true}) {
     GamePlayScene scene;
@@ -2812,6 +2858,7 @@ void testAutomaticRetryCue() {
 }
 
 int main(int argc, char **argv) {
+  testGameplayEndReleasesHeldLaneBeams();
   testAutomaticRetryCue();
   testLegacyMissedHcnPreview();
   testLegacyMineKeysoundOnlyOnDetonation();
