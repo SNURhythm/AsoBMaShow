@@ -14,7 +14,7 @@ class ChartGoalsSceneTests(unittest.TestCase):
         methods = "\n".join(extract(scene, signature) for signature in (
             "std::string rateText(", "void ChartGoalsScene::init(", "void ChartGoalsScene::showGoal(", "void ChartGoalsScene::showChartGoals(",
             "bool ChartGoalsScene::checkProfile(", "void ChartGoalsScene::later(", "void ChartGoalsScene::back(", "void ChartGoalsScene::browseCharts(",
-            "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal(", "void ChartGoalsScene::recommendGoal(", "void ChartGoalsScene::changeDraftMode("))
+            "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal(", "void ChartGoalsScene::recommendGoal(", "void ChartGoalsScene::changeDraftMode(", "void ChartGoalsScene::changeRecommendationMode("))
         fixture = (root / "tests/chart_goals_scene_fixture.cpp").read_text()
         fixture = fixture.replace("PRODUCTION_METHODS", methods)
         with tempfile.TemporaryDirectory(prefix="asobmashow-goals-scene-") as directory:
@@ -250,7 +250,7 @@ struct ChartGoalsScene {
   std::map<std::string,float> scrollOffsets_;
   float navigationOffset_=0;
   goal_navigation::ChartTab overviewTab_=goal_navigation::ChartTab::Achieved;
-  int offset_=40, achievedOffset_=20, recommendationTable_=7;
+  int offset_=40, achievedOffset_=20, recommendationTable_=7, recommendationMode_=2;
   bool recommendationSortTable_=true;
   std::optional<int> recommendationChart_, recommendationRank_=24;
   struct Group { int offset; }; std::map<int,Group> recommendations_{{24,{20}}, {26,{40}}};
@@ -263,6 +263,7 @@ int main() {
   assert(state.chartScrollOffsets.at("achieved:20")==123 && state.chartNavigationOffset==45);
   assert(state.chartRecommendationRank==24 && state.chartRecommendationOffsets.at(26)==40);
   assert(state.chartRecommendationTable==7 && state.chartRecommendationSortTable);
+  assert(state.chartRecommendationMode==2);
   s.recommendationChart_=1; s.recommendationRank_=27; s.rememberNavigation();
   assert(state.chartRecommendationRank==24); // Scoped recommendations do not replace the global overview.
 }
@@ -290,7 +291,7 @@ struct ChartGoalsScene {
  struct Record { struct { std::string SHA256; } meta; };
  std::optional<Record> recommendationChart_, pickerChart_;
  bool editing_=false, recommendationSortTable_=false;
- int recommendationTable_=0, offset_=0, achievedOffset_=0, pickerOffset_=0;
+ int recommendationTable_=0, recommendationMode_=1, offset_=0, achievedOffset_=0, pickerOffset_=0;
  struct Group { int offset=0; }; std::map<int, Group> recommendations_;
  std::string scrollKey() const;
 };
@@ -299,8 +300,10 @@ int main() {
  ChartGoalsScene s; auto ongoing=s.scrollKey(); s.offset_=20; assert(s.scrollKey()!=ongoing);
  s.overviewTab_=ChartGoalsScene::OverviewTab::Recommendations; s.recommendationRank_=24;
  s.recommendations_[24].offset=20; auto page=s.scrollKey(); s.recommendations_[24].offset=0; assert(page!=s.scrollKey());
+ auto filtered=s.scrollKey(); s.recommendationMode_=2; assert(s.scrollKey()!=filtered);
  auto ordinary=s.scrollKey(); s.recommendationChart_=ChartGoalsScene::Record{{"chart"}};
- assert(s.scrollKey()!=ordinary); s.recommendationChart_.reset(); assert(s.scrollKey()==ordinary);
+ assert(s.scrollKey()!=ordinary); auto scoped=s.scrollKey(); s.recommendationMode_=3; assert(s.scrollKey()!=scoped);
+ s.recommendationMode_=2; s.recommendationChart_.reset(); assert(s.scrollKey()==ordinary);
  s.selected_=1; s.draft_.chart.SHA256="chart"; auto detail=s.scrollKey(); s.editing_=true; assert(s.scrollKey()!=detail);
  s.editing_=false; s.draft_.id=2; assert(s.scrollKey()!=detail);
  s.draft_.longNoteMode=2; assert(s.scrollKey()!=detail);
@@ -378,7 +381,8 @@ struct ChartMetaQuery { std::optional<std::vector<std::string>> allowedSha256; b
 struct Charts {
   ScoreRepository *active=nullptr;
   struct Session {
-    std::vector<GoalRecommendation> GoalRecommendations(int,int,int,bool,const std::string &hash = {}) {
+    std::vector<GoalRecommendation> GoalRecommendations(int,int,int,bool,const std::string &hash = {}, int mode = 0) {
+      assert(mode == 2);
       return hash == "active-chart" ? std::vector<GoalRecommendation>{{"active-chart"}} : std::vector<GoalRecommendation>{{"other-chart"}};
     }
     void QueryChartMeta(const ChartMetaQuery &, std::vector<ChartMetaRecord> &rows) { rows.push_back({{"active-chart"}}); }
@@ -394,7 +398,7 @@ struct ChartGoalsScene {
   struct { Charts chartRepository; ScoreRepository scoreRepository; } context;
   struct Group { int offset=0; bool expanded=false; std::vector<std::pair<GoalRecommendation,ChartMetaRecord>> rows; };
   std::map<int,Group> recommendations_;
-  int recommendationTable_=0; bool recommendationSortTable_=false;
+  int recommendationTable_=0, recommendationMode_=2; bool recommendationSortTable_=false;
   std::string message_;
   std::optional<ChartMetaRecord> recommendationChart_;
   void loadRecommendations(int,int);

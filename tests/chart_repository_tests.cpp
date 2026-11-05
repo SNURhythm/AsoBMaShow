@@ -1177,6 +1177,13 @@ void testChartQueryBehaviorMatrix() {
   const auto chartOnly = session->GoalRecommendations(50, 0, 0, false, shaE);
   assert(chartOnly.size() == 1 && chartOnly[0].sha256 == shaE);
   assert(session->GoalRecommendations(50, 1, 0, false, shaE).empty());
+  // LN-scoped evidence and shared (no-long-note) evidence filter before counts and paging.
+  assert(session->GoalRecommendationCounts(tables.front().id, {}, 1).at(50) == 2);
+  assert(session->GoalRecommendationCounts(tables.front().id, {}, 2).at(50) == 1);
+  const auto cnRecommendations = session->GoalRecommendations(50, 0, tables.front().id, false, {}, 2);
+  assert(cnRecommendations.size() == 1 && cnRecommendations[0].sha256 == shaE);
+  assert(session->GoalRecommendations(50, 1, tables.front().id, false, {}, 2).empty());
+  assert(session->GoalRecommendationCounts(0, std::string(shaC), 2).empty());
   assert(session->GoalRecommendationCounts(0, "missing-chart").empty());
   assert(session->GoalRecommendations(50, 0, 0, false, "missing-chart").empty());
   {

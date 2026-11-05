@@ -29,9 +29,12 @@ groups for best scores within 2 percentage points below their next rank. Empty
 groups are hidden. Candidates are ordered by EX points remaining, nearest first, with 20 per
 page. Tapping a recommendation opens the normal goal editor with that rank
 selected in a new independent goal; saving remains explicit. Existing goals
-remain unchanged. LN/CN/HCN
-evidence is combined into one chart card per target group. The editor provides
-a mode picker for selectable-mode charts, initially using the closest evidence;
+remain unchanged. Recommendations offer **All / LN / CN / HCN** filters,
+initially selecting the current play mode. Charts without long notes are included
+in every filter; other charts use evidence from the selected scope. Counts and
+pages follow the filter. All combines LN/CN/HCN evidence into one chart card per
+target group, using the closest evidence. The editor provides
+a mode picker for selectable-mode charts, initially using the recommendation's scope;
 changing the mode keeps the draft targets without saving.
 
 Candidates come from the profile's best-score summary, with indexed chart-hash

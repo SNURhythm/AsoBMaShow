@@ -193,6 +193,20 @@ int main() {
     }
     CHECK(matchingChart==1);
     query.reset();
+    // Filter before choosing a chart's closest evidence; mode-free charts remain in every filter.
+    for (const bool gauge : {false, true}) {
+      CHECK(prepareSqliteStatement(recommendations, gauge ? gaugeRecommendationPageSql(0,false,false,false,2)
+          : recommendationPageSql(0,false,false,false,2), query)==SQLITE_OK);
+      CHECK(sqlite3_bind_int(query,1,gauge ? 400 : 24)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+      bool selectedMode = false, sharedMode = false;
+      while (sqlite3_step(query)==SQLITE_ROW) {
+        const auto hash = sqliteColumnString(query,0);
+        if (hash=="closest") { CHECK(sqlite3_column_int(query,1)==2); selectedMode = true; }
+        if (hash=="smaller-percent") { CHECK(sqlite3_column_int(query,1)==0); sharedMode = true; }
+      }
+      CHECK(selectedMode && sharedMode);
+      query.reset();
+    }
     // Suppress only targets already covered in the same effective LN mode.
     CHECK(sqlite3_exec(recommendations,
         "CREATE TABLE score_db.chart_goals(sha256 TEXT,ln_mode INTEGER,body TEXT,PRIMARY KEY(sha256,ln_mode));"
@@ -256,9 +270,17 @@ int main() {
     CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="modes" && sqlite3_column_int(query,1)==3);
     CHECK(sqlite3_step(query)==SQLITE_DONE);
     query.reset();
-    CHECK(sqlite3_exec(recommendations,"DELETE FROM score_db.goal_perfect_best",nullptr,nullptr,nullptr)==SQLITE_OK);
+    // FC and PERFECT groups use the same filter, including chart-scoped pages.
+    for (int target : {600,700}) {
+      CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationPageSql(0,false,false,true,1),query)==SQLITE_OK);
+      CHECK(sqlite3_bind_int(query,1,target)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+      CHECK(sqlite3_bind_text(query,3,"modes",-1,SQLITE_STATIC)==SQLITE_OK);
+      CHECK(sqlite3_step(query)==SQLITE_ROW && sqlite3_column_int(query,1)==1);
+      CHECK(sqlite3_step(query)==SQLITE_DONE);
+      query.reset();
+    }
     CHECK(sqlite3_exec(recommendations,
-        "DELETE FROM chart_meta; DELETE FROM score_db.goal_gauge_best; DELETE FROM score_db.goal_combo_best;"
+        "DELETE FROM chart_meta; DELETE FROM score_db.goal_gauge_best; DELETE FROM score_db.goal_combo_best; DELETE FROM score_db.goal_perfect_best;"
         "DELETE FROM score_db.score_sha256_clear_rank_cache;"
         "INSERT INTO chart_meta VALUES('light','a',0,0,0),('assist','b',0,0,0);"
         "INSERT INTO score_db.goal_gauge_best VALUES('light',0,100,75,80,0,100,5),('assist',0,50,75,80,0,100,5);"

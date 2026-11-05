@@ -59,7 +59,7 @@ struct ChartGoalsScene {
   OverviewTab overviewTab_ = OverviewTab::Ongoing;
   struct Group { int count=0, offset=0; Group() = default; Group(int n) : count(n) {} };
   std::map<int, Group> recommendations_;
-  int recommendationTable_=0; bool recommendationSortTable_=false;
+  int recommendationTable_=0, recommendationMode_=-1; bool recommendationSortTable_=false;
   std::optional<int> recommendationRank_;
   int loadedRank = -1;
   void loadRecommendations(int rank, int offset) { assert(offset == 0); loadedRank = rank; }
@@ -97,6 +97,7 @@ struct ChartGoalsScene {
   void showGoal(chart_goals::Goal);
   void recommendGoal(const ChartMetaRecord &, int, int);
   void changeDraftMode(int);
+  void changeRecommendationMode(int);
   void resolveChart() {}
   bool checkProfile();
   void later(std::function<void()>);
@@ -112,6 +113,26 @@ int main() {
   recommended.init();
   assert(recommended.overviewTab_ == ChartGoalsScene::OverviewTab::Recommendations);
   assert(recommended.loadedRank == 24 && !recommended.initialRecommendations_);
+  assert(recommended.recommendationMode_ == 3); // Starts with the selected HCN mode.
+  recommended.recommendations_[24].offset = 40;
+  const int beforeFilterReloads = recommended.reloads;
+  recommended.changeRecommendationMode(2);
+  assert(recommended.recommendationMode_ == 2 && recommended.recommendations_[24].offset == 0);
+  assert(recommended.reloads == beforeFilterReloads + 1 && recommended.context.settings.selectedLnMode == "HCN");
+  recommended.changeRecommendationMode(2);
+  assert(recommended.reloads == beforeFilterReloads + 1);
+  recommended.recommendationRank_.reset();
+  recommended.loadedRank = -1;
+  recommended.changeRecommendationMode(1);
+  assert(recommended.recommendationRank_ == 24 && recommended.loadedRank == 24);
+  ChartGoalsScene restored;
+  restored.navigationState_->chartRecommendationMode = 0;
+  restored.init();
+  assert(restored.recommendationMode_ == 0); // Returning from folder goals retains All.
+  restored.context.profileManager.profile.id = "two";
+  restored.context.settings.selectedLnMode = "CN";
+  restored.checkProfile();
+  assert(restored.recommendationMode_ == 2 && !restored.navigationState_->chartRecommendationMode);
   ChartGoalsScene noRecommendations;
   noRecommendations.initialRecommendations_ = true;
   noRecommendations.init();

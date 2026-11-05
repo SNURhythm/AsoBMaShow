@@ -13,7 +13,7 @@ struct State {
   int folderOffset = 0, folderAchievedOffset = 0;
   std::map<std::string, float> chartScrollOffsets, folderScrollOffsets;
   float chartNavigationOffset = 0, folderNavigationOffset = 0;
-  std::optional<int> chartRecommendationRank;
+  std::optional<int> chartRecommendationRank, chartRecommendationMode;
   std::map<int, int> chartRecommendationOffsets;
   int chartRecommendationTable = 0;
   bool chartRecommendationSortTable = false;

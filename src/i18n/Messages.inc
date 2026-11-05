@@ -180,6 +180,7 @@
 {"goals.ui.add", "Add goal", "목표 추가", "目標を追加", "添加目标", "新增目標"},
 {"goals.ui.add_recommended", "Add recommended goals", "추천 목표 추가", "おすすめの目標を追加", "添加推荐目标", "新增推薦目標"},
 {"goals.ui.all_goals", "All goals", "전체 목표", "すべての目標", "全部目标", "全部目標"},
+{"goals.ui.all_modes", "All", "전체", "すべて", "全部", "全部"},
 {"goals.ui.all_tables", "All tables", "모든 난이도표", "すべての難易度表", "所有难度表", "所有難度表"},
 {"goals.ui.already_achieved", "You’ve already met this goal. Choose a new target.", "이미 달성한 목표입니다. 새로운 목표를 선택하세요.", "この目標はすでに達成しています。新しい目標を選んでください。", "你已达成此目标，请选择新目标。", "你已達成此目標，請選擇新目標。"},
 {"goals.ui.best_lamp", "Best lamp: {value}", "최고 램프: {value}", "ベストランプ: {value}", "最佳灯：{value}", "最佳燈：{value}"},

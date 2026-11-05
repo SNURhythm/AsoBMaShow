@@ -33,6 +33,7 @@ private:
   void loadRecommendations(int rank, int offset);
   void recommendGoal(const ChartMetaRecord &, int mode, int rank);
   void changeDraftMode(int mode);
+  void changeRecommendationMode(int mode);
   struct RecommendationGroup {
     int count = 0, offset = 0;
     bool expanded = false;
@@ -41,6 +42,7 @@ private:
   std::map<int, RecommendationGroup> recommendations_;
   std::vector<DifficultyTableInfo> recommendationTables_;
   int recommendationTable_ = 0;
+  int recommendationMode_ = -1;
   bool recommendationSortTable_ = false;
   std::shared_ptr<goal_navigation::State> navigationState_;
   using OverviewTab = goal_navigation::ChartTab;

@@ -272,6 +272,7 @@ bool ChartGoalsScene::checkProfile() {
   sourcePicker_ = false; editorReturnGoal_.reset();
   recommendations_.clear(); recommendationRank_.reset(); recommendationTable_ = 0; recommendationSortTable_ = false;
   *navigationState_ = {}; overviewTab_ = OverviewTab::Ongoing;
+  recommendationMode_ = long_note_mode::valueFromId(context.settings.selectedLnMode);
   draft_ = {}; page_ = {}; offset_ = achievedOffset_ = pickerOffset_ = 0;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
@@ -287,6 +288,8 @@ void ChartGoalsScene::later(std::function<void()> action) {
 }
 void ChartGoalsScene::init() {
   checkProfile();
+  if (recommendationMode_ < 0) recommendationMode_ = navigationState_->chartRecommendationMode.value_or(
+      long_note_mode::valueFromId(context.settings.selectedLnMode));
   if (initialRecommendations_ && initial_) {
     recommendationChart_ = std::exchange(initial_, {});
     initialMode_.reset();
@@ -332,7 +335,7 @@ void ChartGoalsScene::reload() {
             return table.id == recommendationTable_;
           })) recommendationTable_ = 0;
       for (const auto &[rank, count] : session->GoalRecommendationCounts(recommendationTable_,
-          recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{})) {
+          recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{}, recommendationMode_)) {
         auto &group = recommendations_[rank];
         group.count = count;
         group.offset = std::clamp(previousOffsets[rank], 0,
@@ -385,7 +388,7 @@ void ChartGoalsScene::loadRecommendations(int rank, int offset) {
     auto session = context.chartRepository.OpenSession(&context.scoreRepository);
     if (!session) throw std::runtime_error("Chart storage is unavailable.");
     const auto candidates = session->GoalRecommendations(rank, offset, recommendationTable_, recommendationSortTable_,
-        recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{});
+        recommendationChart_ ? recommendationChart_->meta.SHA256 : std::string{}, recommendationMode_);
     ChartMetaQuery query;
     query.allowedSha256 = std::vector<std::string>{};
     for (const auto &entry : candidates) query.allowedSha256->push_back(entry.sha256);
@@ -415,6 +418,16 @@ void ChartGoalsScene::recommendGoal(const ChartMetaRecord &record, int mode, int
   }
   customScore_ = draft_.target.scoreNumerator > 0 && draft_.target.scoreDenominator != 27;
   customRate_ = rateText(draft_.target);
+}
+void ChartGoalsScene::changeRecommendationMode(int mode) {
+  if (mode < 0 || mode > 3 || mode == recommendationMode_) return;
+  recommendationMode_ = mode;
+  for (auto &[rank, group] : recommendations_) group.offset = 0;
+  reload();
+  if (!recommendationRank_ && !recommendations_.empty()) {
+    recommendationRank_ = recommendations_.begin()->first;
+    loadRecommendations(*recommendationRank_, 0);
+  }
 }
 void ChartGoalsScene::changeDraftMode(int mode) {
   draft_.longNoteMode = mode;
@@ -534,14 +547,14 @@ std::string ChartGoalsScene::scrollKey() const {
     const int rank = recommendationRank_.value_or(-1);
     const auto found = recommendations_.find(rank);
     return "chart-recommend:" + recommendationChart_->meta.SHA256 + ":" + std::to_string(rank) + ":" +
-        std::to_string(found == recommendations_.end() ? 0 : found->second.offset);
+        std::to_string(found == recommendations_.end() ? 0 : found->second.offset) + ":" + std::to_string(recommendationMode_);
   }
   if (overviewTab_ == OverviewTab::Recommendations) {
     const int rank = recommendationRank_.value_or(-1);
     const auto found = recommendations_.find(rank);
     const int page = found == recommendations_.end() ? 0 : found->second.offset;
     return "recommend:" + std::to_string(rank) + ":" + std::to_string(page) + ":" +
-        std::to_string(recommendationTable_) + ":" + std::to_string(recommendationSortTable_);
+        std::to_string(recommendationTable_) + ":" + std::to_string(recommendationSortTable_) + ":" + std::to_string(recommendationMode_);
   }
   return overviewTab_ == OverviewTab::Ongoing ? "ongoing:" + std::to_string(offset_)
                                                : "achieved:" + std::to_string(achievedOffset_);
@@ -754,6 +767,17 @@ void ChartGoalsScene::build() {
     if (overviewTab_ == OverviewTab::Recommendations) {
       label(body, i18n::tr("goals.ui.recommendations"), 24);
       if (recommendationChart_) goalIdentity(body, recommendationChart_->meta, &*recommendationChart_, 24);
+      label(body, i18n::tr("play_options.long_note_mode.label"), 18);
+      auto *modes = new View();
+      modes->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+      body->addView(modes);
+      for (int mode : {0, 1, 2, 3}) {
+        auto *button = action(modes, mode == 0 ? i18n::tr("goals.ui.all_modes") : long_note_mode::idFromValue(mode),
+            [this, mode] { later([this, mode] { changeRecommendationMode(mode); }); },
+            mode == recommendationMode_ ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
+        button->setFlex(1);
+        button->setSelected(mode == recommendationMode_);
+      }
       if (goal_navigation::stackedNavigation(goalContentWidth(), rendering::compactMenuCanvasActive)) {
         std::vector<DropdownView::Option> ranks;
         for (const auto &[rank, group] : recommendations_)
@@ -897,6 +921,7 @@ void ChartGoalsScene::rememberNavigation() {
   if (scroll_ && !renderedScrollKey_.empty()) scrollOffsets_[renderedScrollKey_] = scroll_->getScrollOffset();
   if (navigationScroll_) navigationOffset_ = navigationScroll_->getScrollOffset();
   navigationState_->chartTab = overviewTab_;
+  navigationState_->chartRecommendationMode = recommendationMode_;
   navigationState_->chartOffset = offset_; navigationState_->chartAchievedOffset = achievedOffset_;
   navigationState_->chartScrollOffsets = scrollOffsets_; navigationState_->chartNavigationOffset = navigationOffset_;
   if (!recommendationChart_) {
