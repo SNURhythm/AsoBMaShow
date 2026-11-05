@@ -5,10 +5,11 @@ export const duration = 3.8;
 export const impactTime = 0.65;
 // Independent presentation anchor; never derived from judgement text/line settings.
 const achievementX = 640, achievementY = 285;
+const perfectImpact = .08;
 export const directions = [
-  {name: '01 / Impact', description: 'Two strokes converge, the lettering lands, and short shards release outward. Perfect answers with a second expanding pulse.'},
-  {name: '02 / Sweep', description: 'A quick pass reveals the lettering in sequence. Fine trails clear outward; Perfect adds a return glint and a wider finish.'},
-  {name: '03 / Rise', description: 'The lettering lifts into place as narrow trails fan upward. Perfect adds a brief burst above the title.'},
+  {name: '01 / Impact', description: 'Two strokes converge, the lettering lands, and short shards release outward. Perfect lands with one larger pulse, its mark and burst arriving together.'},
+  {name: '02 / Sweep', description: 'A quick pass reveals the lettering in sequence. Fine trails clear outward; Perfect uses the same single, stronger impact across all three directions.'},
+  {name: '03 / Rise', description: 'The lettering lifts into place as narrow trails fan upward. Perfect brings its mark, lettering, and burst in together.'},
 ];
 const clamp = (v) => Math.max(0, Math.min(1, v));
 const ease = (v) => 1 - Math.pow(1 - clamp(v), 3);
@@ -94,24 +95,19 @@ function lettering(t,kind,perfect,reduced) {
   let s='';
   for(let i=0;i<word.length;i++) {
     if(word[i]===' ')continue;
-    const stagger=reduced?0:kind===1?i*.022:Math.abs(i-(word.length-1)/2)*.009;
-    const age=t-delay-stagger, p=out(age,0,.23);
+    const stagger=reduced||perfect?0:kind===1?i*.022:Math.abs(i-(word.length-1)/2)*.009;
+    const age=t-delay-stagger, p=out(age,0,perfect?.13:.23);
     if(age<=0)continue;
-    const settle=reduced?0:Math.sin(clamp(age/.48)*Math.PI)*Math.exp(-age*5);
+    const settle=reduced||perfect?0:Math.sin(clamp(age/.48)*Math.PI)*Math.exp(-age*5);
     const x=-totalWidth/2+widths.slice(0,i).reduce((sum,width)=>sum+width,0)+widths[i]/2;
-    const y=reduced?0:(kind===2?30:12)*(1-p)-5*settle;
-    const scale=reduced?1:1+.1*settle;
+    const y=reduced?0:perfect?0:(kind===2?30:12)*(1-p)-5*settle;
+    const scale=reduced?1:perfect?1+.16*(1-out(age,0,.28)):1+.1*settle;
     const glyph=`<text text-anchor="middle" dominant-baseline="central" font-family="Achievement,sans-serif" font-weight="700" font-size="${size}" fill="${white}">${word[i]}</text>`;
     s+=group(glyph,p*(1-exit),`translate(${f(x)} ${f(y)}) scale(${f(scale)})`);
   }
   // One short accent below the word anchors its weight without a persistent badge.
-  const width=(perfect?202:235)*out(t,.16,.35);
-  s+=line(-width,57,width,57,color,2,out(t,.16,.12)*(1-smooth((t-1.1)/.65)));
-  // A narrow highlight crosses the actual lettering, not a screen-sized flare.
-  if(perfect&&!reduced&&t>.55&&t<1.1) {
-    const x=-270+540*smooth((t-.55)/.55);
-    s+=`<clipPath id="glint"><rect x="${f(x)}" y="-54" width="27" height="108"/></clipPath><g clip-path="url(#glint)">${group(s.replaceAll(`fill="${white}"`, `fill="${color}"`),.9)}</g>`;
-  }
+  const width=(perfect?202:235)*out(t,perfect?perfectImpact:.16,perfect?.18:.35);
+  s+=line(-width,57,width,57,color,2,out(t,perfect?perfectImpact:.16,perfect?.08:.12)*(1-smooth((t-1.1)/.65)));
   return s;
 }
 
@@ -146,10 +142,6 @@ function impact(t,perfect) {
   }
   const q=out(t,.1,.65);
   s+=ellipse(0,0,150+190*q,28+66*q,color,1.5,out(t,.1,.05)*(1-q)*.7);
-  if(perfect) {
-    const r=out(t,.48,.65);
-    s+=ellipse(0,0,190+180*r,42+80*r,teal,1.5,out(t,.48,.05)*(1-r)*.8);
-  }
   return s+fragments(t,perfect,0);
 }
 
@@ -161,10 +153,6 @@ function sweep(t,perfect) {
     const x=-290+580*q;
     s+=line(x-100*(1-q),y,x,y,color,i===0?2:3,Math.sin(q*Math.PI));
     s+=shard(x,y,12,2,0,white,Math.sin(q*Math.PI));
-  }
-  if(perfect) {
-    const q=out(t,.55,.5),x=290-580*q;
-    s+=line(x,-52,x+70*(1-q),-52,teal,2,Math.sin(q*Math.PI));
   }
   return s+fragments(t,perfect,1);
 }
@@ -179,13 +167,6 @@ function rise(t,perfect) {
     s+=line(x,y+25*(1-q),x,y,color,2,Math.sin(q*Math.PI)*.7);
     s+=shard(x,y,8*(1-q),1,90,white,Math.sin(q*Math.PI)*.6);
   }
-  if(perfect) {
-    const q=out(t,.48,.65);
-    for(let i=0;i<6;i++) {
-      const a=i*Math.PI/3, r=10+q*46;
-      s+=shard(Math.cos(a)*r,-87+Math.sin(a)*r*.6,7*(1-q)+1,1.4,a*180/Math.PI,teal,out(t,.48,.06)*(1-q));
-    }
-  }
   return s+fragments(t,perfect,2);
 }
 
@@ -193,9 +174,9 @@ function rise(t,perfect) {
 // The mark survives the celebratory burst, so the achievement has a distinct
 // silhouette even when paused or shown with reduced motion.
 function perfectCelebration(t,reduced) {
-  const alpha=out(t,.22,.18)*(1-smooth((t-2.35)/.4));
+  const alpha=out(t,perfectImpact,.08)*(1-smooth((t-2.35)/.4));
   if(alpha<=0)return '';
-  const assemble=reduced?1:out(t,.22,.3);
+  const assemble=reduced?1:out(t,perfectImpact,.13);
   let mark='';
   for(let i=0;i<4;i++) {
     const offset=reduced?0:18*(1-assemble);
@@ -204,24 +185,25 @@ function perfectCelebration(t,reduced) {
   // Two small separated facets make the mark legible beyond a generic diamond.
   mark+=shard(-43,0,7,3,0,gold,assemble);
   mark+=shard(43,0,7,3,0,gold,assemble);
-  let s=group(mark,alpha,`translate(0 -88) scale(${f(reduced?1:1+.12*Math.sin(clamp((t-.22)/.5)*Math.PI))})`);
+  let s=group(mark,alpha,`translate(0 -88) scale(${f(reduced?1:1+.2*(1-out(t,perfectImpact,.28)))})`);
   if(reduced)return s;
-  const burst=out(t,.48,.7), burstAlpha=out(t,.48,.06)*(1-burst);
-  // The second beat travels away from the word, not across its counters.
+  const burst=out(t,perfectImpact,.55);
+  const burstAlpha=out(t,perfectImpact,.035)*(1-smooth((t-perfectImpact)/.75));
+  // One shared onset: no delayed ring, return sweep, or second emission.
   for(const side of [-1,1]) {
     for(let i=0;i<7;i++) {
-      const age=t-.48-i*.015;
+      const age=t-perfectImpact;
       if(age<0||age>1.05)continue;
       const q=out(age,0,1.05),angle=(-.85+i*.23);
-      const x=side*(185+q*(80+Math.cos(angle)*70));
+      const x=side*(160+q*(125+Math.cos(angle)*90));
       const y=-15+Math.sin(angle)*(45+q*90)+28*q*q;
       const opacity=out(age,0,.06)*(1-smooth(age/1.05));
-      s+=shard(x,y,(i%2?6:10)*(1-q)+2,i%2?1.5:2.3,side*angle*180/Math.PI,i%3===0?white:i%2?teal:gold,opacity*.9);
+      s+=shard(x,y,(i%2?12:22)*(1-q)+2,i%2?2:3.2,side*angle*180/Math.PI,i%3===0?white:i%2?teal:gold,opacity*.9);
     }
   }
-  s+=ellipse(0,-88,35+burst*105,25+burst*60,gold,1.4,burstAlpha*.7);
-  // Short white core accent marks the assembly, without a full-screen flash.
-  s+=line(-70*burst,-88,70*burst,-88,white,2,burstAlpha*.55);
+  s+=ellipse(0,-25,135+burst*275,40+burst*100,gold,4.5*(1-burst)+1,burstAlpha*.9);
+  // A brief horizontal core accent shares the pulse onset and only decays.
+  s+=line(-330*burst,0,330*burst,0,white,5*(1-burst)+.5,burstAlpha*(1-burst)*.7);
   return s;
 }
 
@@ -234,7 +216,7 @@ export function sceneSvg(seconds,kind=0,perfect=false,reduced=false) {
     // Local low-opacity light separates the title from a busy BGA; no panel.
     const haze=out(t,0,.22)*(1-smooth((t-1.5)/.8));
     if(!reduced)effect+=`<ellipse cx="0" cy="0" rx="330" ry="125" fill="url(#achievementGlow)" opacity="${f(haze)}"/>`;
-    if(!reduced)effect+=[impact,sweep,rise][kind](t,perfect);
+    if(!reduced&&!perfect)effect+=[impact,sweep,rise][kind](t,false);
     if(perfect)effect+=perfectCelebration(t,reduced);
     effect+=lettering(t,kind,perfect,reduced);
     s+=group(effect,1,`translate(${achievementX} ${achievementY})`);

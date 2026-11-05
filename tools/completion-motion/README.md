@@ -67,5 +67,7 @@ pyftsubset ../../assets/fonts/notosanscjkjp-bold.otf --unicodes=U+0020-007E \
 ```
 
 Perfect adds a four-facet diamond mark above the word, native amber accents,
-a second outward burst, and a slightly longer readable hold. Reduced motion
+one stronger outward pulse synchronized with the mark and lettering, and a
+slightly longer readable hold. All Perfect variants share this single impact;
+there is no delayed ring, return glint, or second particle emission. Reduced motion
 retains the mark without its assembly or burst. Full Combo stays unchanged.
