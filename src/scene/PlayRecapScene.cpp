@@ -217,13 +217,13 @@ void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &up
   }
 }
 std::string PlayRecapScene::filterText() const {
-  std::string text = tr("recap.ui.difficulties") + ": ";
+  std::string text;
   if (difficultyFilter_.levels.empty()) text += tr("recap.ui.all_difficulties");
   else for (const auto &level : difficultyFilter_.levels) {
     if (&level != &difficultyFilter_.levels.front()) text += ", ";
     text += level.label;
   }
-  return text + " · " + tr(includeNew_ ? "recap.ui.new_on" : "recap.ui.new_off");
+  return text + " · " + tr(includeNew_ ? "recap.ui.with_new" : "recap.ui.without_new");
 }
 void PlayRecapScene::buildFilters(View *body) {
   auto *controls = row(body);

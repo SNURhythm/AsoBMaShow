@@ -32,8 +32,8 @@ int main() {
   filtered.sections[1].push_back({.hash="d",.before=10,.after=20});
   const std::array<std::string,3> sectionNames{"Lamp upgrades","Score upgrades","BP upgrades"};
   const auto caption=recap::shareText(filtered,"Play recap","Weekly · 2026-11-02 — 2026-11-08",
-      "Difficulty ranges: sl6–sl8 · Include new plays: Off",sectionNames);
-  assert(caption=="Play recap\nWeekly · 2026-11-02 — 2026-11-08\nLamp upgrades: 1 · Score upgrades: 2 · BP upgrades: 1\nDifficulty ranges: sl6–sl8 · Include new plays: Off\n#AsoBMaShow");
+      "sl6–sl8 · Without new plays",sectionNames);
+  assert(caption=="Play recap\nWeekly · 2026-11-02 — 2026-11-08\nLamp upgrades: 1 · Score upgrades: 2 · BP upgrades: 1\nsl6–sl8 · Without new plays\n#AsoBMaShow");
   recap::filterSnapshot(filtered,true,std::unordered_set<std::string>{});
   assert(filtered.sections[0].empty()); // Active ranges with no matches never mean all.
   assert(recap::shareText(filtered,"요약","오늘","",sectionNames).find("BP upgrades: 0\n#AsoBMaShow")!=std::string::npos);
