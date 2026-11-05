@@ -30,8 +30,10 @@ Finish is a neutral acknowledgement for a completed chart below Full Combo:
 62 px lettering, 6 px lift over 320 ms, hold until 1.45 s, then a 450 ms fade.
 A restrained stationary lane glow fades within 800 ms. Reduced motion removes
 the lift and lane glow. Synthetic counters include BAD/POOR to avoid implying a
-full combo. This is a prototype only; trigger policy for early failure/abort and
-native integration remain undecided. Existing native celebrations are unchanged.
+full combo. The approved cue is now implemented natively for resolved whole-chart
+play below Full Combo (including assisted completion). Early failure/abort does
+not trigger it; active failure presentation suppresses completion cues. The
+reduced-motion control remains an authoring-only option.
 
 ### Lane-space prototypes
 

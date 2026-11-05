@@ -14,6 +14,12 @@ GOOD permits Full Combo; only PGREAT/GREAT earns Perfect. An all-PGREAT MAX
 uses the Perfect animation. Beatoraja also requires the surviving combo to
 cover the stage, preserving its empty-POOR rules.
 
+Below those achievements, resolved-note progress latches a neutral `FINISH`.
+It waits for actual resolution rather than counting nonvanishing BAD samples;
+a final suppressed PMS miss still supplies its event timestamp. Incomplete or
+aborted attempts cannot reach that progress threshold. FINISH is not a clear
+lamp and does not alter stored results.
+
 Classic LN heads supply input-timing samples only, so the effect waits for the
 tail's scoring judgement. CN/HCN count both scoring endpoints. This is immediate
 feedback at the final resolved judgement, not a new terminal event or a promise
@@ -28,11 +34,12 @@ gameplay use the same reducer in `PlayfieldVisualStateStore`.
 The event latches once until the attempt's worker/store is reset (retry,
 seek/restart, new course stage) or destroyed. Course stages count their own judgements even
 when the displayed combo is carried. Practice and settings previews are
-excluded. Assist-marked and altered-playback attempts are excluded through the
-existing assist policy; autoplay and replay can demonstrate the animation.
+excluded. Assist-marked and altered-playback whole-chart attempts receive only
+FINISH through the existing assist policy; autoplay and replay can demonstrate
+the applicable animation.
 Active failure presentation suppresses it.
 
-The start is the final judgement's `visualTimeMicros`, including the same visual
+The start is the final resolution's `visualTimeMicros`, including the same visual
 offset as other judgement effects. Captured frames retain the event. Live play,
 replay watch, and video export evaluate age from their visual frame clock;
 wall time, animation counters, and frame rate do not advance it.
@@ -53,10 +60,14 @@ custom skins retain their authored timers and animations.
   fourteen side shards, and a single gold elliptical pulse centered on the
   visible lettering. The mark stays 88 design units above the word. The pulse
   decays without a second emission. Exit fades from 2.35 to 2.75 seconds.
+- FINISH uses muted 62 px lettering with a 6 px lift over 320 ms, a hold until
+  1.45 seconds, and a 450 ms exit. A soft dark backdrop and faint neutral halo
+  support readability. Its stationary low lane glow fades within 800 ms; it has
+  no travelling Wave, pulse, mark, shards, or underline.
 - `CompletionCelebrationEffect.h` evaluates bounded geometry directly. It emits
-  at most 1344 colored vertices plus seven or nine textured glyph quads. There
+  at most 1344 colored vertices plus six, seven, or nine textured glyph quads. There
   are no particle containers, blur passes, shaders to compile, or audio cues.
-- The renderer pre-rasterizes the sixteen visible glyph slots at construction.
+- The renderer pre-rasterizes the twenty-two visible glyph slots at construction.
   Frames reuse those textures and the existing batch buffers; motion changes
   quad geometry and opacity, not font rasterization or text layout.
 - A local black scrim sits behind the native celebration, reaching 68% opacity
@@ -85,7 +96,7 @@ and completed exit against a fixed synthetic playfield.
 
 For optional local inspection, set `ASOBMASHOW_BUILTIN_ARTIFACT_DIR` to write
 representative PNGs. Also setting `ASOBMASHOW_COMPLETION_ANIMATION_DIR` writes
-30 fps PNG sequences under `full-combo/` and `perfect/`. These opt-in captures
+30 fps PNG sequences under `finish/`, `full-combo/`, and `perfect/`. These opt-in captures
 do not slow normal test runs and are not successful-play recordings.
 
 Desktop captures do not establish device GPU performance; iOS and Android

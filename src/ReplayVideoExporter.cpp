@@ -3680,6 +3680,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         .completionCelebrationEligible = clear_policy::assistClearMarkRequired(
             replay.assistOption, chart.Meta.MinBpm, chart.Meta.MaxBpm,
             replay.provenance.playback) == AssistClearMark::None,
+        .completionFinishEligible = true,
         .gameplayMode = PlayfieldGameplayMode::Replay,
         .loadingState = PlayfieldLoadingState::Loaded,
         .courseMode = false,
@@ -4592,6 +4593,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           .completionCelebrationEligible = clear_policy::assistClearMarkRequired(
               stageReplay.assistOption, chart.Meta.MinBpm, chart.Meta.MaxBpm,
               stageReplay.provenance.playback) == AssistClearMark::None,
+          .completionFinishEligible = true,
           .gameplayMode = PlayfieldGameplayMode::Replay,
           .loadingState = PlayfieldLoadingState::Loaded,
           .courseMode = true,

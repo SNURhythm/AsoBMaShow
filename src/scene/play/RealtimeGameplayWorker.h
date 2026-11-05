@@ -317,6 +317,7 @@ private:
   RealtimeGameplayWorkerConfig config_;
   GameplaySimulation simulation_;
   completion_celebration::Tracker completionTracker_;
+  int completionPassedNotes_ = 0;
   std::vector<OwnedLaneState> ownedInputLanes_;
   std::uint64_t ownedInputClaimSequence_ = 0;
   std::vector<QueuedInput> queuedInputs_;

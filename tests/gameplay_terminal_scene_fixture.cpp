@@ -199,6 +199,9 @@ struct FixturePresentation {
   void setAuthoritativeCompletionCelebration(completion_celebration::State state) {
     if (timingState) timingState->setAuthoritativeCompletionCelebration(state);
   }
+  void observeCompletionProgress(int passedNotes, long long visualMicros) {
+    if (timingState) timingState->observeCompletionProgress(passedNotes, visualMicros);
+  }
   void clearLiveTouchPoints() {}
 };
 
@@ -1517,6 +1520,35 @@ void testPmsReplayNonvanishingBadKeepsLongHeadScorePotential() {
   }
 }
 
+void testReplaySuppressedFinalMissFinishes() {
+  GamePlayScene scene;
+  scene.options.replayData = std::make_shared<ReplayData>();
+  scene.buildReplayNoteLookup();
+  scene.state->stagePassedNotes = scene.chart->Meta.TotalNotes - 1;
+  scene.state->judgeCount[Bad] = 1;
+  scene.playfieldVisualStateStore->timingState =
+      std::make_unique<PlayfieldVisualStateStore>(
+          buildPlayfieldChartVisualModel(*scene.chart, 0));
+  auto &store = *scene.playfieldVisualStateStore->timingState;
+  PlayfieldAuthorityUpdate authority;
+  authority.gameplayMode = PlayfieldGameplayMode::Replay;
+  authority.completionFinishEligible = true;
+  store.applyAuthorityUpdate(authority);
+  auto *note = scene.chart->Measures.front()->TimeLines.back()->Notes[0];
+  const ReplayEvent event{.action = ReplayEventAction::Miss, .lane = 0,
+      .noteTimeMicros = note->Timeline->Timing,
+      .songTimeMicros = 3'200'000, .judgeTimeMicros = 3'200'000,
+      .judgement = None};
+  scene.applyReplayEvent(event, 3'180'000);
+  require(scene.state->stagePassedNotes == scene.chart->Meta.TotalNotes &&
+              note->IsPlayed && note->IsDead && scene.state->judgeCount[Bad] == 1 &&
+              scene.state->judgeCount[Poor] == 0,
+          "suppressed replay miss resolves the note without another judgement");
+  require(store.capture({}).completionCelebration == completion_celebration::State{
+              completion_celebration::Achievement::Finish, 3'180'000},
+          "suppressed final replay miss starts Finish on its visual clock");
+}
+
 void testStoppedRealtimeRetryProjectionRemainsAuthoritative() {
   GamePlayScene scene;
   scene.quickRetryRemainingHellChargeTicks = 100; // Untouched legacy startup budget.
@@ -2786,6 +2818,7 @@ int main(int argc, char **argv) {
   testLegacyLongNoteTimingSamples();
   testReplayDeferredLongHeadScoreProjection();
   testPmsReplayNonvanishingBadKeepsLongHeadScorePotential();
+  testReplaySuppressedFinalMissFinishes();
   testStoppedRealtimeRetryProjectionRemainsAuthoritative();
   testRealtimeTimingSamplesFollowInputEvents();
   for (const bool ios : {false, true}) {

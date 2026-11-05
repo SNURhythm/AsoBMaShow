@@ -341,6 +341,9 @@ struct PlayfieldAuthorityUpdate {
   // Whole-chart, unassisted attempts only. Autoplay/replay may demonstrate it;
   // practice ranges and settings previews must not claim an achievement.
   bool completionCelebrationEligible = false;
+  // Whole-chart assisted/modifier play may acknowledge Finish without claiming
+  // the higher achievements. Practice/settings previews leave this disabled.
+  bool completionFinishEligible = false;
   PlayfieldGameplayMode gameplayMode = PlayfieldGameplayMode::Unknown;
   PlayfieldLoadingState loadingState = PlayfieldLoadingState::Unknown;
   // Captured from the active CoursePlaySession or replay-export stage loop.
@@ -591,6 +594,9 @@ public:
   // Realtime snapshots retain this even when their visual history rolls over.
   void setAuthoritativeCompletionCelebration(completion_celebration::State state) {
     authoritativeCompletionCelebration_ = state;
+  }
+  void observeCompletionProgress(int passedNotes, long long visualMicros) {
+    completionTracker_.observeResolvedNotes(passedNotes, visualMicros);
   }
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &state);
   void setNoteState(NotePresentationState state);

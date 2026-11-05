@@ -83,6 +83,7 @@ bool PlayfieldAuthorityUpdate::operator==(
          applicationUptimeMillis == other.applicationUptimeMillis &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
          completionCelebrationEligible == other.completionCelebrationEligible &&
+         completionFinishEligible == other.completionFinishEligible &&
          gameplayMode == other.gameplayMode &&
          loadingState == other.loadingState &&
          courseMode == other.courseMode &&
@@ -390,6 +391,14 @@ PlayfieldVisualState
 PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
                                    bool includeNotes) const {
   captureTouches(clock.replayTouchTimeMicros);
+  auto completion = authoritativeCompletionCelebration_.value_or(completionTracker_.state());
+  if (authority_.failureAnimationActive ||
+      (!authority_.completionCelebrationEligible && !authority_.completionFinishEligible)) {
+    completion = {};
+  } else if (!authority_.completionCelebrationEligible &&
+             completion.achievement != completion_celebration::Achievement::None) {
+    completion.achievement = completion_celebration::Achievement::Finish;
+  }
   PlayfieldVisualState result{
       .clock = clock,
       .configuration = configuration_,
@@ -404,10 +413,7 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
       .lastJudge = lastJudge_,
       .lastJudgeVisualMicros = lastJudgeVisualMicros_,
       .bgaMiss = bgaMissTracker_.snapshot(),
-      .completionCelebration = authority_.completionCelebrationEligible &&
-              !authority_.failureAnimationActive
-          ? authoritativeCompletionCelebration_.value_or(completionTracker_.state())
-          : completion_celebration::State{},
+      .completionCelebration = completion,
       .combo = combo_,
       .score = score_,
       .fastSlowMicros = fastSlowMicros_,

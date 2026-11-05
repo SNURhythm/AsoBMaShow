@@ -2545,6 +2545,7 @@ void testReplayAdapterMatchesEmptyPoorAndPmsPassedNotes() {
       if (!created.presentation) { expect(false, "PMS replay adapter created"); return; }
       PlayfieldAuthorityUpdate authority;
       authority.gaugeRules.ruleset = ruleset;
+      authority.completionCelebrationEligible = true;
       created.presentation->applyAuthorityUpdate(authority);
       (void)created.presentation->applyReplayEvent(
           {.action = ReplayEventAction::Press, .lane = 2,
@@ -2567,13 +2568,18 @@ void testReplayAdapterMatchesEmptyPoorAndPmsPassedNotes() {
         state = created.presentation->captureVisualStateForTesting({});
         expect(state.authority.stagePassedNotes == 1 && !state.notes.front().judged,
                "PMS BAD preserves its unconsumed visual identity");
+        expect(state.completionCelebration.achievement == completion_celebration::Achievement::None,
+               "nonvanishing BAD must not trigger Finish before the note resolves");
         (void)created.presentation->applyReplayEvent(
             {.action = ReplayEventAction::Miss, .lane = 1,
-             .noteTimeMicros = 1'000, .judgement = None}, {}, true);
+             .noteTimeMicros = 1'000, .judgement = None}, {2'000, 1'950, 2'000}, true);
         created.presentation->applyAuthorityUpdate(authority);
         state = created.presentation->captureVisualStateForTesting({});
         expect(state.authority.stagePassedNotes == 2 && state.notes.front().judged,
                "suppressed PMS miss consumes its identity without another judgment");
+        expect(state.completionCelebration == completion_celebration::State{
+                   completion_celebration::Achievement::Finish, 1'950},
+               "suppressed final miss triggers Finish on the replay visual clock");
       }
     }
   }

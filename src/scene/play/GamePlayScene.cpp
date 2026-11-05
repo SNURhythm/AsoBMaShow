@@ -6657,6 +6657,7 @@ void GamePlayScene::capturePlayfieldVisualState(
           gameplayMode != PlayfieldGameplayMode::Practice &&
           !state->assistClearMark && !state->lightAssistClearMark &&
           !clear_policy::assistClearRequired(options.playback),
+      .completionFinishEligible = gameplayMode != PlayfieldGameplayMode::Practice,
       .gameplayMode = gameplayMode,
       .loadingState = PlayfieldLoadingState::Loaded,
       .courseMode = isCoursePlayback(),
@@ -8514,14 +8515,20 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
     }
     break;
   }
-  case ReplayEventAction::Miss:
+  case ReplayEventAction::Miss: {
+    auto *note = findReplayNote(event);
+    markReplayMissedNote(note, event.judgeTimeMicros);
     if (event.judgement != None) {
-      auto *note = findReplayNote(event);
-      markReplayMissedNote(note, event.judgeTimeMicros);
       onJudge(recordedJudge, eventClock, false, note, event.lane);
       applyReplayGauge(event);
+    } else {
+      // PMS can resolve an earlier nonvanishing BAD without scoring again.
+      ++state->stagePassedNotes;
+      playfieldVisualStateStore->observeCompletionProgress(state->stagePassedNotes,
+                                                           visualTimeMicros);
     }
     break;
+  }
   case ReplayEventAction::Mine:
     if (auto *note = findReplayNote(event); note != nullptr) {
       note->IsPlayed = true;
@@ -8800,6 +8807,8 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
       state->getScore(), clock, recordTimingSample &&
           shouldRecordInputTiming(options) &&
           !isClassicLongNoteTail(graphNote, chart, options.longNoteMode));
+  playfieldVisualStateStore->observeCompletionProgress(state->stagePassedNotes,
+                                                       clock.visualTimeMicros);
   const int adjustedNotesDisplayTimingMilliseconds =
       gameplay_timing::nextNotesDisplayTimingMilliseconds(
           context.settings.notesDisplayTimingMilliseconds,

@@ -8,7 +8,7 @@
 #include <limits>
 
 namespace completion_celebration {
-enum class Achievement : std::uint8_t { None, FullCombo, Perfect };
+enum class Achievement : std::uint8_t { None, FullCombo, Perfect, Finish };
 
 struct State {
   Achievement achievement = Achievement::None;
@@ -47,6 +47,12 @@ public:
     }
   }
   [[nodiscard]] State state() const noexcept { return state_; }
+  // Progress counts resolved identities, not judgement samples: PMS BAD can
+  // leave a note alive and its later miss can carry no second judgement.
+  void observeResolvedNotes(int passedNotes, long long timeMicros) noexcept {
+    if (state_.achievement == Achievement::None && totalNotes_ > 0 &&
+        passedNotes >= totalNotes_) state_ = {Achievement::Finish, timeMicros};
+  }
 
 private:
   int totalNotes_ = 0;

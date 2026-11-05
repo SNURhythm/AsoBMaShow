@@ -1445,14 +1445,28 @@ void testCompletionCelebrationLifecycle() {
   store.applyAuthorityUpdate(authority);
   require(store.capture({}).completionCelebration.achievement == Achievement::None,
           "practice/assist eligibility suppresses the native celebration");
+  authority.completionFinishEligible = true;
+  store.applyAuthorityUpdate(authority);
+  require(store.capture({}).completionCelebration.achievement == Achievement::Finish,
+          "assisted whole-chart play acknowledges Finish without claiming Full Combo");
+  authority.completionFinishEligible = false;
   for (const auto failure : {Bad, Poor}) {
     store.resetModel(model);
     authority.completionCelebrationEligible = true;
     store.applyAuthorityUpdate(authority);
     store.onJudge({failure, 0}, 0, 0, {}, true);
-    store.onJudge({PGreat, 0}, 1, 2, {10, 10, 10}, true);
+    store.observeCompletionProgress(1, 0);
     require(store.capture({}).completionCelebration.achievement == Achievement::None,
-            "a resolved failed chart must not celebrate");
+            "an incomplete failed attempt has no finish cue");
+    store.onJudge({PGreat, 0}, 1, 2, {10, 10, 10}, true);
+    store.observeCompletionProgress(2, 10);
+    require(store.capture({}).completionCelebration == completion_celebration::State{Achievement::Finish, 10},
+            "a completed chart with misses gets a neutral finish at final resolution");
+    authority.failureAnimationActive = true;
+    store.applyAuthorityUpdate(authority);
+    require(store.capture({}).completionCelebration.achievement == Achievement::None,
+            "failure presentation suppresses Finish as well as achievements");
+    authority.failureAnimationActive = false;
   }
   store.resetModel(model);
   authority.gaugeRules.ruleset = GameplayRuleset::Beatoraja;
@@ -1460,8 +1474,9 @@ void testCompletionCelebrationLifecycle() {
   store.onJudge({PGreat, 0}, 1, 2, {}, true);
   store.onJudge({Kpoor, 0}, 0, 2, {5, 5, 5}, true);
   store.onJudge({PGreat, 0}, 1, 4, {10, 10, 10}, true);
-  require(store.capture({}).completionCelebration.achievement == Achievement::None,
-          "combo-breaking empty poor must prevent Beatoraja completion");
+  store.observeCompletionProgress(2, 10);
+  require(store.capture({}).completionCelebration.achievement == Achievement::Finish,
+          "combo-breaking empty poor gives Finish rather than a Beatoraja achievement");
   store.resetModel(model);
   store.applyAuthorityUpdate(authority);
   store.onJudge({PGreat, 0}, 2, 4, {100, 80, 100}, false);

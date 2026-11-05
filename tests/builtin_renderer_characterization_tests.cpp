@@ -2859,6 +2859,11 @@ void verifyCompletionCelebration(const RenderTarget &target) {
   const auto baseline = render(Achievement::None, 0);
   const auto fullCombo = render(Achievement::FullCombo, 250'000);
   const auto perfect = render(Achievement::Perfect, 250'000);
+  const auto finish = render(Achievement::Finish, 400'000);
+  expect(finish != baseline && finish != fullCombo && finish != perfect,
+         "Finish renders its own calm lettering and backdrop");
+  expect(render(Achievement::Finish, 1'900'000) == baseline,
+         "Finish clears completely after its shorter hold and exit");
   const auto waveStart = render(Achievement::Perfect, 50'000);
   const auto waveEnd = render(Achievement::Perfect, 650'000);
   const auto regionDiffers = [&](const auto &pixels, unsigned left, unsigned right) {
@@ -2883,6 +2888,9 @@ void verifyCompletionCelebration(const RenderTarget &target) {
          "native celebration is absent before its event and after its exit");
   if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
     std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "completion-finish.png").string(),
+                           finish, kDrawableWidth, kDrawableHeight) == 0,
+           "native Finish inspection image encodes");
     expect(lodepng::encode((std::filesystem::path(directory) / "completion-full-combo.png").string(),
                            fullCombo, kDrawableWidth, kDrawableHeight) == 0 &&
                lodepng::encode((std::filesystem::path(directory) / "completion-perfect.png").string(),
@@ -2891,9 +2899,9 @@ void verifyCompletionCelebration(const RenderTarget &target) {
   }
   // Optional local motion capture; ordinary tests need only the boundary frames.
   if (const char *directory = std::getenv("ASOBMASHOW_COMPLETION_ANIMATION_DIR")) {
-    for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect}) {
+    for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect, Achievement::Finish}) {
       const auto folder = std::filesystem::path(directory) /
-          (achievement == Achievement::Perfect ? "perfect" : "full-combo");
+          (achievement == Achievement::Finish ? "finish" : achievement == Achievement::Perfect ? "perfect" : "full-combo");
       std::filesystem::create_directories(folder);
       for (int frame = 0; frame < 102; ++frame) {
         const auto pixels = render(achievement, frame * 1'000'000LL / 30 - 300'000);

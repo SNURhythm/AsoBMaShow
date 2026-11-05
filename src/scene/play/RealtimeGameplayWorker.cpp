@@ -959,6 +959,16 @@ void RealtimeGameplayWorker::recordTransaction(
         result.replayEvent.songTimeMicros,
         simulation_.scoreState().gaugeRules().ruleset == GameplayRuleset::Beatoraja);
   }
+  if (result.hasReplayEvent) {
+    const auto &event = result.replayEvent;
+    const bool pms = simulation_.scoreState().gaugeRules().ruleset == GameplayRuleset::Beatoraja &&
+        (definition_.metadata().keyMode == 9 || definition_.metadata().keyMode == 18);
+    const bool resolves = result.hasJudge && result.judge.isNotePlayed() &&
+        !(pms && event.judgement == Bad && event.action == GameplayReplayAction::Press);
+    if (resolves || (event.judgement == None && event.action == GameplayReplayAction::Miss))
+      ++completionPassedNotes_;
+    completionTracker_.observeResolvedNotes(completionPassedNotes_, event.songTimeMicros);
+  }
   latestTransaction_ = result;
   ++transactionSequence_;
   transactionHistory_[(transactionSequence_ - 1) %

@@ -24,15 +24,27 @@ inline float smooth(float value) {
 }
 inline bool visible(Achievement achievement, float age) {
   return achievement != Achievement::None && age >= 0 &&
-      age < (achievement == Achievement::Perfect ? 2.8F : 2.5F);
+      age < (achievement == Achievement::Finish ? 1.9F : achievement == Achievement::Perfect ? 2.8F : 2.5F);
 }
 inline std::string_view word(Achievement achievement) {
-  return achievement == Achievement::Perfect ? "PERFECT" : "FULL COMBO";
+  return achievement == Achievement::Finish ? "FINISH" : achievement == Achievement::Perfect ? "PERFECT" : "FULL COMBO";
+}
+inline int fontSize(Achievement achievement) {
+  return achievement == Achievement::Finish ? 62 : achievement == Achievement::Perfect ? 82 : 74;
+}
+inline int glyphOffset(Achievement achievement) {
+  return achievement == Achievement::Finish ? 17 : achievement == Achievement::Perfect ? 10 : 0;
 }
 struct Letter {
   float x = 0, y = 0, scale = 1, alpha = 0;
 };
-inline Letter letter(float time, bool perfect, std::size_t index) {
+inline Letter letter(float time, Achievement achievement, std::size_t index) {
+  if (achievement == Achievement::Finish) {
+    const float entrance = smooth(time / .32F);
+    return {-110 + 44 * static_cast<float>(index), 6 * (1 - entrance), 1,
+            entrance * (1 - smooth((time - 1.45F) / .45F))};
+  }
+  const bool perfect = achievement == Achievement::Perfect;
   const auto label = word(perfect ? Achievement::Perfect : Achievement::FullCombo);
   const float stagger = perfect ? 0 : std::abs(static_cast<float>(index) - 4.5F) * .009F;
   const float age = time - .08F - stagger;
@@ -86,6 +98,27 @@ void draw(Batch &batch, float time, Achievement achievement,
   };
   constexpr int segments = 64;
   const auto &circle = rendering::unitCircleSamples<segments>();
+  if (achievement == Achievement::Finish) {
+    const float opacity = smooth(time / .32F) * (1 - smooth((time - 1.45F) / .45F));
+    for (int i = 0; opacity > 0 && i < segments; ++i) {
+      const auto a = circle[i], b = circle[i + 1];
+      const float ax = centerX + a.x * 209 * scale, ay = centerY + a.y * 66 * scale;
+      const float bx = centerX + b.x * 209 * scale, by = centerY + b.y * 66 * scale;
+      const float cx = centerX + a.x * 380 * scale, cy = centerY + a.y * 120 * scale;
+      const float dx = centerX + b.x * 380 * scale, dy = centerY + b.y * 120 * scale;
+      const auto dim = color(0, opacity * .55F);
+      batch.addTriangleColors(centerX, centerY, ax, ay, bx, by, dim, dim, dim);
+      batch.addTriangleColors(ax, ay, cx, cy, dx, dy, dim, 0, 0);
+      batch.addTriangleColors(ax, ay, dx, dy, bx, by, dim, 0, dim);
+    }
+    // Submit the glow after the whole dim layer to avoid overlapping its rim.
+    for (int i = 0; opacity > 0 && i < segments; ++i)
+      batch.addTriangleColors(centerX, centerY,
+          centerX + circle[i].x * 260 * scale, centerY + circle[i].y * 65 * scale,
+          centerX + circle[i + 1].x * 260 * scale, centerY + circle[i + 1].y * 65 * scale,
+          color(0x00E1D9CD, opacity * .07F), 0, 0);
+    return;
+  }
   // A quiet, feathered scrim keeps stacked HUD text from competing with the
   // achievement. Hold it through the lettering's exit, including Perfect's mark.
   const float dim = .68F * out(time, 0, .16F) *

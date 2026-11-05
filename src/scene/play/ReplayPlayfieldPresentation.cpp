@@ -582,6 +582,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
   const auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
       if (event.action == ReplayEventAction::Miss) ++stagePassedNotes_;
+      state_->observeCompletionProgress(stagePassedNotes_, clock.visualTimeMicros);
       return false;
     }
     if (vanishes) ++stagePassedNotes_;
@@ -600,6 +601,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     }
     events_->onLaneJudge(event.lane, recordedJudge, event.combo, event.score,
                          clock, sampleInputTiming);
+    state_->observeCompletionProgress(stagePassedNotes_, clock.visualTimeMicros);
     setReplayGauge(event, resolvedGraphNote);
     return true;
   };

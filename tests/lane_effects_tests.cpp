@@ -147,6 +147,14 @@ void testCompletionWave() {
   using namespace completion_celebration;
   graph_test::AllocationGuard guard;
   graph_test::remainingAllocationBytes = 0;
+  WaveGeometry finishEarly, finishLate, finishExpired;
+  wave::draw(finishEarly, Achievement::Finish, .2F, -4, 8, 2, 12);
+  wave::draw(finishLate, Achievement::Finish, .5F, -4, 8, 2, 12);
+  wave::draw(finishExpired, Achievement::Finish, .8F, -4, 8, 2, 12);
+  assert(finishEarly.count == 1 && finishLate.count == 1 && finishExpired.count == 0);
+  assert(finishEarly.maxAlpha <= 41 && finishLate.maxAlpha < finishEarly.maxAlpha);
+  assert(std::abs(finishEarly.weightedY / finishEarly.weight -
+                  finishLate.weightedY / finishLate.weight) < .0001);
   for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect}) {
     WaveGeometry early, late, before, expired;
     wave::draw(early, achievement, .08F, -4, 8, 2, 12);

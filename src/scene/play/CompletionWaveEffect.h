@@ -16,6 +16,19 @@ template <typename Batch>
 void draw(Batch &batch, Achievement achievement, float age,
           float left, float width, float judgeY, float upperBound) {
   const bool perfect = achievement == Achievement::Perfect;
+  if (achievement == Achievement::Finish) {
+    if (age <= 0 || age >= .8F || width <= 0 || upperBound <= judgeY) return;
+    const auto smooth = [](float value) {
+      const float q = std::clamp(value, 0.0F, 1.0F);
+      return q * q * (3 - 2 * q);
+    };
+    const float alpha = smooth(age / .18F) * (1 - smooth((age - .25F) / .55F)) * .16F;
+    const auto shade = 0x00E1D9CDU | (static_cast<unsigned>(alpha * 255) << 24);
+    if ((shade >> 24) != 0)
+      batch.addRectVerticalGradient(left, judgeY, width, (upperBound - judgeY) * .2F,
+                                     shade, 0x00E1D9CDU);
+    return;
+  }
   const float duration = perfect ? .65F : .55F;
   if (achievement == Achievement::None || age <= 0 || age >= duration ||
       width <= 0 || upperBound <= judgeY) return;

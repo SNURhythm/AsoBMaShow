@@ -758,16 +758,17 @@ BMSRenderer::BMSRenderer(
 
   // Changing HUD values share glyph textures; unsupported text stays deferred.
   if (renderHud) {
-    for (const bool perfect : {false, true}) {
-      const auto label = completion_celebration::word(perfect
-          ? completion_celebration::Achievement::Perfect
-          : completion_celebration::Achievement::FullCombo);
+    for (const auto achievement : {completion_celebration::Achievement::FullCombo,
+                                   completion_celebration::Achievement::Perfect,
+                                   completion_celebration::Achievement::Finish}) {
+      const auto label = completion_celebration::word(achievement);
       for (std::size_t i = 0; i < label.size(); ++i) {
         if (label[i] == ' ') continue;
-        auto &glyph = completionGlyphs[(perfect ? 10 : 0) + i];
-        glyph = std::make_unique<TextView>(kHudFontPath, perfect ? 82 : 74,
+        auto &glyph = completionGlyphs[completion_celebration::glyphOffset(achievement) + i];
+        glyph = std::make_unique<TextView>(kHudFontPath, completion_celebration::fontSize(achievement),
                                           TextView::FontWeight::Bold);
-        glyph->setColor({248, 253, 255, 255});
+        glyph->setColor(achievement == completion_celebration::Achievement::Finish
+            ? SDL_Color{220, 227, 232, 255} : SDL_Color{248, 253, 255, 255});
         glyph->setDeferredTextureMaterialization(false);
         glyph->setText(std::string(1, label[i]));
       }
@@ -971,21 +972,20 @@ void BMSRenderer::drawCompletionCelebration(
   simpleBatchRenderer.flush();
   simpleBatchRenderer.setSubmitView(rendering::main_view);
 
-  const bool perfect = completion.achievement == Achievement::Perfect;
   const auto label = word(completion.achievement);
   const auto program = rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
   const auto sampler = rendering::UniformCache::getInstance().getSampler("s_texColor");
   constexpr std::array<std::uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
   for (std::size_t i = 0; i < label.size(); ++i) {
-    const auto &glyph = completionGlyphs[(perfect ? 10 : 0) + i];
-    const auto motion = letter(age, perfect, i);
+    const auto &glyph = completionGlyphs[glyphOffset(completion.achievement) + i];
+    const auto motion = letter(age, completion.achievement, i);
     if (!glyph || motion.alpha <= 0 || !bgfx::isValid(glyph->textureHandle())) continue;
     const float w = glyph->textureWidth() * scale * motion.scale;
     const float h = glyph->textureHeight() * scale * motion.scale;
     const float left = x + motion.x * scale - w * .5F;
     // Noto's uppercase ink sits below the middle of its line box. Align the
     // visible letters (rather than that padding) with the pulse origin.
-    const float top = y + (motion.y - (perfect ? 82 : 74) * .07F) * scale - h * .5F;
+    const float top = y + (motion.y - fontSize(completion.achievement) * .07F) * scale - h * .5F;
     const std::array vertices{
         rendering::PosTexCoord0Vertex{left, top, 0, 0, 0},
         rendering::PosTexCoord0Vertex{left + w, top, 0, 1, 0},
