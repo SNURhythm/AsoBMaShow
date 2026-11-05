@@ -47,6 +47,7 @@ class KomboSceneTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         helper = extract((root / "src/scene/KomboScene.cpp").read_text(), "std::string levelsText(")
         fixture = r'''#include "kombo/KomboModel.h"
+#include "kombo/LevelRangeText.h"
 #include <algorithm>
 #include <cassert>
 #include <charconv>

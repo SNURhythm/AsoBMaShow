@@ -1324,8 +1324,6 @@
 {"recap.ui.sharing", "Preparing share…", "공유 준비 중…", "共有の準備中…", "正在准备分享…", "正在準備分享…"},
 {"recap.ui.title", "Play recap", "플레이 요약", "プレイのまとめ", "游玩回顾", "遊玩回顧"},
 {"recap.ui.weekly", "Weekly", "주간", "週別", "每周", "每週"},
-{"recap.ui.with_new", "With new plays", "신규 포함", "初プレイ含む", "包含首次游玩", "包含首次遊玩"},
-{"recap.ui.without_new", "Without new plays", "신규 제외", "初プレイ除外", "不含首次游玩", "不含首次遊玩"},
 {"records.all.label", "All", "전체", "すべて", "全部", "全部"},
 {"records.auto_play.label", "AUTO PLAY", "자동 플레이", "オートプレイ", "自动演奏", "自動演奏"},
 {"records.back.label", "Back", "뒤로", "戻る", "返回", "返回"},

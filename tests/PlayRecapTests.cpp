@@ -3,6 +3,7 @@
 #include "recap/Filters.h"
 #include "recap/ShareText.h"
 #include "kombo/KomboForm.h"
+#include "kombo/LevelRangeText.h"
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
@@ -14,6 +15,17 @@ int main() {
   assert(kombo::addLevelRange(selected,levels,1,2));
   assert(kombo::addLevelRange(selected,{{"b","2","b2"}},0,0));
   assert(selected.levels.size()==4); // Table order, overlapping ranges, distinct tables.
+  std::vector<kombo::LevelRange> displayed;
+  const std::map<std::string,std::map<std::string,int>> order{{"a",{{"2",0},{"10",1},{"X",2}}},{"b",{{"2",0}}}};
+  assert(kombo::formatLevelRanges(selected,order,&displayed)=="a2~aX / b2");
+  assert(displayed.size()==2 && displayed[0].levels.size()==3 && displayed[1].levels.size()==1);
+  selected.levels.erase(selected.levels.begin()+1);
+  displayed.clear();
+  assert(kombo::formatLevelRanges(selected,order,&displayed)=="a2, aX / b2");
+  assert(displayed.size()==3); // Gaps and table boundaries must remain separate.
+  displayed.clear();
+  kombo::formatLevelRanges(selected,{},&displayed);
+  assert(displayed.size()==3); // Never infer adjacency from numeric-looking labels.
   recap::Snapshot original;
   original.range={10,20};
   for (auto &section:original.sections) {
@@ -32,11 +44,11 @@ int main() {
   filtered.sections[1].push_back({.hash="d",.before=10,.after=20});
   const std::array<std::string,3> sectionNames{"Lamp upgrades","Score upgrades","BP upgrades"};
   const auto caption=recap::shareText(filtered,"Play recap","Weekly · 2026-11-02 — 2026-11-08",
-      "sl6–sl8 · Without new plays",sectionNames);
-  assert(caption=="Play recap\nWeekly · 2026-11-02 — 2026-11-08\nLamp upgrades: 1 · Score upgrades: 2 · BP upgrades: 1\nsl6–sl8 · Without new plays\n#AsoBMaShow");
+      sectionNames);
+  assert(caption=="Play recap\nWeekly · 2026-11-02 — 2026-11-08\nLamp upgrades: 1 · Score upgrades: 2 · BP upgrades: 1\n#AsoBMaShow");
   recap::filterSnapshot(filtered,true,std::unordered_set<std::string>{});
   assert(filtered.sections[0].empty()); // Active ranges with no matches never mean all.
-  assert(recap::shareText(filtered,"요약","오늘","",sectionNames).find("BP upgrades: 0\n#AsoBMaShow")!=std::string::npos);
+  assert(recap::shareText(filtered,"요약","오늘",sectionNames).find("BP upgrades: 0\n#AsoBMaShow")!=std::string::npos);
   bms_parser::ChartMeta meta;
   meta.Title="Song"; meta.SubTitle="[ANOTHER]"; meta.PlayLevel=12;
   meta.Folder="charts/song"; meta.StageFile="stage.png"; meta.Banner="banner.png";

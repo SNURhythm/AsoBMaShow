@@ -27,7 +27,6 @@ private:
   void reload();
   void build();
   void buildFilters(View *);
-  std::string filterText() const;
   void back();
   void movePeriod(int direction);
   void beginExport(bool share = false);

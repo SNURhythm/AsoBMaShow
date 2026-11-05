@@ -4,6 +4,7 @@
 #include "../recap/Filters.h"
 #include "../recap/ShareText.h"
 #include "../kombo/KomboForm.h"
+#include "../kombo/LevelRangeText.h"
 #include "../view/DropdownView.h"
 #include "../view/OverlayPortal.h"
 #include "SceneManager.h"
@@ -216,15 +217,6 @@ void PlayRecapScene::addUpgrade(View *parent, int kind, const recap::Upgrade &up
     if (!narrow) change->setWidth(280);
   }
 }
-std::string PlayRecapScene::filterText() const {
-  std::string text;
-  if (difficultyFilter_.levels.empty()) text += tr("recap.ui.all_difficulties");
-  else for (const auto &level : difficultyFilter_.levels) {
-    if (&level != &difficultyFilter_.levels.front()) text += ", ";
-    text += level.label;
-  }
-  return text + " · " + tr(includeNew_ ? "recap.ui.with_new" : "recap.ui.without_new");
-}
 void PlayRecapScene::buildFilters(View *body) {
   auto *controls = row(body);
   button(controls,tr("recap.ui.difficulties"),[this] { later([this] {
@@ -233,7 +225,6 @@ void PlayRecapScene::buildFilters(View *body) {
   button(controls,tr(includeNew_ ? "recap.ui.new_on" : "recap.ui.new_off"),[this] { later([this] {
     includeNew_ = !includeNew_; reload();
   }); },includeNew_);
-  label(body,filterText(),16)->setThemedColor(app_theme::textSecondary);
   if (!filtersExpanded_) return;
   const auto select = [this](View *parent,const std::string &caption,
       std::vector<DropdownView::Option> options,std::string selected,
@@ -294,11 +285,26 @@ void PlayRecapScene::buildFilters(View *body) {
       else message_ = tr("kombo.ui.invalid_levels");
     }); })->setEnabled(first >= 0 && last >= first);
   }
-  for (std::size_t i = 0; i < difficultyFilter_.levels.size(); ++i) {
+  std::map<std::string,std::map<std::string,int>> order;
+  for (const auto &table : tables) {
+    if (std::none_of(difficultyFilter_.levels.begin(),difficultyFilter_.levels.end(),
+        [&](const auto &level) { return level.source == table.sourceUrl; })) continue;
+    int position = 0;
+    for (const auto &level : session->SelectDifficultyLevels(table.id))
+      order[table.sourceUrl].emplace(level.level,position++);
+  }
+  std::vector<kombo::LevelRange> ranges;
+  kombo::formatLevelRanges(difficultyFilter_,order,&ranges);
+  for (const auto &range : ranges) {
     auto *selected = row(body);
-    label(selected,difficultyFilter_.levels[i].label,18)->setFlex(1)->setMinWidth(0);
-    button(selected,tr("kombo.ui.remove_level"),[this,i] { later([this,i] {
-      difficultyFilter_.levels.erase(difficultyFilter_.levels.begin()+i); reload();
+    label(selected,range.label,18)->setFlex(1)->setMinWidth(0);
+    button(selected,tr("kombo.ui.remove_level"),[this,levels = range.levels] { later([this,levels] {
+      std::erase_if(difficultyFilter_.levels,[&](const auto &level) {
+        return std::any_of(levels.begin(),levels.end(),[&](const auto &removed) {
+          return removed.source == level.source && removed.level == level.level;
+        });
+      });
+      reload();
     }); })->setFlex(0)->setWidth(140);
   }
   if (!difficultyFilter_.levels.empty()) button(body,tr("recap.ui.all_difficulties"),[this] { later([this] {
@@ -407,7 +413,7 @@ void PlayRecapScene::beginExport(bool share) {
 }
 void PlayRecapScene::exportReceipt() {
   recap::ReceiptContent receipt{.title = tr("recap.ui.title"), .profile = profileName_,
-      .period = periodText() + "\n" + filterText(), .footer = tr("recap.ui.image_footer")};
+      .period = periodText(), .footer = tr("recap.ui.image_footer")};
   for (int kind = 0; kind < 3; ++kind) {
     auto &section = receipt.sections[kind];
     section.title = tr(sectionKeys[kind]); section.empty = tr("recap.ui.empty");
@@ -437,7 +443,7 @@ void PlayRecapScene::exportReceipt() {
     };
     const auto result = sharing_
         ? ResultImageExporter::Share(recap::shareText(snapshot_,tr("recap.ui.title"),periodText(),
-            filterText(),{tr(sectionKeys[0]),tr(sectionKeys[1]),tr(sectionKeys[2])}),exportImage)
+            {tr(sectionKeys[0]),tr(sectionKeys[1]),tr(sectionKeys[2])}),exportImage)
         : exportImage({.outputDirectory = exportDirectory_});
     if (sharing_) {
       message_ = result.success ? tr("recap.ui.share_opened") : tr("recap.ui.failed") + " " + result.message;
