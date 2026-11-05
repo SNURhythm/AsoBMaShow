@@ -379,7 +379,7 @@ void MusicSelectToolbarView::setControlEnabled(MusicSelectToolbarControl control
 
 void MusicSelectToolbarView::setGoalState(bool present, bool achieved, int lampRank,
                                           std::string lamp, std::string score, bool recommended, std::string coverage, bool lampMet, bool scoreMet) {
-  recommended = !present && recommended;
+  recommended = (!present || achieved) && recommended;
   if (goalPresent_ == present && goalAchieved_ == achieved && goalLampRank_ == lampRank &&
       goalLamp_ == lamp && goalScore_ == score && goalCoverage_ == coverage && goalRecommended_ == recommended && goalLampMet_ == lampMet && goalScoreMet_ == scoreMet) return;
   goalPresent_ = present; goalAchieved_ = achieved; goalLampRank_ = lampRank;

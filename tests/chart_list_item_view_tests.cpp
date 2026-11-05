@@ -396,7 +396,7 @@ int main() {
     row.setGoalState(true, false, true);
     require(!recommendationBadge->getVisible(), "a configured goal suppresses the recommendation badge");
     row.setGoalState(true, true, true);
-    require(!recommendationBadge->getVisible(), "an achieved configured goal suppresses the recommendation badge");
+    require(recommendationBadge->getVisible(), "achieved goals allow the recommendation badge on the flag");
     row.setGoalState(false, false, true);
     row.setMeta(record);
     require(!recommendationBadge->getVisible(), "recycled rows discard the previous chart's recommendation badge");
@@ -432,6 +432,12 @@ int main() {
     auto *flag = dynamic_cast<TextView *>(dynamic_cast<Button *>(goal)->getContentView()->findViewByName("chartListGoalFlag"));
     require(flag != nullptr, "goal button contains its flag icon");
     const auto achievedColor = flag->currentColor();
+    row.setGoalState(true, true, true);
+    const auto recommendedAchievedColor = flag->currentColor();
+    require(recommendationBadge->getVisible() && flag->getVisible() &&
+                recommendedAchievedColor.r == achievedColor.r && recommendedAchievedColor.g == achievedColor.g &&
+                recommendedAchievedColor.b == achievedColor.b && !bubble->getVisible(),
+            "recommendations preserve the achieved flag color and hide the completed goal bubble");
     row.setGoalState(true);
     const auto activeColor = flag->currentColor();
     require(achievedColor.r != activeColor.r || achievedColor.g != activeColor.g ||

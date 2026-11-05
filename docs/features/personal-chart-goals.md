@@ -15,8 +15,9 @@ a goal containing both lamp and score targets counts once when both are met.
 ## Recommendations
 
 A small red dot on a chart's flag indicates available lamp or score
-recommendations when that chart has no configured goal. Both selectors use this
-badge; saving a goal removes it, including when that goal is already achieved.
+recommendations when that chart has no unfinished goals. Both selectors use this
+badge: it appears on an empty flag when no goals are saved, or over the green
+flag when all saved goals are achieved. Any unfinished goal hides the dot.
 Tapping a red-dot flag opens a dedicated recommendation view for that chart.
 Selecting a recommendation opens its editor; Back from the editor returns to
 that chart-specific view. Back again opens the ordinary Recommendations tab
@@ -110,12 +111,13 @@ goals where available.
 
 - In PLAY, tap the small flag on a chart row in the built-in selector or the flag
   in the custom selector toolbar. The row flag is filled when that chart has a goal.
-  With one saved goal, it opens that goal directly. With multiple goals, it opens
-  a chart-specific list showing each target, LN scope, and current status.
+  A red-dot flag opens that chart's recommendations. Otherwise, with one saved
+  goal it opens that goal directly; with multiple goals it opens a chart-specific
+  list showing each target, LN scope, and current status.
   **Add goal** in that list or a goal's details creates another independent goal,
   including within the same LN mode. An empty flag without a red dot opens a new
-  goal editor. The selected chart's bubble shows its target for a single goal,
-  or the number of goals when there are several. LN, CN and HCN buttons in the
+  goal editor. The selected chart's bubble includes only unfinished goals: it
+  shows the target for one, or the count when several remain. LN, CN and HCN buttons in the
   editor choose the scope of the goal being added or edited.
 - The favorite star is beside the chart title in the detail panel.
 - The **Goals** folder in either selector gathers indexed charts with goals

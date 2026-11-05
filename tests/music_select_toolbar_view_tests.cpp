@@ -292,7 +292,10 @@ void testGoalRecommendationBadge() {
   expect(badge() && badge()->getVisible(), "enabled goal actions restore recommendations");
   for (bool achieved : {false, true}) {
     toolbar->setGoalState(true, achieved, 400, "HARD", {}, true);
-    expect(badge() && !badge()->getVisible(), "configured goals suppress the toolbar badge regardless of progress");
+    expect(badge() && badge()->getVisible() == achieved,
+           "only unfinished configured goals suppress the toolbar recommendation badge");
+    if (achieved) expect(!toolbar->findViewByName("chartGoalBubble")->getVisible(),
+                         "achieved recommendations keep the goal bubble hidden");
   }
   toolbar->setGoalState(false, false, -1, {}, {}, true);
   toolbar->setGoalState(false, false, -1, {}, {});

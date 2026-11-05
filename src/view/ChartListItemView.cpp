@@ -368,7 +368,7 @@ void ChartListItemView::setGoalHandler(std::function<void(const ChartMetaRecord 
 void ChartListItemView::setGoalState(bool nextGoal, bool achieved, bool recommended) {
   goalAchieved = nextGoal && achieved;
   goal = nextGoal;
-  goalRecommended = !nextGoal && recommended;
+  goalRecommended = (!nextGoal || goalAchieved) && recommended;
   refreshGoalButton();
 }
 

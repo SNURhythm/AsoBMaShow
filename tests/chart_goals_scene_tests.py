@@ -121,6 +121,84 @@ int main() {
             FixtureCompiler.from_environment().build([source], binary, source.parent, includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_chart_flags_route_achieved_goals_to_recommendations(self):
+        root = Path(__file__).resolve().parents[1]
+        methods = extract((root / "src/scene/MainMenuScene.cpp").read_text(), "void MainMenuScene::openChartGoal(")
+        methods += "\n" + extract((root / "src/scene/MusicSelectScene.cpp").read_text(), "void MusicSelectScene::openChartGoals(")
+        fixture = r'''
+#include <cassert>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+struct ChartMetaRecord { struct { std::string SHA256="chart", BmsPath="chart.bms"; } meta; bool unavailable=false, solidArchive=false; };
+namespace long_note_mode { int valueFromId(const std::string &) { return 0; } }
+template<class T> int scoreLongNoteModeForClearLamp(const T &, int) { return 0; }
+namespace folder_goals { struct Source {}; }
+struct Index {
+  std::optional<int> mode;
+  bool achieved=false;
+  std::optional<int> modeFor(const std::string &, int) const { return mode; }
+  bool allAchieved(const std::string &) const { return achieved; }
+};
+struct Recommendations { bool present=false; bool contains(const std::string &) const { return present; } };
+struct SceneReturnTarget { static SceneReturnTarget Retained(void *) { return {}; } };
+struct ChartGoalsScene {
+  bool recommendations;
+  template<class C, class Select, class Folder>
+  ChartGoalsScene(C &, SceneReturnTarget, std::optional<ChartMetaRecord>, Select, std::optional<int>, bool rec, Folder)
+      : recommendations(rec) {}
+};
+struct Manager { std::optional<bool> recommendations; void changeScene(std::unique_ptr<ChartGoalsScene> scene, bool) { recommendations=scene->recommendations; } };
+struct Context {
+  bool storageMaintenanceActive=false;
+  struct { struct Profile { std::string id="profile"; } profile; Profile activeProfile() { return profile; } } profileManager;
+  struct { std::string selectedLnMode="LN"; } settings;
+  struct { Index index; std::optional<Index> LoadChartGoalIndex(std::string &) { return index; } } scoreRepository;
+  Manager manager; Manager *sceneManager=&manager;
+};
+struct MainMenuScene {
+  Context context;
+  Index chartGoalIndex;
+  Recommendations chartGoalRecommendations;
+  struct { std::string longNoteMode="LN"; } profileSelections;
+  std::function<bool()> deferred;
+  std::optional<bool> opened;
+  void defer(std::function<bool()> fn, int, bool) { deferred=std::move(fn); }
+  void openChartGoals(std::optional<ChartMetaRecord>, std::optional<int>, bool rec) { opened=rec; }
+  void openChartGoal(const ChartMetaRecord &);
+};
+struct MusicSelectScene {
+  Context context;
+  bool launching_=false, failed_=false;
+  Recommendations toolbarGoalRecommendations_;
+  std::optional<std::pair<folder_goals::Source,int>> pendingFolderGoalSelection_;
+  std::string pendingFolderGoalProfile_;
+  void queueGoalSelection(const ChartMetaRecord &, int, const std::string &) {}
+  void openChartGoals(std::optional<ChartMetaRecord>, bool recommendations=false);
+};
+METHODS
+int main() {
+  ChartMetaRecord record;
+  for (const bool saved : {false,true}) for (const bool achieved : {false,true}) for (const bool recommended : {false,true}) {
+    const bool expected=recommended && (!saved || achieved);
+    Index index{saved ? std::optional<int>{0} : std::nullopt, saved && achieved};
+    MainMenuScene main; main.chartGoalIndex=index; main.chartGoalRecommendations.present=recommended;
+    main.openChartGoal(record); assert(!main.opened); main.deferred(); assert(main.opened==expected);
+    MusicSelectScene custom; custom.context.scoreRepository.index=index; custom.toolbarGoalRecommendations_.present=recommended;
+    custom.openChartGoals(record); assert(custom.context.manager.recommendations==expected);
+  }
+  MainMenuScene stale; stale.openChartGoal(record); stale.context.profileManager.profile.id="changed";
+  stale.deferred(); assert(!stale.opened);
+}
+'''
+        with tempfile.TemporaryDirectory(prefix="goals-flag-routing-") as directory:
+            source, binary = Path(directory) / "routing.cpp", Path(directory) / "routing"
+            source.write_text(fixture.replace("METHODS", methods))
+            FixtureCompiler.from_environment().build([source], binary, source.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_result_goal_target_is_frozen_for_recalled_and_live_results(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/ResultScene.cpp").read_text()

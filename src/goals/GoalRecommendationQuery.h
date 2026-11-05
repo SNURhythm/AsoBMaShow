@@ -83,7 +83,7 @@ inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = 
 }
 
 inline std::string recommendationChartHashesSql() {
-  // The selector separately hides the badge for any configured chart goal.
+  // The selector separately hides the badge while any chart goal is unfinished.
   return "SELECT sha256 FROM (" + recommendationCandidatesSql() +
       " SELECT sha256 FROM candidates) UNION SELECT chart_sha256 FROM (" +
       gaugeRecommendationCandidatesSql() + " SELECT chart_sha256 FROM candidates)";
