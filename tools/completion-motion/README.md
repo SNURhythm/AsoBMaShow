@@ -31,6 +31,9 @@ variant. The final hit and timing are synthetic. These are authoring experiments
 only; no lane-space completion effect has been added to the native renderer.
 Matching `Lane-Wave-*`, `Lane-Rails-*`, and `Lane-Fan-*` compositions are available
 in Remotion, using the same analytic frame model as the reviewer.
+Wave is the selected direction: its revised single launch and brighter crest
+finish in 520 ms (Full Combo) or 620 ms (Perfect). Rails and Fan remain earlier
+alternatives. Reduced motion keeps its restrained judgement-line accent.
 
 ```sh
 npm run dev

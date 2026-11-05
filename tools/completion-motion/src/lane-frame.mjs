@@ -1,7 +1,7 @@
 // Throwaway lane-space completion studies. Shared frame model for review/Remotion.
 import {sceneSvg, impactTime} from './frame.mjs';
 export const laneDirections = [
-  {name:'01 / Wave', description:'A single wide crest travels from the judgement line toward the horizon. Perfect adds a sharper white leading edge.'},
+  {name:'01 / Wave', description:'One forceful crest launches from the judgement line and clears the lanes in about half a second. Perfect has a broader gold wake and a bright white leading edge.'},
   {name:'02 / Rails', description:'Lane boundaries lift together, leaving short luminous tails. Perfect carries the rails farther with a stronger shared onset.'},
   {name:'03 / Fan', description:'A fan opens from the final hit across the lane surface. Perfect spreads wider with a few separated shards.'},
 ];
@@ -16,19 +16,22 @@ export function laneSceneSvg(seconds,kind=0,perfect=false,reduced=false) {
   const color=perfect?'#FFCC51':'#B7F65C';
   let effect='';
   if(age>=0&&age<1.55) {
-    const q=unit(age/(perfect?1.25:1.05));
-    const fade=(1-q)**1.5;
+    const q=unit(age/(kind===0&&!reduced?(perfect?.62:.52):(perfect?1.25:1.05)));
+    const fade=kind===0&&!reduced?(1-unit((q-.25)/.75))**1.4:(1-q)**1.5;
     if(reduced) {
       effect=path([point(0,.98),point(1,.98),point(1,1),point(0,1)],color,.3*fade);
     } else if(kind===0) {
       const depth=1-decel(q)*.94;
-      // A band of diminishing alpha follows the crest toward the horizon.
-      for(let i=0;i<12;i++) {
-        const a=Math.min(1,depth+i*.012), b=Math.min(1,depth+(i+1)*.012);
-        effect+=path([point(0,a),point(1,a),point(1,b),point(0,b)],color,(1-i/12)*fade*.24);
-      }
-      effect+=path([point(0,depth),point(1,depth)],color,fade*.85,perfect?4:3);
-      if(perfect)effect+=path([point(.08,depth),point(.92,depth)],'#F8FDFF',fade*.85,1.5);
+      // One brief launch, then a continuous travelling crest; no second pulse.
+      const launch=(1-unit(age/.12))**2;
+      effect+=path([point(0,.93),point(1,.93),point(1,1),point(0,1)],color,launch*.38);
+      effect+=path([point(0,.995),point(1,.995)],'#F8FDFF',launch*.95,perfect?8:6);
+      // A continuous wake avoids visible alpha bands at the stronger intensity.
+      const wakeEnd=depth+(perfect?.264:.216), clippedEnd=Math.min(1,wakeEnd);
+      effect+=`<defs><linearGradient id="waveWake" gradientUnits="userSpaceOnUse" x1="0" y1="${n(point(0,depth)[1])}" x2="0" y2="${n(point(0,wakeEnd)[1])}"><stop stop-color="${color}" stop-opacity="${perfect?.65:.52}"/><stop offset=".5" stop-color="${color}" stop-opacity="${perfect?.23:.18}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>`;
+      effect+=path([point(0,depth),point(1,depth),point(1,clippedEnd),point(0,clippedEnd)],'url(#waveWake)',fade);
+      effect+=path([point(0,depth),point(1,depth)],color,fade,perfect?9:7);
+      effect+=path([point(0,depth),point(1,depth)],'#F8FDFF',fade*(perfect?.95:.7),perfect?3:2);
     } else if(kind===1) {
       const depth=1-decel(q)*(perfect?.94:.78);
       for(let i=0;i<=8;i++) {
