@@ -3,10 +3,12 @@
 // This is a reconstruction, not a native capture or scoring implementation.
 export const duration = 3.8;
 export const impactTime = 0.65;
+// Independent presentation anchor; never derived from judgement text/line settings.
+const achievementX = 640, achievementY = 285;
 export const directions = [
-  {name: '01 / Impact', description: 'The final keybomb opens across the judgement line. The achievement settles into the judgement position. Perfect adds a second pulse.'},
-  {name: '02 / Sweep', description: 'A short sweep connects the lanes and reveals the achievement. Perfect sends a return sweep through the text.'},
-  {name: '03 / Rise', description: 'Light rises briefly from the keys, then clears around the achievement. Perfect resolves with a paired ring at the final note.'},
+  {name: '01 / Impact', description: 'Two strokes converge, the lettering lands, and short shards release outward. Perfect answers with a second expanding pulse.'},
+  {name: '02 / Sweep', description: 'A quick pass reveals the lettering in sequence. Fine trails clear outward; Perfect adds a return glint and a wider finish.'},
+  {name: '03 / Rise', description: 'The lettering lifts into place as narrow trails fan upward. Perfect adds a brief burst above the title.'},
 ];
 const clamp = (v) => Math.max(0, Math.min(1, v));
 const ease = (v) => 1 - Math.pow(1 - clamp(v), 3);
@@ -79,80 +81,125 @@ function stage(seconds,perfect,reduced) {
   return s;
 }
 
+// All achievement geometry uses local coordinates around the independent anchor.
 function lettering(t,kind,perfect,reduced) {
-  const delay=kind===2?.12:.04,p=out(t,delay,.18);
-  const alpha=p*(1-smooth((t-1.75)/.35));
-  if(alpha<=0)return '';
-  const scale=reduced?1:1+.075*(1-p);
-  const y=480+(reduced?0:kind===2?16*(1-p):0);
-  const color=perfect?teal:lime;
+  const delay=.08;
+  const exit=smooth((t-2.05)/.4);
   const word=perfect?'PERFECT':'FULL COMBO';
-  const label=text(word,0,0,perfect?70:64,color);
-  let s=label;
-  if(kind===1&&!reduced) {
-    const reveal=out(t,.04,.34);
-    s=`<clipPath id="textReveal"><rect x="-270" y="-55" width="${f(540*reveal)}" height="110"/></clipPath><g clip-path="url(#textReveal)">${label}</g>`;
+  const size=perfect?82:74, advance=perfect?58:52;
+  const widths=[...word].map(c=>c===' '?26:advance);
+  const totalWidth=widths.reduce((sum,width)=>sum+width,0);
+  const color=perfect?teal:lime;
+  let s='';
+  for(let i=0;i<word.length;i++) {
+    if(word[i]===' ')continue;
+    const stagger=reduced?0:kind===1?i*.022:Math.abs(i-(word.length-1)/2)*.009;
+    const age=t-delay-stagger, p=out(age,0,.23);
+    if(age<=0)continue;
+    const settle=reduced?0:Math.sin(clamp(age/.48)*Math.PI)*Math.exp(-age*5);
+    const x=-totalWidth/2+widths.slice(0,i).reduce((sum,width)=>sum+width,0)+widths[i]/2;
+    const y=reduced?0:(kind===2?30:12)*(1-p)-5*settle;
+    const scale=reduced?1:1+.1*settle;
+    const glyph=`<text text-anchor="middle" dominant-baseline="central" font-family="Achievement,sans-serif" font-weight="700" font-size="${size}" fill="${white}">${word[i]}</text>`;
+    s+=group(glyph,p*(1-exit),`translate(${f(x)} ${f(y)}) scale(${f(scale)})`);
   }
-  // Perfect's return sweep is short, white, and confined to the actual letters.
-  if(perfect&&!reduced&&t>.4&&t<.9) {
-    const sweep=1-out(t,.4,.5);
-    s+=`<clipPath id="textSweep"><rect x="${f(-280+560*sweep)}" y="-55" width="35" height="110"/></clipPath><g clip-path="url(#textSweep)">${text(word,0,0,70,white)}</g>`;
+  // One short accent below the word anchors its weight without a persistent badge.
+  const width=(perfect?202:235)*out(t,.16,.35);
+  s+=line(-width,57,width,57,color,2,out(t,.16,.12)*(1-smooth((t-1.1)/.65)));
+  // A narrow highlight crosses the actual lettering, not a screen-sized flare.
+  if(perfect&&!reduced&&t>.55&&t<1.1) {
+    const x=-270+540*smooth((t-.55)/.55);
+    s+=`<clipPath id="glint"><rect x="${f(x)}" y="-54" width="27" height="108"/></clipPath><g clip-path="url(#glint)">${group(s.replaceAll(`fill="${white}"`, `fill="${color}"`),.9)}</g>`;
   }
-  return group(s,alpha,`translate(640 ${f(y)}) scale(${f(scale)})`);
+  return s;
+}
+
+function shard(x,y,length,width,angle,color,opacity) {
+  return group(`<path d="M${-length} 0L0 ${-width}L${length} 0L0 ${width}Z" fill="${color}"/>`,opacity,`translate(${f(x)} ${f(y)}) rotate(${f(angle)})`);
+}
+
+function fragments(t,perfect,kind) {
+  let s='';
+  const color=perfect?teal:lime;
+  const count=perfect?16:10;
+  for(let i=0;i<count;i++) {
+    const age=t-.18-(i%4)*.035;
+    if(age<0||age>1.2)continue;
+    const q=out(age,0,1.2),a=i/count*Math.PI*2+.2;
+    const x=Math.cos(a)*(190+q*(80+i%3*22));
+    const y=Math.sin(a)*(40+q*(50+i%4*12))-(kind===2?q*60:0);
+    const opacity=Math.sin(clamp(age/.12)*Math.PI/2)*(1-q)*.85;
+    s+=shard(x,y,(i%3===0?11:5)*(1-q)+1,1.2,a*180/Math.PI,i%3===0?white:color,opacity);
+  }
+  return s;
 }
 
 function impact(t,perfect) {
   const color=perfect?teal:lime;
-  const p=out(t,.02,.38),fade=1-out(t,.14,.5);
-  let s=line(640-480*p,587,640+480*p,587,color,7,fade*.8);
-  s+=ellipse(640,587,25+440*p,4+60*p,color,2,fade*.7);
-  if(perfect)s+=ellipse(640,587,25+440*out(t,.24,.5),4+60*out(t,.24,.5),teal,2,out(t,.24,.04)*(1-out(t,.3,.5)));
-  for(let i=0;i<12;i++) {
-    const q=out(t,.04+(i%3)*.018,.55),x=330+i*56;
-    s+=line(x,566-q*(24+i%3*18),x,552-q*(28+i%3*18),color,2,(1-q)*p);
+  let s='';
+  const p=out(t,0,.24), release=out(t,.22,.55);
+  for(const side of [-1,1]) {
+    const x=side*(320-85*p+110*release);
+    s+=shard(x,0,42*(1-release)+4,3,0,color,(1-release)*p);
+    s+=line(x-side*50,-16,x-side*15,-16,white,1,(1-release)*p*.6);
   }
-  return s;
+  const q=out(t,.1,.65);
+  s+=ellipse(0,0,150+190*q,28+66*q,color,1.5,out(t,.1,.05)*(1-q)*.7);
+  if(perfect) {
+    const r=out(t,.48,.65);
+    s+=ellipse(0,0,190+180*r,42+80*r,teal,1.5,out(t,.48,.05)*(1-r)*.8);
+  }
+  return s+fragments(t,perfect,0);
 }
 
 function sweep(t,perfect) {
   const color=perfect?teal:lime;
   let s='';
-  for(let i=0;i<8;i++) {
-    const age=t-i*.035;
-    if(age<0||age>.36)continue;
-    const x=220+i*120,q=out(age,0,.36);
-    s+=line(x-38,586,x+38,586,color,6,1-q);
-    s+=line(x,573,x,573-48*q,color,2,1-q);
+  for(let i=0;i<2;i++) {
+    const q=out(t,.03+i*.07,.5),y=i===0?-52:57;
+    const x=-290+580*q;
+    s+=line(x-100*(1-q),y,x,y,color,i===0?2:3,Math.sin(q*Math.PI));
+    s+=shard(x,y,12,2,0,white,Math.sin(q*Math.PI));
   }
   if(perfect) {
-    const q=out(t,.35,.5);
-    s+=ellipse(815,587,10+120*q,3+35*q,teal,2,out(t,.35,.04)*(1-q));
+    const q=out(t,.55,.5),x=290-580*q;
+    s+=line(x,-52,x+70*(1-q),-52,teal,2,Math.sin(q*Math.PI));
   }
-  return s;
+  return s+fragments(t,perfect,1);
 }
 
 function rise(t,perfect) {
-  let s='';
   const color=perfect?teal:lime;
-  for(let i=0;i<8;i++) {
-    const age=t-Math.abs(i-4)*.018;
-    if(age<0||age>.65)continue;
-    const q=out(age,0,.65),x=220+i*120;
-    const height=60+55*(1-Math.abs(i-3.5)/4);
-    s+=`<path d="M${x-25} 574H${x+25}L${f(x+18)} ${f(574-height*q)}H${f(x-18)}Z" fill="url(#laneLight)" opacity="${f((1-q)*.8)}"/>`;
-    s+=line(x,570-height*q,x,582-height*q,color,2,(1-q)*.8);
+  let s='';
+  for(let i=0;i<7;i++) {
+    const age=t-Math.abs(i-3)*.025;
+    if(age<0||age>.7)continue;
+    const q=out(age,0,.7),x=(i-3)*(60+q*12),y=90-q*(170-Math.abs(i-3)*14);
+    s+=line(x,y+25*(1-q),x,y,color,2,Math.sin(q*Math.PI)*.7);
+    s+=shard(x,y,8*(1-q),1,90,white,Math.sin(q*Math.PI)*.6);
   }
-  if(perfect)s+=keybomb(t-.24,815,587,105,teal);
-  return s;
+  if(perfect) {
+    const q=out(t,.48,.65);
+    for(let i=0;i<6;i++) {
+      const a=i*Math.PI/3, r=10+q*46;
+      s+=shard(Math.cos(a)*r,-87+Math.sin(a)*r*.6,7*(1-q)+1,1.4,a*180/Math.PI,teal,out(t,.48,.06)*(1-q));
+    }
+  }
+  return s+fragments(t,perfect,2);
 }
 
 export function sceneSvg(seconds,kind=0,perfect=false,reduced=false) {
   const t=seconds-impactTime,color=perfect?teal:lime;
-  const defs=`<defs><radialGradient id="hitGlow"><stop stop-color="#f8fdff" stop-opacity=".85"/><stop offset=".22" stop-color="#56d2ca" stop-opacity=".7"/><stop offset="1" stop-color="#56d2ca" stop-opacity="0"/></radialGradient><linearGradient id="laneLight" x2="0" y2="1"><stop stop-color="${color}" stop-opacity="0"/><stop offset="1" stop-color="${color}" stop-opacity=".7"/></linearGradient></defs>`;
+  const defs=`<defs><radialGradient id="achievementGlow"><stop stop-color="${color}" stop-opacity=".12"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></radialGradient><radialGradient id="hitGlow"><stop stop-color="#f8fdff" stop-opacity=".85"/><stop offset=".22" stop-color="#56d2ca" stop-opacity=".7"/><stop offset="1" stop-color="#56d2ca" stop-opacity="0"/></radialGradient><linearGradient id="laneLight" x2="0" y2="1"><stop stop-color="${color}" stop-opacity="0"/><stop offset="1" stop-color="${color}" stop-opacity=".7"/></linearGradient></defs>`;
   let s=stage(seconds,perfect,reduced);
-  if(t>=0&&t<2.2) {
-    if(!reduced)s+=[impact,sweep,rise][kind](t,perfect);
-    s+=lettering(t,kind,perfect,reduced);
+  if(t>=0&&t<2.5) {
+    let effect='';
+    // Local low-opacity light separates the title from a busy BGA; no panel.
+    const haze=out(t,0,.22)*(1-smooth((t-1.5)/.8));
+    if(!reduced)effect+=`<ellipse cx="0" cy="0" rx="330" ry="125" fill="url(#achievementGlow)" opacity="${f(haze)}"/>`;
+    if(!reduced)effect+=[impact,sweep,rise][kind](t,perfect);
+    effect+=lettering(t,kind,perfect,reduced);
+    s+=group(effect,1,`translate(${achievementX} ${achievementY})`);
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="100%" height="100%" role="img" aria-label="${directions[kind].name}, ${perfect?'Perfect':'Full Combo'} animation">${defs}${s}</svg>`;
 }

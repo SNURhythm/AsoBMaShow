@@ -7,3 +7,8 @@
   font-family: Judgement;
   src: url('./fonts/judgement-ascii.ttf') format('truetype');
 }
+@font-face {
+  font-family: Achievement;
+  src: url('./fonts/judgement-bold-ascii.otf') format('opentype');
+  font-weight: 700;
+}

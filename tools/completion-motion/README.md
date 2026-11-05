@@ -31,7 +31,10 @@ All six 1280×720, 60fps compositions use `src/frame.mjs`, the exact same frame
 model as the standalone reviewer. The SVG scene is one editing unit in Remotion;
 edit its parameters in source rather than expecting per-particle Studio tracks.
 The HUD reuses the repository's Roboto Condensed font. Achievement lettering uses
-an ASCII subset of the same Noto Sans CJK JP font used by native judgement text.
+an ASCII subset of the bold Noto Sans CJK JP companion to the native judgement font.
+The achievement has an independent upper-middle anchor at (640, 285) in the
+1280×720 study, separate from judgement text and the judgement line. Entrance,
+secondary release, readable hold, and exit are staged separately.
 The palette and short ring/shard effects follow `JudgementColors.h` and
 `KeybombEffect.h`. No slogans, decorative badges, or alternate display typeface
 are added. The HUD counters are synthetic and do not define scoring policy.
@@ -51,12 +54,14 @@ replay timing still require native implementation and validation.
 
 ## Font subset
 
-`src/fonts/judgement-ascii.ttf` is generated from the repository's existing
-`assets/fonts/notosanscjkjp.ttf`; it avoids embedding the full CJK font in the
+`src/fonts/judgement-ascii.ttf` and `judgement-bold-ascii.otf` are generated from
+the repository's existing regular and bold Noto Sans CJK JP fonts; it avoids embedding the full CJK font in the
 standalone reviewer. The existing [Noto font license](../../assets/legal/noto-sans-cjk.txt)
 also applies to the subset. Regenerate with FontTools (`pyftsubset`):
 
 ```sh
 pyftsubset ../../assets/fonts/notosanscjkjp.ttf --unicodes=U+0020-007E \
   --output-file=src/fonts/judgement-ascii.ttf --layout-features='*'
+pyftsubset ../../assets/fonts/notosanscjkjp-bold.otf --unicodes=U+0020-007E \
+  --output-file=src/fonts/judgement-bold-ascii.otf --layout-features='*'
 ```
