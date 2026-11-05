@@ -51,6 +51,31 @@ public:
   }
 };
 
+void testStrikethroughDoesNotChangeSharedFonts() {
+  FontProbeView view(ASOBMASHOW_SOURCE_DIR "/bgfx/bgfx/examples/runtime/font/signika-regular.ttf",24);
+  view.setDeferredTextureMaterialization(true);
+  view.setColor({255,255,255,255}); view.setText("III\nIII");
+  const auto style = TTF_GetFontStyle(view.primaryFont());
+  auto *plain = view.fallbackSurface();
+  view.setStrikethrough(true);
+  auto *struck = view.fallbackSurface();
+  assert(plain && struck && plain->w==struck->w && plain->h==struck->h);
+  for (int half=0;half<2;++half) {
+    bool changed=false;
+    for (int y=half*plain->h/2;y<(half+1)*plain->h/2;++y)
+      changed |= std::memcmp(static_cast<char *>(plain->pixels)+y*plain->pitch,
+          static_cast<char *>(struck->pixels)+y*struck->pitch,plain->w*4)!=0;
+    assert(changed);
+  }
+  assert(TTF_GetFontStyle(view.primaryFont())==style);
+  view.setStrikethrough(false);
+  auto *restored=view.fallbackSurface();
+  for (int y=0;y<plain->h;++y)
+    assert(std::memcmp(static_cast<char *>(plain->pixels)+y*plain->pitch,
+        static_cast<char *>(restored->pixels)+y*restored->pitch,plain->w*4)==0);
+  SDL_DestroySurface(plain); SDL_DestroySurface(struck); SDL_DestroySurface(restored);
+}
+
 void testEmojiFallbackKeepsVariationSelectors() {
   FontProbeView view(ASOBMASHOW_SOURCE_DIR
       "/bgfx/bgfx/examples/runtime/font/signika-regular.ttf", 24);
@@ -349,6 +374,7 @@ int main() {
   testFontCacheUsesCreatingThread(path);
   testWarmFontCache(path);
   testEmojiFallbackKeepsVariationSelectors();
+  testStrikethroughDoesNotChangeSharedFonts();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
 }

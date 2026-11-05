@@ -4199,7 +4199,8 @@ void MusicSelectScene::refreshToolbarGoal() {
         i18n::format("goals.ui.count", {{"count", std::to_string(goals->size())}}));
   } else {
     const auto labels = chart_goals::targetLabels(goals->front().goal.target);
-    toolbar_->setGoalState(true, achieved, labels.lampRank, labels.lamp, labels.score);
+    toolbar_->setGoalState(true, achieved, labels.lampRank, labels.lamp, labels.score, false, {},
+        goals->front().progress.lampMet, goals->front().progress.scoreMet);
   }
 }
 

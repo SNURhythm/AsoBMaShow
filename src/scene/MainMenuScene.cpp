@@ -1526,7 +1526,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
         view->setGoalTarget(-1, {}, i18n::format("goals.ui.count", {{"count", std::to_string(goals->size())}}));
       } else if (goals && goals->size() == 1 && !goals->front().progress.achieved) {
         const auto labels = chart_goals::targetLabels(goals->front().goal.target);
-        view->setGoalTarget(labels.lampRank, labels.lamp, labels.score);
+        view->setGoalTarget(labels.lampRank, labels.lamp, labels.score,
+            goals->front().progress.lampMet, goals->front().progress.scoreMet);
       } else if (!error.empty()) SDL_Log("Cannot load chart goal: %s", error.c_str());
     }
   };

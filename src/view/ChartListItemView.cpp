@@ -372,8 +372,8 @@ void ChartListItemView::setGoalState(bool nextGoal, bool achieved, bool recommen
   refreshGoalButton();
 }
 
-void ChartListItemView::setGoalTarget(int lampRank, std::string lamp, std::string score) {
-  goalBubble->setTarget(lampRank, lamp, score);
+void ChartListItemView::setGoalTarget(int lampRank, std::string lamp, std::string score, bool lampMet, bool scoreMet) {
+  goalBubble->setTarget(lampRank, lamp, score, {}, lampMet, scoreMet);
   goalBubble->showFor(selected && goal && !goalAchieved);
 }
 

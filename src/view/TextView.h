@@ -36,6 +36,8 @@ public:
   // Opt in to single-line shrinking before overflow; zero keeps the base size.
   void setMinimumFontSize(int minimumSize);
   void setWrap(bool enabled);
+  void setStrikethrough(bool enabled);
+  [[nodiscard]] bool hasStrikethrough() const { return strikethrough_; }
   [[nodiscard]] bgfx::TextureHandle textureHandle() const { return texture; }
   [[nodiscard]] int textureWidth() const { return rect.w; }
   [[nodiscard]] int textureHeight() const { return rect.h; }
@@ -125,6 +127,7 @@ protected:
   SDL_Rect rect{};
   std::string text;
   bool wrapEnabled = false;
+  bool strikethrough_ = false;
   bool deferTextureMaterialization = false;
   int currentWrapWidth = 0;
   bool metricsDirty = true;

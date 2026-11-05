@@ -245,20 +245,27 @@ int main() {
 #include <vector>
 #include <initializer_list>
 #include <utility>
-struct View { void setThemedColor(int) {} };
+struct View { void setThemedColor(int) {} void setStrikethrough(bool b) { strikes.push_back(b); } static inline std::vector<bool> strikes; };
 namespace goal_ui { View *targetPanel(View *v) { return v; } }
 namespace app_theme { constexpr int cyan=1; }
-namespace chart_goals { struct Target { int lamp, scoreNumerator, scoreDenominator; }; }
+namespace chart_goals { struct Target { int lamp, scoreNumerator, scoreDenominator; }; struct Progress { bool lampMet=false,scoreMet=false; }; }
 namespace kombo { std::string lampLabel(int n) { return n == 600 ? "FULL COMBO" : "HARD"; } }
 constexpr int kClearTypeFullComboRank = 600;
 std::vector<std::string> labels;
-void lamp(View *, const std::string &s, int, bool) { labels.push_back(s); }
+View *lamp(View *v, const std::string &s, int, bool) { labels.push_back(s); return v; }
 View *label(View *v, const std::string &s, int) { labels.push_back(s); return v; }
 std::string scoreTarget(const chart_goals::Target &t) { return t.scoreDenominator == 10000 ? "100.00% EX" : (t.scoreNumerator == t.scoreDenominator ? "MAX" : "AAA"); }
 namespace i18n { std::string format(const char *, std::initializer_list<std::pair<std::string,std::string>> values) { return values.begin()->second + " or above"; } }
 METHOD
 int main() {
  View v;
+ chart_goals::Progress progress{true,false};
+ targets(&v, {400,24,27}, &progress);
+ assert((View::strikes == std::vector<bool>{true,false}));
+ View::strikes.clear(); labels.clear();
+ progress={false,true}; targets(&v,{400,24,27},&progress);
+ assert((View::strikes == std::vector<bool>{false,true}));
+ View::strikes.clear(); labels.clear();
  targets(&v, {400,24,27});
  assert((labels == std::vector<std::string>{"HARD or above", "AAA or above"}));
  labels.clear(); targets(&v, {600,27,27});

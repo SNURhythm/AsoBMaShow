@@ -232,6 +232,23 @@ void testGoalBubbleStaysOnScreen() {
   std::vector<MusicSelectToolbarState> saved;
   auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved), 260, 300);
   toolbar->setGoalState(true, false, 400, "HARD", "AAA");
+  const auto struck = [&](const std::string &text) {
+    bool result = false;
+    const auto visit = [&](View *view,const auto &self)->void {
+      if (auto *label = dynamic_cast<TextView *>(view); label && label->getText()==text)
+        result = label->hasStrikethrough();
+      for (auto *child : view->getChildren()) self(child,self);
+    };
+    visit(toolbar.get(),visit); return result;
+  };
+  toolbar->setGoalState(true,false,400,"HARD","AAA",false,{},true,false);
+  expect(struck("HARD") && !struck("AAA"),"only the completed lamp condition is crossed out");
+  toolbar->setGoalState(true,false,400,"HARD","AAA",false,{},false,true);
+  expect(!struck("HARD") && struck("AAA"),"progress changes update decorations with unchanged labels");
+  toolbar->setGoalState(true,false,400,"HARD",{},false,{},true,false);
+  expect(!struck("HARD"),"single-condition targets retain their presentation");
+  toolbar->setGoalState(true,false,400,"HARD","AAA");
+  expect(!struck("HARD") && !struck("AAA"),"reused labels clear previous completion decoration");
   for (const auto [x, y] : {std::pair{0, 0}, std::pair{250, 0},
                             std::pair{0, 290}, std::pair{250, 290}}) {
     toolbar->applyState({.mode=MusicSelectToolbarMode::Expanded,

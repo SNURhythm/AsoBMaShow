@@ -162,7 +162,7 @@ std::map<std::string, ChartMetaRecord> loadGoalArtwork(
   }
   return result;
 }
-void lamp(View *parent, const std::string &text, int rank, bool target = false) {
+TextView *lamp(View *parent, const std::string &text, int rank, bool target = false) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Row)->setGap(10)->setAlignItems(YGAlignCenter)->setFlexShrink(0);
   if (hasClearLampColor(rank)) {
@@ -175,6 +175,7 @@ void lamp(View *parent, const std::string &text, int rank, bool target = false) 
   caption->setFlex(1)->setMinWidth(0);
   caption->setThemedColor(target ? app_theme::cyan : app_theme::textSecondary);
   parent->addView(row);
+  return caption;
 }
 std::string rateText(const chart_goals::Target &target) {
   std::ostringstream text;
@@ -197,24 +198,27 @@ std::string scoreTarget(const chart_goals::Target &target) {
 std::string scope(const chart_goals::Goal &goal) {
   return goal.longNoteMode == 0 ? i18n::tr("goals.ui.shared_scope") : long_note_mode::idFromValue(goal.longNoteMode);
 }
-void targets(View *parent, const chart_goals::Target &target) {
+void targets(View *parent, const chart_goals::Target &target, const chart_goals::Progress *progress = nullptr) {
+  const bool combined = target.lamp >= 0 && target.scoreNumerator > 0;
   parent = goal_ui::targetPanel(parent);
   if (target.lamp >= 0) {
     const auto value = kombo::lampLabel(target.lamp);
     lamp(parent, target.lamp >= kClearTypeFullComboRank ? value
-        : i18n::format("kombo.ui.at_least", {{"value", value}}), target.lamp, true);
+        : i18n::format("kombo.ui.at_least", {{"value", value}}), target.lamp, true)->setStrikethrough(combined && progress && progress->lampMet);
   }
   if (target.scoreNumerator > 0) {
     const auto value = scoreTarget(target);
-    label(parent, target.scoreNumerator >= target.scoreDenominator ? value
-        : i18n::format("kombo.ui.at_least", {{"value", value}}), 28)->setThemedColor(app_theme::cyan);
+    auto *score = label(parent, target.scoreNumerator >= target.scoreDenominator ? value
+        : i18n::format("kombo.ui.at_least", {{"value", value}}), 28);
+    score->setThemedColor(app_theme::cyan);
+    score->setStrikethrough(combined && progress && progress->scoreMet);
   }
 }
 void orderGoalRows(std::vector<chart_goals::GoalProgress> &rows) {
   std::stable_partition(rows.begin(), rows.end(), [](const auto &entry) { return !entry.progress.achieved; });
 }
 void goalSummary(View *parent, const chart_goals::GoalProgress &entry) {
-  targets(parent, entry.goal.target);
+  targets(parent, entry.goal.target, &entry.progress);
   label(parent, scope(entry.goal), 18)->setThemedColor(app_theme::textSecondary);
   auto *status = label(parent, i18n::tr(entry.progress.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"), 18);
   status->setAlignSelf(YGAlignFlexStart)->setPadding(Edge::Left, 8)->setPadding(Edge::Right, 8)->setCornerRadius(8);
@@ -680,7 +684,7 @@ void ChartGoalsScene::build() {
       action(detail, i18n::tr("goals.ui.save"), [this] { later([this] { saveGoal(); }); }, app_theme::ActionCategory::Primary);
       action(detail, i18n::tr("goals.ui.cancel"), [this] { back(); });
     } else {
-      targets(detail, draft_.target);
+      targets(detail, draft_.target, &selected_->progress);
       const auto &progress = selected_->progress;
       label(detail, i18n::tr(progress.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"), 25)
           ->setThemedColor(progress.achieved ? app_theme::lime : app_theme::textPrimary);
