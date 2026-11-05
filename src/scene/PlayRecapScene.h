@@ -30,7 +30,7 @@ private:
   std::string filterText() const;
   void back();
   void movePeriod(int direction);
-  void beginExport();
+  void beginExport(bool share = false);
   void exportReceipt();
   void addUpgrade(View *, int kind, const recap::Upgrade &);
   std::string periodText() const;
@@ -42,7 +42,7 @@ private:
   std::int64_t sessionBefore_ = 0;
   std::vector<std::int64_t> sessionForward_;
   std::array<std::size_t, 3> offsets_{};
-  bool loading_ = false, reloadPending_ = false, exporting_ = false;
+  bool loading_ = false, reloadPending_ = false, exporting_ = false, sharing_ = false;
   std::filesystem::path exportDirectory_;
   kombo::Assignment difficultyFilter_;
   int tableId_ = 0;

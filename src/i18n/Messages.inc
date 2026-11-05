@@ -1320,6 +1320,8 @@
 {"recap.ui.scope", "Local chart records · Session: 60-minute gap · Week starts Monday", "로컬 채보 기록 · 세션 구분: 60분 간격 · 주 시작: 월요일", "ローカル譜面記録 · セッション区切り：60分 · 週の開始：月曜", "本地谱面记录 · 时段间隔：60分钟 · 每周从周一开始", "本地譜面記錄 · 時段間隔：60分鐘 · 每週從週一開始"},
 {"recap.ui.scores", "Score upgrades", "점수 갱신", "スコア更新", "分数提升", "分數提升"},
 {"recap.ui.session", "Session", "세션", "セッション", "时段", "時段"},
+{"recap.ui.share_opened", "Share sheet opened", "공유 창을 열었습니다", "共有メニューを開きました", "已打开分享菜单", "已開啟分享選單"},
+{"recap.ui.sharing", "Preparing share…", "공유 준비 중…", "共有の準備中…", "正在准备分享…", "正在準備分享…"},
 {"recap.ui.title", "Play recap", "플레이 요약", "プレイのまとめ", "游玩回顾", "遊玩回顧"},
 {"recap.ui.weekly", "Weekly", "주간", "週別", "每周", "每週"},
 {"records.all.label", "All", "전체", "すべて", "全部", "全部"},

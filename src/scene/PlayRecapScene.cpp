@@ -2,6 +2,7 @@
 #include "../recap/ReceiptView.h"
 #include "../recap/ChartMetadata.h"
 #include "../recap/Filters.h"
+#include "../recap/ShareText.h"
 #include "../kombo/KomboForm.h"
 #include "../view/DropdownView.h"
 #include "../view/OverlayPortal.h"
@@ -324,9 +325,15 @@ void PlayRecapScene::build() {
   portal_->setPosition(Edge::Left,0)->setPosition(Edge::Top,0)->setZIndex(900);
   auto *header = row(root_);
   button(header, tr("kombo.ui.back"), [this] { back(); });
-  button(header, tr(exporting_ ? "recap.ui.exporting" : "recap.ui.export"), [this] {
-    later([this] { if (!exporting_) beginExport(); });
-  });
+  const bool canExport = !loading_ && !exporting_ && snapshot_.error.empty();
+  button(header, tr(exporting_ && !sharing_ ? "recap.ui.exporting" : "recap.ui.export"), [this] {
+    later([this] { beginExport(); });
+  })->setEnabled(canExport);
+  if (TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android) {
+    button(header,tr(exporting_ && sharing_ ? "recap.ui.sharing" : "result.share.label"),[this] {
+      later([this] { beginExport(true); });
+    })->setEnabled(canExport);
+  }
   auto *scroll = new ScrollView();
   scroll->setFlex(1)->setMinHeight(0);
   root_->addView(scroll);
@@ -393,13 +400,12 @@ void PlayRecapScene::build() {
   addView(portal_);
   root_->applyYogaLayout();
 }
-void PlayRecapScene::beginExport() {
-  if (loading_ || !snapshot_.error.empty()) return;
-  exporting_ = true;
-  message_ = tr("recap.ui.exporting");
+void PlayRecapScene::beginExport(bool share) {
+  if (loading_ || exporting_ || !snapshot_.error.empty()) return;
+  sharing_ = share; exporting_ = true;
+  message_ = tr(share ? "recap.ui.sharing" : "recap.ui.exporting");
 }
 void PlayRecapScene::exportReceipt() {
-  exporting_ = false;
   recap::ReceiptContent receipt{.title = tr("recap.ui.title"), .profile = profileName_,
       .period = periodText() + "\n" + filterText(), .footer = tr("recap.ui.image_footer")};
   for (int kind = 0; kind < 3; ++kind) {
@@ -422,17 +428,27 @@ void PlayRecapScene::exportReceipt() {
   }
   const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
-  exportDirectory_ = Utils::GetDocumentsPath("recap_exports") / std::to_string(stamp);
+  if (!sharing_) exportDirectory_ = Utils::GetDocumentsPath("recap_exports") / std::to_string(stamp);
   try {
     auto canvas = recap::makeReceipt(receipt);
     canvas->applyYogaLayout();
-    const auto result = ResultImageExporter::ExportView(context, "recap", *canvas,
-        {.outputDirectory = exportDirectory_});
-    message_ = result.success ? tr("recap.ui.saved") : tr("recap.ui.failed") + " " + result.message;
-    if (result.success) message_ += " · " + (result.artifactRetained ? result.outputPath.string() : tr("recap.ui.photos"));
-    else if (result.artifactRetained && std::filesystem::exists(result.outputPath))
-      message_ += " · " + result.outputPath.string();
+    const auto exportImage = [&](const result_image_export::ExportOptions &options) {
+      return ResultImageExporter::ExportView(context,"recap",*canvas,options);
+    };
+    const auto result = sharing_
+        ? ResultImageExporter::Share(recap::shareText(snapshot_,tr("recap.ui.title"),periodText(),
+            filterText(),{tr(sectionKeys[0]),tr(sectionKeys[1]),tr(sectionKeys[2])}),exportImage)
+        : exportImage({.outputDirectory = exportDirectory_});
+    if (sharing_) {
+      message_ = result.success ? tr("recap.ui.share_opened") : tr("recap.ui.failed") + " " + result.message;
+    } else {
+      message_ = result.success ? tr("recap.ui.saved") : tr("recap.ui.failed") + " " + result.message;
+      if (result.success) message_ += " · " + (result.artifactRetained ? result.outputPath.string() : tr("recap.ui.photos"));
+      else if (result.artifactRetained && std::filesystem::exists(result.outputPath))
+        message_ += " · " + result.outputPath.string();
+    }
   } catch (const std::exception &error) { message_ = tr("recap.ui.failed") + " " + error.what(); }
+  exporting_ = false; sharing_ = false;
   build();
 }
 void PlayRecapScene::update(float) {
