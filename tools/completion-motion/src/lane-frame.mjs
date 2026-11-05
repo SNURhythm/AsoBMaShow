@@ -1,7 +1,7 @@
 // Throwaway lane-space completion studies. Shared frame model for review/Remotion.
 import {sceneSvg, impactTime} from './frame.mjs';
 export const laneDirections = [
-  {name:'01 / Wave', description:'One forceful crest launches from the judgement line and clears the lanes in about half a second. Perfect has a broader gold wake and a bright white leading edge.'},
+  {name:'01 / Wave', description:'A borderless wash rolls up the lanes with a soft front and a long luminous wake. Perfect spreads a fuller gold wave with a longer release.'},
   {name:'02 / Rails', description:'Lane boundaries lift together, leaving short luminous tails. Perfect carries the rails farther with a stronger shared onset.'},
   {name:'03 / Fan', description:'A fan opens from the final hit across the lane surface. Perfect spreads wider with a few separated shards.'},
 ];
@@ -16,22 +16,23 @@ export function laneSceneSvg(seconds,kind=0,perfect=false,reduced=false) {
   const color=perfect?'#FFCC51':'#B7F65C';
   let effect='';
   if(age>=0&&age<1.55) {
-    const q=unit(age/(kind===0&&!reduced?(perfect?.62:.52):(perfect?1.25:1.05)));
-    const fade=kind===0&&!reduced?(1-unit((q-.25)/.75))**1.4:(1-q)**1.5;
+    const q=unit(age/(kind===0&&!reduced?(perfect?1.1:.95):(perfect?1.25:1.05)));
+    const fade=kind===0&&!reduced?decel(age/.045)*(1-unit((q-.55)/.45))**1.4:(1-q)**1.5;
     if(reduced) {
       effect=path([point(0,.98),point(1,.98),point(1,1),point(0,1)],color,.3*fade);
     } else if(kind===0) {
-      const depth=1-decel(q)*.94;
-      // One brief launch, then a continuous travelling crest; no second pulse.
-      const launch=(1-unit(age/.12))**2;
-      effect+=path([point(0,.93),point(1,.93),point(1,1),point(0,1)],color,launch*.38);
-      effect+=path([point(0,.995),point(1,.995)],'#F8FDFF',launch*.95,perfect?8:6);
-      // A continuous wake avoids visible alpha bands at the stronger intensity.
-      const wakeEnd=depth+(perfect?.264:.216), clippedEnd=Math.min(1,wakeEnd);
-      effect+=`<defs><linearGradient id="waveWake" gradientUnits="userSpaceOnUse" x1="0" y1="${n(point(0,depth)[1])}" x2="0" y2="${n(point(0,wakeEnd)[1])}"><stop stop-color="${color}" stop-opacity="${perfect?.65:.52}"/><stop offset=".5" stop-color="${color}" stop-opacity="${perfect?.23:.18}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>`;
-      effect+=path([point(0,depth),point(1,depth),point(1,clippedEnd),point(0,clippedEnd)],'url(#waveWake)',fade);
-      effect+=path([point(0,depth),point(1,depth)],color,fade,perfect?9:7);
-      effect+=path([point(0,depth),point(1,depth)],'#F8FDFF',fade*(perfect?.95:.7),perfect?3:2);
+      // Fast initial travel, with the broader wake rolling on after the front.
+      const depth=1-decel(q)*1.12;
+      const front=depth-.12, wakeEnd=depth+(perfect?.62:.52);
+      // Smooth asymmetric bell: soft leading edge and a longer trailing falloff.
+      // No stroke, white rim, or separate launch flash.
+      const stops=Array.from({length:25},(_,i)=>{
+        const offset=i/24, sigma=offset<.22?.11:.29;
+        const alpha=i===0||i===24?0:Math.exp(-.5*((offset-.22)/sigma)**2)*(perfect?.9:.82);
+        return `<stop offset="${n(offset)}" stop-color="${color}" stop-opacity="${n(alpha)}"/>`;
+      }).join('');
+      effect+=`<defs><linearGradient id="waveWake" gradientUnits="userSpaceOnUse" x1="0" y1="${n(point(0,front)[1])}" x2="0" y2="${n(point(0,wakeEnd)[1])}">${stops}</linearGradient></defs>`;
+      effect+=path([point(0,front),point(1,front),point(1,wakeEnd),point(0,wakeEnd)],'url(#waveWake)',fade);
     } else if(kind===1) {
       const depth=1-decel(q)*(perfect?.94:.78);
       for(let i=0;i<=8;i++) {

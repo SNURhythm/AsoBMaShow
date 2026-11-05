@@ -42,7 +42,7 @@ if (lanes) {
     .replace('innerHTML=sceneSvg(', 'innerHTML=laneSceneSvg(')
     .replace('textContent=directions[kind]', 'textContent=laneDirections[kind]')
     .replace('Completion motion studies', 'Lane-space completion studies')
-    .replace('let seconds=0.95', 'let seconds=0.75')
+    .replace('let seconds=0.95', 'let seconds=0.85')
     .replace('extra finishing motion', 'stronger lane-space motion');
 }
 mkdirSync(resolve(root,'out'),{recursive:true});
