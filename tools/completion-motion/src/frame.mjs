@@ -201,7 +201,7 @@ function perfectCelebration(t,reduced) {
       s+=shard(x,y,(i%2?12:22)*(1-q)+2,i%2?2:3.2,side*angle*180/Math.PI,i%3===0?white:i%2?teal:gold,opacity*.9);
     }
   }
-  s+=ellipse(0,-25,135+burst*275,40+burst*100,gold,4.5*(1-burst)+1,burstAlpha*.9);
+  s+=ellipse(0,0,135+burst*275,40+burst*100,gold,4.5*(1-burst)+1,burstAlpha*.9);
   // A brief horizontal core accent shares the pulse onset and only decays.
   s+=line(-330*burst,0,330*burst,0,white,5*(1-burst)+.5,burstAlpha*(1-burst)*.7);
   return s;
