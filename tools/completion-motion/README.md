@@ -22,6 +22,24 @@ Sound design is intentionally not included in this visual comparison.
 
 ## Remotion
 
+### MAX prototypes
+
+Run `node make-review.mjs --max` to create `out/max-review.html`.
+Two alternatives compare against the existing Perfect animation:
+
+- **Focus** contracts short strokes over 140 ms, then releases them once as
+  108 px MAX lettering settles from 1.18× scale. It uses white and PGREAT teal.
+- **Lift** raises three tapered trails from the judgement line, lifts the word
+  30 px over 340 ms, and opens short side strokes as the trails disappear.
+
+Both hold the independent (640, 285) anchor, fade from 2.45 to 2.9 seconds,
+and retain only lettering, underline, and a soft backdrop/glow in reduced motion.
+The final judgement occurs at the same synthetic 0.65 s cue. MAX's counters show
+all PGREAT; Perfect includes GREATs and Full Combo includes GOODs. These are
+visual studies, not scoring implementations. Native MAX still uses Perfect
+until a direction is selected and implemented. No sound is included.
+`MAX-Focus` and `MAX-Lift` share this frame model in Remotion.
+
 ### Calm Finish prototype
 
 Run `node make-review.mjs --finish` to create `out/finish-review.html`, comparing

@@ -45,7 +45,7 @@ function keybomb(t,x,y,radius,color,paired=true) {
   return s;
 }
 
-export function stage(seconds,perfect,reduced,ordinaryFinish=false) {
+export function stage(seconds,perfect,reduced,ordinaryFinish=false,maxResult=false) {
   const completed=seconds>=impactTime;
   let s='<rect width="1280" height="720" fill="#080d13"/><path d="M380 76H900L1120 575H160Z" fill="#0d1013"/>';
   // Lane separators are deliberately faint; the native judgement line is white.
@@ -60,7 +60,7 @@ export function stage(seconds,perfect,reduced,ordinaryFinish=false) {
   s+=text('NORMAL / HARD',31,58,12,'#adb9cd','MotionCondensed','start');
   s+='<rect x="20" y="650" width="356" height="50" fill="#10151e" stroke="#242a34"/>';
   const combo=ordinaryFinish?(completed?24:23):(completed?812:811);
-  const score=ordinaryFinish?(completed?1540:1538):(perfect?combo*2:combo*2-26);
+  const score=ordinaryFinish?(completed?1540:1538):(maxResult?combo*2:perfect?combo*2-26:combo*2-52);
   s+=text('SCORE '+score,31,667,22,'#e4e7ee','MotionCondensed','start');
   s+=text('COMBO '+combo,365,667,16,lime,'MotionCondensed','end');
   s+=text('PM AAA 1444',198,687,12,'#adb9cd','MotionCondensed');
@@ -69,7 +69,7 @@ export function stage(seconds,perfect,reduced,ordinaryFinish=false) {
   s+=line(1141,420,1165,420,'#ffcc51',2);
   const counters=ordinaryFinish
     ? [['PGREAT',completed?750:749,teal],['GREAT',40,lime],['GOOD',14,'#ffcc51'],['BAD',6,'#ff8460'],['POOR',2,'#ff6858'],['KPOOR',0,'#ff4e66']]
-    : [['PGREAT',perfect?combo:combo-26,teal],['GREAT',perfect?0:26,lime],['GOOD',0,'#ffcc51'],['BAD',0,'#ff8460'],['POOR',0,'#ff6858'],['KPOOR',0,'#ff4e66']];
+    : [['PGREAT',maxResult?combo:combo-26,teal],['GREAT',perfect&&!maxResult?26:0,lime],['GOOD',perfect?0:26,'#ffcc51'],['BAD',0,'#ff8460'],['POOR',0,'#ff6858'],['KPOOR',0,'#ff4e66']];
   counters.forEach(([label,value,color],i)=>{
     const y=232+i*38;
     s+=`<rect x="1197" y="${y}" width="63" height="33" fill="${value?'#182028':'#15171c'}" stroke="${color}" stroke-width=".5" opacity="${value?1:.25}"/>`;

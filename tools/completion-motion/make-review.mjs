@@ -4,9 +4,11 @@ import {dirname, resolve} from 'node:path';
 const root = dirname(fileURLToPath(import.meta.url));
 const lanes = process.argv.includes('--lanes');
 const finish = process.argv.includes('--finish');
+const max = process.argv.includes('--max');
 let code = readFileSync(resolve(root,'src/frame.mjs'),'utf8').replaceAll('export ', '');
-if (lanes || finish) code += '\n' + readFileSync(resolve(root,'src/lane-frame.mjs'),'utf8').replace(/^import .*;$/m,'').replaceAll('export ', '');
+if (lanes || finish || max) code += '\n' + readFileSync(resolve(root,'src/lane-frame.mjs'),'utf8').replace(/^import .*;$/m,'').replaceAll('export ', '');
 if (finish) code += '\n' + readFileSync(resolve(root,'src/finish-frame.mjs'),'utf8').replace(/^import .*;$/gm,'').replaceAll('export ', '');
+if (max) code += '\n' + readFileSync(resolve(root,'src/max-frame.mjs'),'utf8').replace(/^import .*;$/gm,'').replaceAll('export ', '');
 const font = readFileSync(resolve(root,'../../assets/fonts/roboto-condensed-bold.ttf')).toString('base64');
 const judgementFont = readFileSync(resolve(root,'src/fonts/judgement-ascii.ttf')).toString('base64');
 const achievementFont = readFileSync(resolve(root,'src/fonts/judgement-bold-ascii.otf')).toString('base64');
@@ -55,6 +57,14 @@ if (finish) {
     .replace('class="mode"', 'class="mode" style="display:none"')
     .replace('Replay to judge motion; use Perfect to compare the extra finishing motion.', 'Replay to judge motion; compare the three outcomes above.');
 }
+if (max) {
+  html=html.replaceAll('01 / Impact','01 / MAX · Focus').replaceAll('02 / Sweep','02 / MAX · Lift').replaceAll('03 / Rise','03 / Perfect')
+    .replace('innerHTML=sceneSvg(', 'innerHTML=maxSceneSvg(')
+    .replace('textContent=directions[kind]', 'textContent=maxDirections[kind]')
+    .replace('Completion motion studies', 'MAX motion studies')
+    .replace('class="mode"', 'class="mode" style="display:none"')
+    .replace('Replay to judge motion; use Perfect to compare the extra finishing motion.', 'MAX = all PGREAT. Compare both directions with Perfect; native gameplay is unchanged.');
+}
 mkdirSync(resolve(root,'out'),{recursive:true});
-writeFileSync(resolve(root,finish?'out/finish-review.html':lanes?'out/lane-review.html':'out/review.html'),html);
-console.log(resolve(root,finish?'out/finish-review.html':lanes?'out/lane-review.html':'out/review.html'));
+writeFileSync(resolve(root,max?'out/max-review.html':finish?'out/finish-review.html':lanes?'out/lane-review.html':'out/review.html'),html);
+console.log(resolve(root,max?'out/max-review.html':finish?'out/finish-review.html':lanes?'out/lane-review.html':'out/review.html'));
