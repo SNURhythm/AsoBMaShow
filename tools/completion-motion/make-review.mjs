@@ -18,11 +18,11 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 <div class="stage" id="stage"></div>
 <p id="description"></p>
 <div class="controls"><div class="mode" aria-label="Achievement"><button id="fc" aria-pressed="true">Full Combo</button><button id="perfect" aria-pressed="false">Perfect</button></div><span></span><button id="replay">Replay</button><button id="pause">Play</button><select id="speed" aria-label="Playback speed"><option value="1">1× speed</option><option value="0.5">0.5× speed</option><option value="0.25">0.25× speed</option></select><button id="reduced" aria-pressed="false">Reduced motion: Off</button></div>
-<div class="timeline"><input type="range" id="scrub" aria-label="Animation time" min="0" max="3.8" step="0.0166667" value="1.05"><output id="time"></output></div>
+<div class="timeline"><input type="range" id="scrub" aria-label="Animation time" min="0" max="3.8" step="0.0166667" value="1.3"><output id="time"></output></div>
 <p class="small">Prototype · reconstructed playfield · silent · final note lands at 0.65s. Replay to judge motion; use Perfect to compare the extra finishing motion.</p>
 <script>${code}
-let kind=0, perfect=false, reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
-let seconds=1.05, playing=false, speed=1, previous=0;
+let kind=0, perfect=true, reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let seconds=1.3, playing=false, speed=1, previous=0;
 const el=id=>document.getElementById(id);
 function draw(){el('stage').innerHTML=sceneSvg(seconds,kind,perfect,reduced);el('scrub').value=seconds;el('time').value=seconds.toFixed(2)+' / 3.80s';el('description').textContent=directions[kind].description;el('pause').textContent=playing?'Pause':'Play';el('fc').setAttribute('aria-pressed',!perfect);el('perfect').setAttribute('aria-pressed',perfect);el('reduced').setAttribute('aria-pressed',reduced);el('reduced').textContent='Reduced motion: '+(reduced?'On':'Off');document.querySelectorAll('[data-kind]').forEach(b=>b.setAttribute('aria-pressed',Number(b.dataset.kind)===kind));}
 function replay(){seconds=0;playing=true;previous=performance.now();draw();}

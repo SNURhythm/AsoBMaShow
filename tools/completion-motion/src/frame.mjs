@@ -16,6 +16,7 @@ const smooth = (v) => {const q=clamp(v); return q*q*(3-2*q);};
 const out = (t,at,length) => ease((t-at)/length);
 const f = (v) => Number(v.toFixed(3));
 const teal='#56D2CA', lime='#B7F65C', white='#F8FDFF';
+const gold='#FFCC51'; // Existing native amber accent; reserved here for Perfect.
 const group=(body,opacity=1,transform='')=>`<g opacity="${f(clamp(opacity))}" transform="${transform}">${body}</g>`;
 const line=(x1,y1,x2,y2,color,width=2,opacity=1)=>`<path d="M${f(x1)} ${f(y1)}L${f(x2)} ${f(y2)}" fill="none" stroke="${color}" stroke-width="${f(width)}" opacity="${f(clamp(opacity))}"/>`;
 const text=(label,x,y,size,color,font='Judgement',anchor='middle')=>`<text x="${x}" y="${y}" text-anchor="${anchor}" dominant-baseline="central" font-family="${font},sans-serif" font-size="${size}" fill="${color}">${label}</text>`;
@@ -84,12 +85,12 @@ function stage(seconds,perfect,reduced) {
 // All achievement geometry uses local coordinates around the independent anchor.
 function lettering(t,kind,perfect,reduced) {
   const delay=.08;
-  const exit=smooth((t-2.05)/.4);
+  const exit=smooth((t-(perfect?2.35:2.05))/.4);
   const word=perfect?'PERFECT':'FULL COMBO';
   const size=perfect?82:74, advance=perfect?58:52;
   const widths=[...word].map(c=>c===' '?26:advance);
   const totalWidth=widths.reduce((sum,width)=>sum+width,0);
-  const color=perfect?teal:lime;
+  const color=perfect?gold:lime;
   let s='';
   for(let i=0;i<word.length;i++) {
     if(word[i]===' ')continue;
@@ -188,16 +189,53 @@ function rise(t,perfect) {
   return s+fragments(t,perfect,2);
 }
 
+// A compact signature for Perfect: four facets assemble into a hollow diamond.
+// The mark survives the celebratory burst, so the achievement has a distinct
+// silhouette even when paused or shown with reduced motion.
+function perfectCelebration(t,reduced) {
+  const alpha=out(t,.22,.18)*(1-smooth((t-2.35)/.4));
+  if(alpha<=0)return '';
+  const assemble=reduced?1:out(t,.22,.3);
+  let mark='';
+  for(let i=0;i<4;i++) {
+    const offset=reduced?0:18*(1-assemble);
+    mark+=`<g transform="rotate(${i*90}) translate(0 ${f(-offset)})"><path d="M0 -32L24 0H12L0 -16Z" fill="${i%2?white:gold}"/></g>`;
+  }
+  // Two small separated facets make the mark legible beyond a generic diamond.
+  mark+=shard(-43,0,7,3,0,gold,assemble);
+  mark+=shard(43,0,7,3,0,gold,assemble);
+  let s=group(mark,alpha,`translate(0 -88) scale(${f(reduced?1:1+.12*Math.sin(clamp((t-.22)/.5)*Math.PI))})`);
+  if(reduced)return s;
+  const burst=out(t,.48,.7), burstAlpha=out(t,.48,.06)*(1-burst);
+  // The second beat travels away from the word, not across its counters.
+  for(const side of [-1,1]) {
+    for(let i=0;i<7;i++) {
+      const age=t-.48-i*.015;
+      if(age<0||age>1.05)continue;
+      const q=out(age,0,1.05),angle=(-.85+i*.23);
+      const x=side*(185+q*(80+Math.cos(angle)*70));
+      const y=-15+Math.sin(angle)*(45+q*90)+28*q*q;
+      const opacity=out(age,0,.06)*(1-smooth(age/1.05));
+      s+=shard(x,y,(i%2?6:10)*(1-q)+2,i%2?1.5:2.3,side*angle*180/Math.PI,i%3===0?white:i%2?teal:gold,opacity*.9);
+    }
+  }
+  s+=ellipse(0,-88,35+burst*105,25+burst*60,gold,1.4,burstAlpha*.7);
+  // Short white core accent marks the assembly, without a full-screen flash.
+  s+=line(-70*burst,-88,70*burst,-88,white,2,burstAlpha*.55);
+  return s;
+}
+
 export function sceneSvg(seconds,kind=0,perfect=false,reduced=false) {
   const t=seconds-impactTime,color=perfect?teal:lime;
   const defs=`<defs><radialGradient id="achievementGlow"><stop stop-color="${color}" stop-opacity=".12"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></radialGradient><radialGradient id="hitGlow"><stop stop-color="#f8fdff" stop-opacity=".85"/><stop offset=".22" stop-color="#56d2ca" stop-opacity=".7"/><stop offset="1" stop-color="#56d2ca" stop-opacity="0"/></radialGradient><linearGradient id="laneLight" x2="0" y2="1"><stop stop-color="${color}" stop-opacity="0"/><stop offset="1" stop-color="${color}" stop-opacity=".7"/></linearGradient></defs>`;
   let s=stage(seconds,perfect,reduced);
-  if(t>=0&&t<2.5) {
+  if(t>=0&&t<(perfect?2.8:2.5)) {
     let effect='';
     // Local low-opacity light separates the title from a busy BGA; no panel.
     const haze=out(t,0,.22)*(1-smooth((t-1.5)/.8));
     if(!reduced)effect+=`<ellipse cx="0" cy="0" rx="330" ry="125" fill="url(#achievementGlow)" opacity="${f(haze)}"/>`;
     if(!reduced)effect+=[impact,sweep,rise][kind](t,perfect);
+    if(perfect)effect+=perfectCelebration(t,reduced);
     effect+=lettering(t,kind,perfect,reduced);
     s+=group(effect,1,`translate(${achievementX} ${achievementY})`);
   }

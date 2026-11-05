@@ -65,3 +65,7 @@ pyftsubset ../../assets/fonts/notosanscjkjp.ttf --unicodes=U+0020-007E \
 pyftsubset ../../assets/fonts/notosanscjkjp-bold.otf --unicodes=U+0020-007E \
   --output-file=src/fonts/judgement-bold-ascii.otf --layout-features='*'
 ```
+
+Perfect adds a four-facet diamond mark above the word, native amber accents,
+a second outward burst, and a slightly longer readable hold. Reduced motion
+retains the mark without its assembly or burst. Full Combo stays unchanged.
