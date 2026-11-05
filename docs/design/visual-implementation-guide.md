@@ -20,6 +20,22 @@ palette, skin contracts, and device constraints as context. The synthetic built-
 7K screenshot at `tests/fixtures/gameplay_presentation/builtin_7k_16x9.png` is
 useful for layout reference, but is not a successful-play recording.
 
+## Fit the existing game
+
+Ground visual choices in the relevant renderer before adding new ornament. The
+built-in judgement layer uses Noto Sans CJK JP (`BMSRenderer.cpp`), while the
+outside-lane HUD uses the application theme's Roboto Condensed. Shared judgement
+accents live in `JudgementColors.h`; `KeybombEffect.h` defines the existing broken
+rings, short shards, soft core, and white cross. Reuse these where appropriate
+instead of treating the whole screen as a blank branding exercise.
+
+Keep achievement text factual and direct. Do not add invented slogans, metallic
+display lettering, decorative badges, unrelated gradients, or ambient particles
+by default. Each added layer should strengthen the event, readability, or spatial
+continuity. Judge alternatives in context with the actual HUD and playfield;
+an attractive isolated title can still feel foreign in the game. Rich motion is
+welcome when it develops the game's existing visual language.
+
 ## Tool decisions
 
 | Need | Preferred tool | Boundary |

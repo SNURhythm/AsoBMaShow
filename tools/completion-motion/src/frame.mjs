@@ -1,159 +1,157 @@
-// One deterministic scene model for the standalone reviewer and Remotion.
-// Times are seconds; the simulated final judgement lands at 0.65 s.
+// Design study using the built-in playfield's visual vocabulary.
+// Palette: JudgementColors.h. Hit geometry: KeybombEffect.h.
+// This is a reconstruction, not a native capture or scoring implementation.
 export const duration = 3.8;
 export const impactTime = 0.65;
 export const directions = [
-  {name: '01 / Breakthrough', description: 'A split-chevron strike. The title locks into place; Perfect adds a second, wider fracture.'},
-  {name: '02 / Supernova', description: 'A circular bloom with buoyant lettering. Perfect crowns the ring with a starburst.'},
-  {name: '03 / Ascension', description: 'Two ribbons rise from the judgement line and resolve into a luminous seal. Perfect adds a halo.'},
+  {name: '01 / Impact', description: 'The final keybomb opens across the judgement line. The achievement settles into the judgement position. Perfect adds a second pulse.'},
+  {name: '02 / Sweep', description: 'A short sweep connects the lanes and reveals the achievement. Perfect sends a return sweep through the text.'},
+  {name: '03 / Rise', description: 'Light rises briefly from the keys, then clears around the achievement. Perfect resolves with a paired ring at the final note.'},
 ];
 const clamp = (v) => Math.max(0, Math.min(1, v));
-const ease = (v) => 1 - Math.pow(1 - clamp(v), 4);
-const smooth = (v) => { const q = clamp(v); return q * q * (3 - 2 * q); };
-const out = (t, at, length) => ease((t - at) / length);
+const ease = (v) => 1 - Math.pow(1 - clamp(v), 3);
+const smooth = (v) => {const q=clamp(v); return q*q*(3-2*q);};
+const out = (t,at,length) => ease((t-at)/length);
 const f = (v) => Number(v.toFixed(3));
-const colors = ['#5cf5ff', '#ff70dc', '#ffe880', '#9a8aff', '#91ffcf', '#ffad8d'];
-const line = (x1,y1,x2,y2,color,width=2,opacity=1) => `<path d="M${f(x1)} ${f(y1)}L${f(x2)} ${f(y2)}" fill="none" stroke="${color}" stroke-width="${width}" opacity="${f(opacity)}"/>`;
-const circle = (x,y,r,color,width=2,opacity=1) => `<circle cx="${f(x)}" cy="${f(y)}" r="${f(Math.max(0,r))}" fill="none" stroke="${color}" stroke-width="${width}" opacity="${f(opacity)}"/>`;
-const star = (x,y,r,color,rotation=0) => `<path d="M0 ${-r} Q${r*.18} ${-r*.18} ${r} 0 Q${r*.18} ${r*.18} 0 ${r} Q${-r*.18} ${r*.18} ${-r} 0 Q${-r*.18} ${-r*.18} 0 ${-r}Z" fill="${color}" transform="translate(${f(x)} ${f(y)}) rotate(${f(rotation)})"/>`;
-const group = (body,opacity=1,transform='') => `<g opacity="${f(clamp(opacity))}" transform="${transform}">${body}</g>`;
+const teal='#56D2CA', lime='#B7F65C', white='#F8FDFF';
+const group=(body,opacity=1,transform='')=>`<g opacity="${f(clamp(opacity))}" transform="${transform}">${body}</g>`;
+const line=(x1,y1,x2,y2,color,width=2,opacity=1)=>`<path d="M${f(x1)} ${f(y1)}L${f(x2)} ${f(y2)}" fill="none" stroke="${color}" stroke-width="${f(width)}" opacity="${f(clamp(opacity))}"/>`;
+const text=(label,x,y,size,color,font='Judgement',anchor='middle')=>`<text x="${x}" y="${y}" text-anchor="${anchor}" dominant-baseline="central" font-family="${font},sans-serif" font-size="${size}" fill="${color}">${label}</text>`;
+const ellipse=(x,y,rx,ry,color,width,opacity)=>`<ellipse cx="${f(x)}" cy="${f(y)}" rx="${f(rx)}" ry="${f(ry)}" fill="none" stroke="${color}" stroke-width="${f(width)}" opacity="${f(clamp(opacity))}"/>`;
 
-function stage(seconds, reduced) {
-  let s = `<rect width="1280" height="720" fill="#080c13"/><path d="M385 85H895L1100 590H180Z" fill="url(#lane)"/>`;
-  for (let i=0;i<9;i++) {
-    const x=385+i*510/8;
-    s += line(x,85,180+i*920/8,590,'#273140',i===0||i===8?2:1,.75);
+// Native keybomb ingredients: broken outer ring, inner ring, eight narrow shards,
+// soft core and white cross. Bounded, frame-driven geometry, no particle emitter.
+function keybomb(t,x,y,radius,color,paired=true) {
+  if(t<0||t>=.46)return '';
+  const p=clamp(t/.46), expansion=ease(p), fade=1-p*p;
+  const r=radius*(.18+expansion*.82);
+  let s=`<circle cx="${x}" cy="${y}" r="${f(radius*.8*(1-p*.45))}" fill="url(#hitGlow)" opacity="${f(fade)}"/>`;
+  s+=`<circle cx="${x}" cy="${y}" r="${f(r)}" fill="none" stroke="${color}" stroke-width="${f(radius*.045*(1-p*.6))}" pathLength="40" stroke-dasharray="6 4" opacity="${f(fade*.9)}"/>`;
+  if(paired)s+=ellipse(x,y,r*.73,r*.73,color,2,fade*.65);
+  for(let i=0;i<8;i++) {
+    const a=i*Math.PI/4+.23, dx=Math.cos(a),dy=Math.sin(a);
+    const d=radius*(.28+expansion*(i%2?.8:1.15));
+    const len=radius*(i%2?.18:.28)*(1-p), w=radius*.045*(1-p);
+    const cx=x+dx*d,cy=y+dy*d;
+    s+=`<path d="M${f(cx+dx*len)} ${f(cy+dy*len)}L${f(cx-dy*w)} ${f(cy+dx*w)}L${f(cx-dx*len)} ${f(cy-dy*len)}L${f(cx+dy*w)} ${f(cy-dx*w)}Z" fill="${i%2?color:white}" opacity="${f(fade)}"/>`;
   }
-  for(let i=0;i<7;i++) {
-    const y=125+i*i*11;
-    const spread=(y-85)/505*205;
-    s += line(385-spread,y,895+spread,y,'#242d3a',1,.36);
-  }
-  s += line(180,590,1100,590,'#b9dcf0',3,.8);
-  s += '<g font-family="MotionCondensed,Arial,sans-serif" fill="#8390a7"><text x="36" y="45" font-size="20" letter-spacing="3">ASOBMASHOW</text><text x="36" y="70" font-size="13" letter-spacing="2">MOTION STUDY / SYNTHETIC PLAYFIELD</text><text x="1244" y="45" font-size="16" text-anchor="end">7 KEY</text><text x="1244" y="70" font-size="13" text-anchor="end">FINAL JUDGEMENT AT 0.65s</text></g>';
-  if(seconds<impactTime) {
-    const y=220+370*smooth(seconds/impactTime);
-    const w=40+(y-85)*.065;
-    s += `<rect x="${640-w}" y="${f(y-9)}" width="${2*w}" height="9" rx="2" fill="#d9faff"/>`;
-  }
-  const hit=seconds-impactTime;
-  if(hit>=0&&hit<.45) s+=group(circle(640,590,20+out(hit,0,.45)*130,'#c4faff',3), (1-hit/.45)*(reduced?.2:1));
+  const core=radius*.23*(1-p);
+  s+=line(x-core*2.5,y,x+core*2.5,y,white,Math.max(.1,core*.22),fade*.8);
+  s+=line(x,y-core*2.5,x,y+core*2.5,white,Math.max(.1,core*.22),fade*.8);
+  return s;
+}
+
+function stage(seconds,perfect,reduced) {
+  const completed=seconds>=impactTime;
+  let s='<rect width="1280" height="720" fill="#080d13"/><path d="M380 76H900L1120 575H160Z" fill="#0d1013"/>';
+  // Lane separators are deliberately faint; the native judgement line is white.
+  for(let i=1;i<8;i++)s+=line(380+i*65,76,160+i*120,575,'#1c2128',1,.38);
+  s+=line(380,76,900,76,'#cbd0d5',2);
+  s+='<path d="M160 575H1120L1130 599H150Z" fill="#f8fdff"/>';
+  s+='<rect x="568" y="63" width="144" height="12" fill="#cdd9e1" rx="2"/>';
+  s+=text('240',595,50,16,'#f8fdff','MotionCondensed');
+  s+=text('2500 ms',668,50,16,lime,'MotionCondensed');
+  s+='<rect x="20" y="20" width="348" height="53" fill="#181d27" stroke="#242a34"/>';
+  s+=text('Synthetic Built-in 7K',31,37,18,'#e4e7ee','MotionCondensed','start');
+  s+=text('NORMAL / HARD',31,58,12,'#adb9cd','MotionCondensed','start');
+  s+='<rect x="20" y="650" width="356" height="50" fill="#10151e" stroke="#242a34"/>';
+  const combo=completed?812:811;
+  const score=perfect?combo*2:combo*2-26;
+  s+=text('SCORE '+score,31,667,22,'#e4e7ee','MotionCondensed','start');
+  s+=text('COMBO '+combo,365,667,16,lime,'MotionCondensed','end');
+  s+=text('PM AAA 1444',198,687,12,'#adb9cd','MotionCondensed');
+  s+='<rect x="1144" y="195" width="19" height="331" rx="10" fill="#636a70" stroke="#b5c0cb" stroke-width=".6"/><rect x="1146" y="211" width="15" height="313" rx="8" fill="#e5edf5"/>';
+  s+=text('100%',1115,221,12,white);
+  s+=line(1141,420,1165,420,'#ffcc51',2);
+  const counters=[['PGREAT',perfect?combo:combo-26,teal],['GREAT',perfect?0:26,lime],['GOOD',0,'#ffcc51'],['BAD',0,'#ff8460'],['POOR',0,'#ff6858'],['KPOOR',0,'#ff4e66']];
+  counters.forEach(([label,value,color],i)=>{
+    const y=232+i*38;
+    s+=`<rect x="1197" y="${y}" width="63" height="33" fill="${value?'#182028':'#15171c'}" stroke="${color}" stroke-width=".5" opacity="${value?1:.25}"/>`;
+    s+=text(label,1228,y+10,10,value?'#c6d0db':'#3a3e45','MotionCondensed');
+    s+=text(String(value),1228,y+24,15,value?white:'#3a3e45','MotionCondensed');
+  });
+  if(!completed) {
+    const p=clamp(seconds/impactTime),y=230+345*p;
+    const x=700+(y-76)/499*115,w=30+(y-76)/499*24;
+    s+=`<path d="M${f(x-w)} ${f(y)}H${f(x+w)}L${f(x+w+3)} ${f(y+15)}H${f(x-w-3)}Z" fill="#d9d9d9"/>`;
+    s+=text('PGREAT 811',640,480,50,teal);
+  } else if(!reduced)s+=keybomb(seconds-impactTime,815,587,80,teal);
   return s;
 }
 
 function lettering(t,kind,perfect,reduced) {
-  const delay=kind===2?.27:.14;
-  const p=out(t,delay,.33);
-  const exit=smooth((t-2.25)/.45);
-  if(p===0||exit===1)return '';
+  const delay=kind===2?.12:.04,p=out(t,delay,.18);
+  const alpha=p*(1-smooth((t-1.75)/.35));
+  if(alpha<=0)return '';
+  const scale=reduced?1:1+.075*(1-p);
+  const y=480+(reduced?0:kind===2?16*(1-p):0);
+  const color=perfect?teal:lime;
   const word=perfect?'PERFECT':'FULL COMBO';
-  const size=perfect?106:94;
-  const center=kind===2?300:330;
-  let scale=reduced?1:(kind===1?1+Math.sin(clamp((t-delay)/.5)*Math.PI)*.16:1+.22*(1-p));
-  const y=reduced?0:(kind===2?32*(1-p):kind===1?-25*(1-p):0);
-  const skew=kind===0?-9:0;
-  let text='';
-  const face=kind===1?'url(#candy)':'url(#metal)';
-  const main=`<text text-anchor="middle" dominant-baseline="central" font-family="MotionCondensed,Arial,sans-serif" font-size="${size}" font-weight="900" letter-spacing="${perfect?8:3}" paint-order="stroke" stroke-linejoin="round">${word}</text>`;
-  text+=`<g fill="#080e28" stroke="#080e28" stroke-width="18" transform="translate(0 7)">${main}</g>`;
-  text+=`<g fill="none" stroke="${kind===1?'#fff3bd':'#b6fcff'}" stroke-width="7">${main}</g>`;
-  text+=`<g fill="${face}" stroke="#fff" stroke-width="1">${main}</g>`;
-  if(!reduced&&kind===0&&t<.42)text+=`<g fill="none" stroke="#ff58c7" stroke-width="2" opacity="${f((1-p)*.8)}" transform="translate(${f((1-p)*-85)} 0)">${main}</g>`;
-  const underline=out(t,delay+.15,.5);
-  text+=line(-210*underline,69,210*underline,69,perfect?'#ffe9a8':'#75f9ef',2,.8);
-  text+=`<text y="99" text-anchor="middle" fill="#dce9f6" font-family="MotionCondensed,Arial,sans-serif" font-size="17" letter-spacing="7" opacity="${f(out(t,delay+.25,.3))}">${perfect?'EVERY NOTE. ABSOLUTE.':'NOT A SINGLE BREAK.'}</text>`;
-  return group(text,p*(1-exit),`translate(640 ${f(center+y)}) scale(${f(scale)}) skewX(${skew})`);
+  const label=text(word,0,0,perfect?70:64,color);
+  let s=label;
+  if(kind===1&&!reduced) {
+    const reveal=out(t,.04,.34);
+    s=`<clipPath id="textReveal"><rect x="-270" y="-55" width="${f(540*reveal)}" height="110"/></clipPath><g clip-path="url(#textReveal)">${label}</g>`;
+  }
+  // Perfect's return sweep is short, white, and confined to the actual letters.
+  if(perfect&&!reduced&&t>.4&&t<.9) {
+    const sweep=1-out(t,.4,.5);
+    s+=`<clipPath id="textSweep"><rect x="${f(-280+560*sweep)}" y="-55" width="35" height="110"/></clipPath><g clip-path="url(#textSweep)">${text(word,0,0,70,white)}</g>`;
+  }
+  return group(s,alpha,`translate(640 ${f(y)}) scale(${f(scale)})`);
 }
 
-function breakthrough(t,perfect) {
-  let s='';
-  const p=out(t,0,.32), tail=1-smooth((t-1.4)/.8);
-  // Converging brackets give the impact a direction rather than a generic pop.
-  for(const side of [-1,1]) {
-    const distance=270+180*(1-p);
-    s+=group(`<path d="M0 -70L${side*55} 0L0 70L${side*18} 70L${side*75} 0L${side*18} -70Z" fill="${side<0?'#ff6ed8':'#60edff'}"/>`,p*tail,`translate(${640-side*distance} 330)`);
-  }
-  for(let i=0;i<22;i++) {
-    const a=i/22*Math.PI*2+.1;
-    const travel=out(t,.08+(i%3)*.025,.68);
-    const r=120+travel*420, len=20+70*(1-travel);
-    s+=line(640+Math.cos(a)*r,330+Math.sin(a)*r*.6,640+Math.cos(a)*(r+len),330+Math.sin(a)*(r+len)*.6,colors[i%2],i%3===0?4:1,Math.sin(travel*Math.PI)*.8);
-  }
-  s+=group(`<path d="M250 330L430 240H850L1030 330L850 420H430Z" fill="#162742" fill-opacity=".65" stroke="#72eefa" stroke-width="1"/>`,p*.6*tail);
-  const shock=out(t,0,.65);
-  s+=group(`<ellipse cx="640" cy="590" rx="${f(40+shock*490)}" ry="${f(4+shock*75)}" fill="none" stroke="#75efff" stroke-width="3"/>`,1-shock);
-  if(perfect) {
-    const q=out(t,.44,.7);
-    s+=group(`<path d="M640 ${330-230*q}L${640+450*q} 330L640 ${330+230*q}L${640-450*q} 330Z" fill="none" stroke="#ffe5a6" stroke-width="2"/>`,Math.sin(q*Math.PI));
-    s+=group(star(640,210,25,'#fff5ca'),out(t,.5,.2)*tail);
-  }
-  return s;
-}
-
-function supernova(t,perfect) {
-  let s='';
-  const reveal=out(t,0,.52), tail=1-smooth((t-1.7)/.6);
+function impact(t,perfect) {
+  const color=perfect?teal:lime;
+  const p=out(t,.02,.38),fade=1-out(t,.14,.5);
+  let s=line(640-480*p,587,640+480*p,587,color,7,fade*.8);
+  s+=ellipse(640,587,25+440*p,4+60*p,color,2,fade*.7);
+  if(perfect)s+=ellipse(640,587,25+440*out(t,.24,.5),4+60*out(t,.24,.5),teal,2,out(t,.24,.04)*(1-out(t,.3,.5)));
   for(let i=0;i<12;i++) {
-    const a=i*Math.PI/6+t*.12;
-    const r=150+reveal*50;
-    const start=a+.04, end=a+Math.PI/6-.05;
-    s+=`<path d="M${f(640+Math.cos(start)*r)} ${f(330+Math.sin(start)*r)}A${f(r)} ${f(r)} 0 0 1 ${f(640+Math.cos(end)*r)} ${f(330+Math.sin(end)*r)}" stroke="${colors[i%6]}" stroke-width="${perfect?9:5}" fill="none" opacity="${f(reveal*.8*tail)}"/>`;
-  }
-  s+=circle(640,330,182*reveal,'#fff3bc',1,reveal*.4*tail);
-  for(let i=0;i<32;i++) {
-    const a=i*2.39996;
-    const q=out(t,.12+(i%5)*.035,.8+(i%3)*.12);
-    const r=90+q*(140+(i%4)*34);
-    const x=640+Math.cos(a)*r*1.35, y=330+Math.sin(a)*r+q*q*35;
-    const opacity=Math.sin(q*Math.PI)*tail;
-    s+=group(star(x,y,4+(i%4)*3,colors[i%6],i*15+t*30),opacity);
-  }
-  if(perfect) {
-    const q=out(t,.48,.5);
-    for(let i=0;i<8;i++) {
-      const a=i*Math.PI/4-Math.PI/2;
-      s+=group(star(640+Math.cos(a)*231,330+Math.sin(a)*231,16*q,'#fff3b0',45),q*tail);
-    }
-    s+=circle(640,330,205+out(t,.45,.7)*100,'#fff3b0',2,(1-out(t,.45,.7))*out(t,.45,.1));
+    const q=out(t,.04+(i%3)*.018,.55),x=330+i*56;
+    s+=line(x,566-q*(24+i%3*18),x,552-q*(28+i%3*18),color,2,(1-q)*p);
   }
   return s;
 }
 
-function ascension(t,perfect) {
+function sweep(t,perfect) {
+  const color=perfect?teal:lime;
   let s='';
-  const tail=1-smooth((t-1.8)/.65);
-  for(let i=0;i<6;i++) {
-    const p=out(t,i*.035,.65);
-    const side=i%2?-1:1;
-    // Ribbons lift from the strike line, then peel apart above the title.
-    s+=`<path d="M640 590C${640+side*(290+i*12)} 490 ${640+side*(350-i*10)} 200 640 160" fill="none" stroke="${colors[i]}" stroke-width="${i<2?5:2}" pathLength="1" stroke-dasharray="${f(p*.75)} 1" stroke-dashoffset="${f(-out(t,.55,.7)*.85)}" opacity="${f(p*(1-out(t,.65,.8)))}"/>`;
-  }
-  const seal=out(t,.25,.6);
-  for(let j=0;j<3;j++) {
-    s+=`<ellipse cx="640" cy="310" rx="${f((200+j*14)*seal)}" ry="${f((78+j*15)*seal)}" fill="none" stroke="${colors[j]}" stroke-width="${j===0?3:1}" transform="rotate(${j*60-30} 640 310)" opacity="${f(seal*.45*tail)}"/>`;
-  }
-  for(let i=0;i<20;i++) {
-    const q=out(t,.15+(i%5)*.065,1.2);
-    const x=640+Math.sin(i*8.2)*(100+q*310);
-    const y=570-q*(270+(i%4)*75);
-    s+=group(star(x,y,3+i%5,colors[i%6],i*20),Math.sin(q*Math.PI)*.8);
+  for(let i=0;i<8;i++) {
+    const age=t-i*.035;
+    if(age<0||age>.36)continue;
+    const x=220+i*120,q=out(age,0,.36);
+    s+=line(x-38,586,x+38,586,color,6,1-q);
+    s+=line(x,573,x,573-48*q,color,2,1-q);
   }
   if(perfect) {
-    const q=out(t,.6,.5);
-    s+=group(star(640,165,26,'#fff6c5'),q*tail);
-    s+=`<ellipse cx="640" cy="175" rx="${f(90*q)}" ry="${f(22*q)}" fill="none" stroke="#fff0ae" stroke-width="3" opacity="${f(q*tail)}"/>`;
+    const q=out(t,.35,.5);
+    s+=ellipse(815,587,10+120*q,3+35*q,teal,2,out(t,.35,.04)*(1-q));
   }
+  return s;
+}
+
+function rise(t,perfect) {
+  let s='';
+  const color=perfect?teal:lime;
+  for(let i=0;i<8;i++) {
+    const age=t-Math.abs(i-4)*.018;
+    if(age<0||age>.65)continue;
+    const q=out(age,0,.65),x=220+i*120;
+    const height=60+55*(1-Math.abs(i-3.5)/4);
+    s+=`<path d="M${x-25} 574H${x+25}L${f(x+18)} ${f(574-height*q)}H${f(x-18)}Z" fill="url(#laneLight)" opacity="${f((1-q)*.8)}"/>`;
+    s+=line(x,570-height*q,x,582-height*q,color,2,(1-q)*.8);
+  }
+  if(perfect)s+=keybomb(t-.24,815,587,105,teal);
   return s;
 }
 
 export function sceneSvg(seconds,kind=0,perfect=false,reduced=false) {
-  const t=seconds-impactTime;
-  const defs=`<defs><linearGradient id="lane" x2="0" y2="1"><stop stop-color="#121929"/><stop offset="1" stop-color="#0c1019"/></linearGradient><linearGradient id="metal" x2="0.2" y2="1"><stop stop-color="#fff"/><stop offset=".46" stop-color="#f4faff"/><stop offset=".5" stop-color="#93d7fb"/><stop offset="1" stop-color="#e4ffff"/></linearGradient><linearGradient id="candy"><stop stop-color="#ffd97d"/><stop offset=".35" stop-color="#fff6c2"/><stop offset=".7" stop-color="#ffc6f5"/><stop offset="1" stop-color="#90eeff"/></linearGradient><radialGradient id="aura"><stop stop-color="${kind===1?'#704b9e':'#23688c'}" stop-opacity=".48"/><stop offset="1" stop-color="#101525" stop-opacity="0"/></radialGradient></defs>`;
-  let s=stage(seconds,reduced);
-  if(t>=0&&t<2.9) {
-    const fade=out(t,0,.2)*(1-smooth((t-2.15)/.55));
-    s+=`<ellipse cx="640" cy="330" rx="510" ry="290" fill="url(#aura)" opacity="${f(fade)}"/>`;
-    if(!reduced)s+=[breakthrough,supernova,ascension][kind](t,perfect);
+  const t=seconds-impactTime,color=perfect?teal:lime;
+  const defs=`<defs><radialGradient id="hitGlow"><stop stop-color="#f8fdff" stop-opacity=".85"/><stop offset=".22" stop-color="#56d2ca" stop-opacity=".7"/><stop offset="1" stop-color="#56d2ca" stop-opacity="0"/></radialGradient><linearGradient id="laneLight" x2="0" y2="1"><stop stop-color="${color}" stop-opacity="0"/><stop offset="1" stop-color="${color}" stop-opacity=".7"/></linearGradient></defs>`;
+  let s=stage(seconds,perfect,reduced);
+  if(t>=0&&t<2.2) {
+    if(!reduced)s+=[impact,sweep,rise][kind](t,perfect);
     s+=lettering(t,kind,perfect,reduced);
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="100%" height="100%" role="img" aria-label="${directions[kind].name}, ${perfect?'Perfect':'Full Combo'} animation">${defs}${s}</svg>`;

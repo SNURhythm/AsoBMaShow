@@ -3,3 +3,7 @@
   src: url('../../../assets/fonts/roboto-condensed-bold.ttf') format('truetype');
   font-weight: 900;
 }
+@font-face {
+  font-family: Judgement;
+  src: url('./fonts/judgement-ascii.ttf') format('truetype');
+}

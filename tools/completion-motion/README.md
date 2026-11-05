@@ -24,13 +24,17 @@ Sound design is intentionally not included in this visual comparison.
 ```sh
 npm run dev
 # Optional export, only when requested:
-npx remotion render Breakthrough-Perfect out/breakthrough-perfect.mp4
+npx remotion render Impact-Perfect out/impact-perfect.mp4
 ```
 
 All six 1280×720, 60fps compositions use `src/frame.mjs`, the exact same frame
 model as the standalone reviewer. The SVG scene is one editing unit in Remotion;
 edit its parameters in source rather than expecting per-particle Studio tracks.
-The repository's existing Roboto Condensed font is reused, not downloaded.
+The HUD reuses the repository's Roboto Condensed font. Achievement lettering uses
+an ASCII subset of the same Noto Sans CJK JP font used by native judgement text.
+The palette and short ring/shard effects follow `JudgementColors.h` and
+`KeybombEffect.h`. No slogans, decorative badges, or alternate display typeface
+are added. The HUD counters are synthetic and do not define scoring policy.
 
 `npm run lint` checks the source and types; `npm run build` checks the Remotion
 bundle. `out/`, `build/`, dependencies, and rendered media remain untracked.
@@ -44,3 +48,15 @@ The preview's color, geometry, timing, and layering are design evidence; its
 browser performance is not a native mobile performance measurement. Immediate
 last-note detection, ruleset classification, skin coordination, retries, and
 replay timing still require native implementation and validation.
+
+## Font subset
+
+`src/fonts/judgement-ascii.ttf` is generated from the repository's existing
+`assets/fonts/notosanscjkjp.ttf`; it avoids embedding the full CJK font in the
+standalone reviewer. The existing [Noto font license](../../assets/legal/noto-sans-cjk.txt)
+also applies to the subset. Regenerate with FontTools (`pyftsubset`):
+
+```sh
+pyftsubset ../../assets/fonts/notosanscjkjp.ttf --unicodes=U+0020-007E \
+  --output-file=src/fonts/judgement-ascii.ttf --layout-features='*'
+```
