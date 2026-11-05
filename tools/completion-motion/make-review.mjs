@@ -3,8 +3,10 @@ import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
 const root = dirname(fileURLToPath(import.meta.url));
 const lanes = process.argv.includes('--lanes');
+const finish = process.argv.includes('--finish');
 let code = readFileSync(resolve(root,'src/frame.mjs'),'utf8').replaceAll('export ', '');
-if (lanes) code += '\n' + readFileSync(resolve(root,'src/lane-frame.mjs'),'utf8').replace(/^import .*;$/m,'').replaceAll('export ', '');
+if (lanes || finish) code += '\n' + readFileSync(resolve(root,'src/lane-frame.mjs'),'utf8').replace(/^import .*;$/m,'').replaceAll('export ', '');
+if (finish) code += '\n' + readFileSync(resolve(root,'src/finish-frame.mjs'),'utf8').replace(/^import .*;$/gm,'').replaceAll('export ', '');
 const font = readFileSync(resolve(root,'../../assets/fonts/roboto-condensed-bold.ttf')).toString('base64');
 const judgementFont = readFileSync(resolve(root,'src/fonts/judgement-ascii.ttf')).toString('base64');
 const achievementFont = readFileSync(resolve(root,'src/fonts/judgement-bold-ascii.otf')).toString('base64');
@@ -45,6 +47,14 @@ if (lanes) {
     .replace('let seconds=0.95', 'let seconds=0.85')
     .replace('extra finishing motion', 'stronger lane-space motion');
 }
+if (finish) {
+  html=html.replaceAll('01 / Impact','01 / Finish').replaceAll('02 / Sweep','02 / Full Combo').replaceAll('03 / Rise','03 / Perfect')
+    .replace('innerHTML=sceneSvg(', 'innerHTML=finishSceneSvg(')
+    .replace('textContent=directions[kind]', 'textContent=finishDirections[kind]')
+    .replace('Completion motion studies', 'Calm Finish study')
+    .replace('class="mode"', 'class="mode" style="display:none"')
+    .replace('Replay to judge motion; use Perfect to compare the extra finishing motion.', 'Replay to judge motion; compare the three outcomes above.');
+}
 mkdirSync(resolve(root,'out'),{recursive:true});
-writeFileSync(resolve(root,lanes?'out/lane-review.html':'out/review.html'),html);
-console.log(resolve(root,lanes?'out/lane-review.html':'out/review.html'));
+writeFileSync(resolve(root,finish?'out/finish-review.html':lanes?'out/lane-review.html':'out/review.html'),html);
+console.log(resolve(root,finish?'out/finish-review.html':lanes?'out/lane-review.html':'out/review.html'));

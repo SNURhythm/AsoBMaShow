@@ -45,7 +45,7 @@ function keybomb(t,x,y,radius,color,paired=true) {
   return s;
 }
 
-function stage(seconds,perfect,reduced) {
+export function stage(seconds,perfect,reduced,ordinaryFinish=false) {
   const completed=seconds>=impactTime;
   let s='<rect width="1280" height="720" fill="#080d13"/><path d="M380 76H900L1120 575H160Z" fill="#0d1013"/>';
   // Lane separators are deliberately faint; the native judgement line is white.
@@ -59,15 +59,17 @@ function stage(seconds,perfect,reduced) {
   s+=text('Synthetic Built-in 7K',31,37,18,'#e4e7ee','MotionCondensed','start');
   s+=text('NORMAL / HARD',31,58,12,'#adb9cd','MotionCondensed','start');
   s+='<rect x="20" y="650" width="356" height="50" fill="#10151e" stroke="#242a34"/>';
-  const combo=completed?812:811;
-  const score=perfect?combo*2:combo*2-26;
+  const combo=ordinaryFinish?(completed?24:23):(completed?812:811);
+  const score=ordinaryFinish?(completed?1540:1538):(perfect?combo*2:combo*2-26);
   s+=text('SCORE '+score,31,667,22,'#e4e7ee','MotionCondensed','start');
   s+=text('COMBO '+combo,365,667,16,lime,'MotionCondensed','end');
   s+=text('PM AAA 1444',198,687,12,'#adb9cd','MotionCondensed');
   s+='<rect x="1144" y="195" width="19" height="331" rx="10" fill="#636a70" stroke="#b5c0cb" stroke-width=".6"/><rect x="1146" y="211" width="15" height="313" rx="8" fill="#e5edf5"/>';
   s+=text('100%',1115,221,12,white);
   s+=line(1141,420,1165,420,'#ffcc51',2);
-  const counters=[['PGREAT',perfect?combo:combo-26,teal],['GREAT',perfect?0:26,lime],['GOOD',0,'#ffcc51'],['BAD',0,'#ff8460'],['POOR',0,'#ff6858'],['KPOOR',0,'#ff4e66']];
+  const counters=ordinaryFinish
+    ? [['PGREAT',completed?750:749,teal],['GREAT',40,lime],['GOOD',14,'#ffcc51'],['BAD',6,'#ff8460'],['POOR',2,'#ff6858'],['KPOOR',0,'#ff4e66']]
+    : [['PGREAT',perfect?combo:combo-26,teal],['GREAT',perfect?0:26,lime],['GOOD',0,'#ffcc51'],['BAD',0,'#ff8460'],['POOR',0,'#ff6858'],['KPOOR',0,'#ff4e66']];
   counters.forEach(([label,value,color],i)=>{
     const y=232+i*38;
     s+=`<rect x="1197" y="${y}" width="63" height="33" fill="${value?'#182028':'#15171c'}" stroke="${color}" stroke-width=".5" opacity="${value?1:.25}"/>`;
@@ -78,7 +80,7 @@ function stage(seconds,perfect,reduced) {
     const p=clamp(seconds/impactTime),y=230+345*p;
     const x=700+(y-76)/499*115,w=30+(y-76)/499*24;
     s+=`<path d="M${f(x-w)} ${f(y)}H${f(x+w)}L${f(x+w+3)} ${f(y+15)}H${f(x-w-3)}Z" fill="#d9d9d9"/>`;
-    s+=text('PGREAT 811',640,480,50,teal);
+    s+=text(ordinaryFinish?'PGREAT 23':'PGREAT 811',640,480,50,teal);
   } else if(!reduced)s+=keybomb(seconds-impactTime,815,587,80,teal);
   return s;
 }
