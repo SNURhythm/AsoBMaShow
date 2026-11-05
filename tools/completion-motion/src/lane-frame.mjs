@@ -16,7 +16,7 @@ export function laneSceneSvg(seconds,kind=0,perfect=false,reduced=false) {
   const color=perfect?'#FFCC51':'#B7F65C';
   let effect='';
   if(age>=0&&age<1.55) {
-    const q=unit(age/(kind===0&&!reduced?(perfect?1.1:.95):(perfect?1.25:1.05)));
+    const q=unit(age/(kind===0&&!reduced?(perfect?.65:.55):(perfect?1.25:1.05)));
     const fade=kind===0&&!reduced?decel(age/.045)*(1-unit((q-.55)/.45))**1.4:(1-q)**1.5;
     if(reduced) {
       effect=path([point(0,.98),point(1,.98),point(1,1),point(0,1)],color,.3*fade);

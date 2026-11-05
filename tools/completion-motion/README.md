@@ -32,7 +32,7 @@ only; no lane-space completion effect has been added to the native renderer.
 Matching `Lane-Wave-*`, `Lane-Rails-*`, and `Lane-Fan-*` compositions are available
 in Remotion, using the same analytic frame model as the reviewer.
 Wave is the selected direction: its borderless, feathered wash has a fast
-initial rise and a longer wake, fading over 950 ms (Full Combo) or 1100 ms
+initial rise and a broad wake, fading over 550 ms (Full Combo) or 650 ms
 (Perfect). Rails and Fan remain earlier
 alternatives. Reduced motion keeps its restrained judgement-line accent.
 
