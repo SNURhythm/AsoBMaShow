@@ -1521,10 +1521,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
             long_note_mode::valueFromId(profileSelections.longNoteMode)));
     if (goalMode) {
       std::string error;
-      const auto goals = this->context.scoreRepository.LoadChartGoalsForChart(record.meta, error);
+      auto goals = this->context.scoreRepository.LoadChartGoalsForChart(record.meta, error);
+      if (goals) std::erase_if(*goals, [](const auto &entry) { return entry.progress.achieved; });
       if (goals && goals->size() > 1) {
         view->setGoalTarget(-1, {}, i18n::format("goals.ui.count", {{"count", std::to_string(goals->size())}}));
-      } else if (goals && goals->size() == 1 && !goals->front().progress.achieved) {
+      } else if (goals && goals->size() == 1) {
         const auto labels = chart_goals::targetLabels(goals->front().goal.target);
         view->setGoalTarget(labels.lampRank, labels.lamp, labels.score,
             goals->front().progress.lampMet, goals->front().progress.scoreMet);
