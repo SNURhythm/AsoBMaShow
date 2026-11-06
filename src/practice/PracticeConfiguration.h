@@ -156,6 +156,7 @@ public:
   SkinMenuController(Configuration, SkinMenuInputs);
 
   void refreshInputs(SkinMenuInputs) noexcept;
+  void setInputModifiers(bool horizontal, bool turbo) noexcept;
   void setVisibleItemCount(int) noexcept;
   void setItemScrollPosition(float) noexcept;
   [[nodiscard]] float itemScrollPosition() const noexcept;

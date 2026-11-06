@@ -23,6 +23,7 @@ public:
   [[nodiscard]] std::size_t abandonedAttemptCount() const;
   [[nodiscard]] const Configuration &configuration() const;
   void configureSkinMenu(SkinMenuInputs);
+  void setSkinMenuInputModifiers(bool horizontal, bool turbo) noexcept;
   [[nodiscard]] std::optional<SkinMenuAttemptPlan>
   skinMenuAttemptPlan() const noexcept;
   [[nodiscard]] std::optional<SkinMenuAttemptPlan> beginSkinMenuAttempt();

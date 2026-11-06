@@ -56,6 +56,14 @@ void Session::configureSkinMenu(SkinMenuInputs inputs) {
   skinMenu_->setItemScrollPosition(skinItemScrollPosition_);
 }
 
+void Session::setSkinMenuInputModifiers(bool horizontal, bool turbo) noexcept {
+  // Beatoraja stops reading menu controls on entering READY. Keep the last
+  // setup highlights, including through input cancellation and section loops.
+  if (skinMenu_ && !skinMenuAttemptConfiguration_) {
+    skinMenu_->setInputModifiers(horizontal, turbo);
+  }
+}
+
 std::optional<SkinMenuAttemptPlan>
 Session::skinMenuAttemptPlan() const noexcept {
   return skinMenu_.has_value()
@@ -119,13 +127,10 @@ SkinMenuState Session::skinMenuState() const {
 }
 
 SkinMenuState Session::skinMenuState(const SkinMenuInputs &inputs) const {
-  auto result = skinMenu_.has_value()
-                    ? skinMenu_->skinMenuState()
-                    : buildSkinMenuState(configuration_, inputs,
-                                         skinItemScrollPosition_);
-  result.horizontalInputMode = inputs.horizontalInputMode;
-  result.inputTurbo = inputs.inputTurbo;
-  return result;
+  return skinMenu_.has_value()
+             ? skinMenu_->skinMenuState()
+             : buildSkinMenuState(configuration_, inputs,
+                                  skinItemScrollPosition_);
 }
 
 Session Session::freshForRetry() const {

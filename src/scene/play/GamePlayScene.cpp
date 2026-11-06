@@ -2067,6 +2067,10 @@ void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
   if (pressed && ((pauseLayout && pauseLayout->getVisible()) ||
                   context.appInBackground.load(std::memory_order_acquire))) return;
   lanePressed[lane] = pressed;
+  if (options.practiceSession) {
+    const auto [horizontal, turbo] = practiceLegacyInputState(lanePressed, chart->Meta.KeyMode);
+    options.practiceSession->setSkinMenuInputModifiers(horizontal, turbo);
+  }
   const auto keys = chart->Meta.GetKeyLaneIndices();
   if (keys.empty() || lane != keys.front()) {
     return;
@@ -2253,6 +2257,7 @@ void GamePlayScene::clearPracticeMenuInput() {
   practiceMenuStartPressedMicros = 0;
   if (practiceMenuActive) {
     for (auto &[lane, pressed] : lanePressed) pressed = false;
+    if (options.practiceSession) options.practiceSession->setSkinMenuInputModifiers(false, false);
     startButtonPressed = false;
     selectButtonPressed = false;
     if (startSelectControl) startSelectControl->reset();

@@ -42,9 +42,30 @@ int main() {
       !expect(session.changeSkinMenuSelection(true) &&
                   session.skinMenuState().startTimeMillis == start + 100,
               "touch plus button changes the selected practice value")) return 1;
-  const auto heldMenu = session.skinMenuState({.horizontalInputMode = true, .inputTurbo = true});
+  session.setSkinMenuInputModifiers(true, true);
+  const auto heldMenu = session.skinMenuState();
   if (!expect(heldMenu.horizontalInputMode && heldMenu.inputTurbo,
               "skin menu receives current held-key modifiers")) return 1;
+
+  practice::Session playingSession(configuration);
+  playingSession.configureSkinMenu({.lastTimelineMicros = 10'000'000, .keyMode = 7});
+  (void)playingSession.beginSkinMenuAttempt();
+  const auto playingMenu = playingSession.skinMenuState(
+      {.horizontalInputMode = true, .inputTurbo = true});
+  if (!expect(!playingMenu.horizontalInputMode && !playingMenu.inputTurbo,
+              "gameplay keypresses cannot change practice menu highlights")) return 1;
+  playingSession.configureSkinMenu({.lastTimelineMicros = 10'000'000, .keyMode = 7});
+  playingSession.setSkinMenuInputModifiers(true, true);
+  (void)playingSession.beginSkinMenuAttempt();
+  playingSession.setSkinMenuInputModifiers(false, false);
+  const auto frozenMenu = playingSession.skinMenuState({});
+  if (!expect(frozenMenu.horizontalInputMode && frozenMenu.inputTurbo,
+              "attempt startup freezes the final setup modifiers across key release")) return 1;
+  playingSession.configureSkinMenu({.lastTimelineMicros = 10'000'000, .keyMode = 7});
+  playingSession.setSkinMenuInputModifiers(false, true);
+  if (!expect(!playingSession.skinMenuState().horizontalInputMode &&
+                  playingSession.skinMenuState().inputTurbo,
+              "reopening setup enables menu input again")) return 1;
 
   session.beginAttempt();
   ReplayData completedReplay;

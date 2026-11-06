@@ -784,10 +784,13 @@ void testRestartStartsPracticeMenuAttempt() {
             "scratch navigation never starts a practice attempt");
     scene.consumePracticeMenuLaneInput(7, false);
     scene.consumePracticeMenuLaneInput(1, true);
-    require(scene.lanePressed[1] && scene.state->stagePassedNotes == 0,
-            "practice setup publishes held keys without judging notes");
+    require(scene.lanePressed[1] && scene.state->stagePassedNotes == 0 &&
+                scene.options.practiceSession->skinMenuState().horizontalInputMode,
+            "practice setup publishes held keys and menu modifiers without judging notes");
     scene.consumePracticeMenuLaneInput(1, false);
-    require(!scene.lanePressed[1], "practice setup releases held key feedback");
+    require(!scene.lanePressed[1] &&
+                !scene.options.practiceSession->skinMenuState().horizontalInputMode,
+            "practice setup releases held key feedback and menu modifiers");
     if (startMethod == 0) {
       scene.restartCurrentPattern();
     } else {

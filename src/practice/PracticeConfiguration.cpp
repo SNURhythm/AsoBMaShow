@@ -199,6 +199,11 @@ void SkinMenuController::refreshInputs(SkinMenuInputs inputs) noexcept {
   inputs_ = std::move(inputs);
 }
 
+void SkinMenuController::setInputModifiers(bool horizontal, bool turbo) noexcept {
+  inputs_.horizontalInputMode = horizontal;
+  inputs_.inputTurbo = turbo;
+}
+
 void SkinMenuController::setVisibleItemCount(int count) noexcept {
   visibleItemCount_ = static_cast<std::size_t>(std::clamp(count, 1, 12));
   std::size_t selectedIndex = 0;
