@@ -234,6 +234,91 @@ void testSkinMenuControllerUsesPinnedRowDomains() {
          "source end time preserves its one-second minimum above start");
 }
 
+void testSkinMenuInputMapsModeSpecificNativeLanes() {
+  struct Mapping { int mode; int lane; int selection; int value; };
+  for (const auto row : {
+           Mapping{9, 1, -1, 0}, {9, 7, -1, 0}, {9, 2, 1, 0},
+           {9, 6, 1, 0}, {9, 3, 0, -1}, {9, 5, 0, 1},
+           {10, 9, -1, 0}, {10, 11, -1, 0}, {10, 10, 1, 0},
+           {10, 8, 0, -1}, {10, 12, 0, 1},
+           {14, 9, -1, 0}, {14, 13, -1, 0}, {14, 10, 1, 0},
+           {14, 12, 1, 0}, {14, 8, 0, -1}, {14, 14, 0, 1},
+           {24, 6, -1, 0}, {24, 10, -1, 0}, {24, 7, 1, 0},
+           {24, 9, 1, 0}, {24, 5, 0, -1}, {24, 11, 0, 1},
+           {24, 24, 1, 0}, {24, 25, -1, 0},
+           {48, 50, 1, 0}, {48, 51, -1, 0}}) {
+    practice::SkinMenuInputController input;
+    input.setLanePressed(row.mode, row.lane, true);
+    const auto ticks = input.read(row.mode, 1'000, 300, 50, 3);
+    expect(ticks.selection == row.selection && ticks.value == row.value,
+           "practice mode " + std::to_string(row.mode) + " native lane " +
+               std::to_string(row.lane) + " maps to its source menu direction");
+  }
+  practice::SkinMenuInputController input;
+  input.setLanePressed(14, 11, true);
+  auto ticks = input.read(14, 1'000, 300, 50, 3);
+  expect(ticks.turbo && !ticks.horizontal && ticks.selection == 0,
+         "14K second-player fourth key enables turbo without horizontal mode");
+  input.setLanePressed(14, 11, false);
+  input.setLanePressed(14, 12, true);
+  ticks = input.read(14, 1'001, 300, 50, 3);
+  expect(!ticks.turbo && ticks.selection == 1,
+         "14K second-player fifth key navigates down rather than enabling turbo");
+  practice::SkinMenuInputController fiveKeyPopn;
+  fiveKeyPopn.setLanePressed(9, 3, true);
+  ticks = fiveKeyPopn.read(9, 1'000, 300, 50, 3, true);
+  expect(ticks.turbo && ticks.horizontal && ticks.value == 0,
+         "Pop'n five-key uses source modifier controls rather than nine-key navigation");
+}
+
+void testSkinMenuDigitalInputDirectionAndRepeat() {
+  practice::SkinMenuInputController input;
+  input.setScratchPressed(7, 1, true, true);
+  expect(input.read(7, 1'000, 300, 50, 3).selection == 1 &&
+             input.read(7, 1'299, 300, 50, 3).selection == 0 &&
+             input.read(7, 1'300, 300, 50, 3).selection == 1 &&
+             input.read(7, 1'349, 300, 50, 3).selection == 0 &&
+             input.read(7, 1'350, 300, 50, 3).selection == 1,
+         "held clockwise scratch moves down with source initial and repeat delays");
+  input.setLanePressed(7, 1, true);
+  const auto horizontal = input.read(7, 1'351, 300, 50, 3);
+  expect(horizontal.horizontal && horizontal.value == -1 && horizontal.selection == 0,
+         "clockwise scratch decrements when the horizontal modifier is held");
+  input.setDirectionPressed(practice::SkinMenuDirection::Right, true);
+  expect(input.read(7, 1'352, 300, 50, 3).value == 1,
+         "right takes source precedence over simultaneously held left");
+}
+
+void testSkinMenuAnalogUsesFineAndCoarseTicks() {
+  practice::SkinMenuInputController input;
+  input.addAnalogTicks(true, 2);
+  expect(input.read(7, 1'000, 300, 50, 3).selection == 0,
+         "two analog ticks do not cross the configured three-tick row threshold");
+  input.addAnalogTicks(true, 1);
+  expect(input.read(7, 1'001, 300, 50, 3).selection == 1,
+         "analog row movement accumulates residual ticks across frames");
+  input.setLanePressed(7, 1, true);
+  (void)input.read(7, 1'002, 300, 50, 3);
+  input.addAnalogTicks(false, 2);
+  (void)input.read(7, 1'003, 300, 50, 3);
+  expect(input.extractAnalogValueTicks(0, 3) == 2,
+         "counterclockwise scratch increments fine time rows for every analog tick");
+  input.addAnalogTicks(false, 2);
+  (void)input.read(7, 1'004, 300, 50, 3);
+  expect(input.extractAnalogValueTicks(2, 3) == 0,
+         "cyclic gauge rows use the configured coarse analog threshold");
+  input.addAnalogTicks(false, 1);
+  (void)input.read(7, 1'005, 300, 50, 3);
+  expect(input.extractAnalogValueTicks(2, 3) == 1,
+         "coarse analog rows preserve their fractional scroll remainder");
+  input.addAnalogTicks(false, 2);
+  (void)input.read(7, 1'006, 300, 50, 3);
+  input.setLanePressed(7, 1, false);
+  (void)input.read(7, 1'007, 300, 50, 3);
+  expect(input.extractAnalogValueTicks(0, 3) == 0,
+         "switching scratch axes clears pending analog movement");
+}
+
 void testPracticeSessionUsesRetainedSkinMenuController() {
   practice::Configuration configuration{
       .startMicros = 0,
@@ -330,13 +415,13 @@ void testSkinMenuPropertyProducesPinnedAttemptPlan() {
   }
 
   const auto attempt = practice::skinMenuAttemptPlan(menu.property());
-  expect(attempt.startMicros == 1'000'000 &&
-             attempt.endMicros == 4'500'000 &&
+  expect(attempt.startMicros == 2'000'000 &&
+             attempt.endMicros == 9'000'000 &&
              attempt.gaugeType == GaugeType::Grade &&
              attempt.gaugeProfile == GaugeProfile::StandardLr2 &&
              attempt.startingGaugePercent == 100 && attempt.judgeRank == 250 &&
              attempt.total == 333.0 && attempt.playback.percent == 200,
-         "source menu property retains frequency-scaled range and Grade/LR2 "
+         "source menu property retains original chart range and Grade/LR2 "
          "attempt authority");
 }
 
@@ -369,6 +454,35 @@ void testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground() {
              chart.Meta.TotalNotes == 1 && chart.Meta.Total == 100.0,
          "source practice modifier keeps only the selected range visible and "
          "scales NORMAL TOTAL by its remaining note count");
+}
+
+void testSkinMenuAttemptRangeRetainsOriginalChartClock() {
+  const auto attempt = practice::skinMenuAttemptPlan(
+      {.startTimeMillis = 100,
+       .endTimeMillis = 200,
+       .frequencyPercent = 150,
+       .total = 200.0});
+  expect(attempt.startMicros == 100'000 && attempt.endMicros == 200'000,
+         "practice playback rate preserves the selected original chart-time range");
+
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 1;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  for (const long long timing : {100'500LL, 200'100LL}) {
+    auto *timeline = new bms_parser::TimeLine(1, false);
+    timeline->Timing = timing;
+    timeline->SetNote(0, new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+  }
+  chart.Measures.push_back(measure);
+
+  practice::applySkinMenuPracticeModifier(chart, attempt);
+  expect(measure->TimeLines[0]->Notes[0] != nullptr &&
+             measure->TimeLines[1]->Notes[0] == nullptr &&
+             measure->TimeLines[1]->BackgroundNotes.size() == 1,
+         "practice rate changes preserve notes at the original start boundary "
+         "and exclude notes at the original end boundary");
 }
 
 void testBmsonPracticeRetainsGaugeGainPerNote() {
@@ -571,7 +685,7 @@ void testSkinMenuShortChartDoesNotSelectNegativeStartTime() {
          "short-chart START TIME remains at the source zero minimum");
 }
 
-void testSessionUsesScaledRangeDuringRateAdjustedAttempt() {
+void testSessionRetainsChartRangeDuringRateAdjustedAttempt() {
   practice::Session session(
       {.startMicros = 2'000'000,
        .endMicros = 9'000'000,
@@ -588,24 +702,24 @@ void testSessionUsesScaledRangeDuringRateAdjustedAttempt() {
   };
   session.configureSkinMenu(inputs);
   const auto plan = session.beginSkinMenuAttempt();
-  expect(plan.has_value() && plan->startMicros == 1'000'000 &&
-             plan->endMicros == 4'500'000,
-         "practice start returns the frequency-scaled chart range");
-  expect(session.configuration().startMicros == 1'000'000 &&
-             session.configuration().endMicros == 4'500'000 &&
+  expect(plan.has_value() && plan->startMicros == 2'000'000 &&
+             plan->endMicros == 9'000'000,
+         "practice start returns the original chart-time range");
+  expect(session.configuration().startMicros == 2'000'000 &&
+             session.configuration().endMicros == 9'000'000 &&
              session.configuration().playback.percent == 200,
-         "active practice runtime uses the frequency-scaled chart range");
+         "active practice runtime uses the original chart-time range");
 
   auto retry = session.freshForRetry();
   retry.configureSkinMenu(inputs);
   const auto retryPlan = retry.beginSkinMenuAttempt();
-  expect(retryPlan.has_value() && retryPlan->startMicros == 1'000'000 &&
-             retryPlan->endMicros == 4'500'000,
-         "fresh practice retry rebuilds the scaled range from the raw menu "
-         "coordinates without scaling twice");
-  expect(retry.configuration().startMicros == 1'000'000 &&
-             retry.configuration().endMicros == 4'500'000,
-         "activating the retained retry plan publishes its scaled range to "
+  expect(retryPlan.has_value() && retryPlan->startMicros == 2'000'000 &&
+             retryPlan->endMicros == 9'000'000,
+         "fresh practice retry rebuilds the original range from the raw menu "
+         "coordinates without changing note selection");
+  expect(retry.configuration().startMicros == 2'000'000 &&
+             retry.configuration().endMicros == 9'000'000,
+         "activating the retained retry plan publishes its original range to "
          "built-in practice startup");
 }
 
@@ -849,10 +963,14 @@ int main() {
   testSkinMenuScrollUsesPinnedDoublePlayViewport();
   testSkinMenuControllerRetainsSourceRowsAndActions();
   testSkinMenuControllerUsesPinnedRowDomains();
+  testSkinMenuInputMapsModeSpecificNativeLanes();
+  testSkinMenuDigitalInputDirectionAndRepeat();
+  testSkinMenuAnalogUsesFineAndCoarseTicks();
   testPracticeSessionUsesRetainedSkinMenuController();
   testSkinMenuVisibleCountRetainsAndClampsTheSourceViewport();
   testSkinMenuPropertyProducesPinnedAttemptPlan();
   testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
+  testSkinMenuAttemptRangeRetainsOriginalChartClock();
   testBmsonPracticeRetainsGaugeGainPerNote();
   testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints();
   testSkinMenuPracticeModifierPreservesLandmineOnlyTotal();
@@ -860,7 +978,7 @@ int main() {
   testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves();
   testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves();
   testSkinMenuShortChartDoesNotSelectNegativeStartTime();
-  testSessionUsesScaledRangeDuringRateAdjustedAttempt();
+  testSessionRetainsChartRangeDuringRateAdjustedAttempt();
   testFreshPracticeRetryRetainsSourceOnlyMenuChoices();
   testFreshPracticeRetryDistinguishesUnacceptedSkinMenu();
   testListenUsesPracticeStartInsteadOfCursorOrEndMarker();

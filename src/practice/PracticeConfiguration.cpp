@@ -227,14 +227,13 @@ void SkinMenuController::setVisibleItemCount(int count) noexcept {
 
 SkinMenuAttemptPlan
 skinMenuAttemptPlan(const SkinMenuProperty &property) noexcept {
-  const long long scale = 100LL;
+  // Beatoraja scales both its model and range by frequency. Our audio clock
+  // applies playback speed while chart timestamps remain unchanged.
   return {
       .startMicros =
-          static_cast<long long>(property.startTimeMillis) * scale * 1'000LL /
-          property.frequencyPercent,
+          static_cast<long long>(property.startTimeMillis) * 1'000LL,
       .endMicros =
-          static_cast<long long>(property.endTimeMillis) * scale * 1'000LL /
-          property.frequencyPercent,
+          static_cast<long long>(property.endTimeMillis) * 1'000LL,
       .gaugeType = gaugeTypeAtIndex(property.gaugeType),
       .gaugeProfile = skinMenuGaugeProfile(property.gaugeCategory),
       .startingGaugePercent = property.startGauge,
@@ -246,6 +245,130 @@ skinMenuAttemptPlan(const SkinMenuProperty &property) noexcept {
       .random2P = property.random2P,
       .doublePlayFlip = property.doublePlay != 0,
   };
+}
+
+void SkinMenuInputController::setLanePressed(int keyMode, int lane,
+                                            bool pressed) noexcept {
+  int index = lane;
+  if (keyMode == 5 || keyMode == 7 || keyMode == 10 || keyMode == 14) {
+    const int width = keyMode == 5 || keyMode == 10 ? 5 : 7;
+    const int player = lane >= 8 ? 1 : 0;
+    const int playerLane = lane - player * 8;
+    if (playerLane < 0 || playerLane >= width ||
+        (player != 0 && keyMode != 10 && keyMode != 14)) return;
+    index = player * (width + 2) + playerLane;
+  }
+  if (index >= 0 && index < static_cast<int>(keys_.size())) keys_[index] = pressed;
+}
+
+void SkinMenuInputController::setScratchPressed(int keyMode, int player,
+                                               bool clockwise,
+                                               bool pressed) noexcept {
+  if (keyMode != 5 && keyMode != 7 && keyMode != 10 && keyMode != 14) return;
+  if (player < 1 || player > (isDoublePlayKeyMode(keyMode) ? 2 : 1)) return;
+  const int width = keyMode == 5 || keyMode == 10 ? 5 : 7;
+  keys_[(player - 1) * (width + 2) + width + (clockwise ? 0 : 1)] = pressed;
+}
+
+void SkinMenuInputController::setDirectionPressed(SkinMenuDirection direction,
+                                                 bool pressed) noexcept {
+  directions_[static_cast<std::size_t>(direction)] = pressed;
+}
+
+void SkinMenuInputController::addAnalogTicks(bool clockwise, int ticks) noexcept {
+  pendingAnalog_ += clockwise ? -ticks : ticks;
+}
+
+SkinMenuInputTicks SkinMenuInputController::read(int keyMode, long long nowMillis,
+                                                int initialDelayMillis,
+                                                int repeatDelayMillis,
+                                                int analogTicksPerScroll,
+                                                bool popnFiveKeys) noexcept {
+  auto directions = directions_;
+  auto &up = directions[0];
+  auto &down = directions[1];
+  auto &left = directions[2];
+  auto &right = directions[3];
+  SkinMenuInputTicks result;
+  if (keyMode == 9 && !popnFiveKeys) {
+    up = up || keys_[1] || keys_[7];
+    down = down || keys_[2] || keys_[6];
+    left = left || keys_[3];
+    right = right || keys_[5];
+    result.turbo = keys_[4];
+    pendingAnalog_ = analogX_ = analogY_ = 0;
+  } else {
+    result.turbo = keys_[3];
+    result.horizontal = keys_[1] || result.turbo;
+    if (keyMode == 10) {
+      up = up || keys_[8] || keys_[10];
+      down = down || keys_[9];
+      left = left || keys_[7];
+      right = right || keys_[11];
+    } else if (keyMode == 14) {
+      up = up || keys_[10] || keys_[14];
+      down = down || keys_[11] || keys_[13];
+      left = left || keys_[9];
+      right = right || keys_[15];
+      result.turbo = result.turbo || keys_[12];
+    } else if (keyMode == 24 || keyMode == 48) {
+      up = up || keys_[6] || keys_[10];
+      down = down || keys_[7] || keys_[9];
+      left = left || keys_[5];
+      right = right || keys_[11];
+      result.turbo = result.turbo || keys_[8];
+    }
+    if (horizontal_ != result.horizontal) {
+      pendingAnalog_ = analogX_ = analogY_ = 0;
+    }
+    const auto scratch = [&](int downIndex, int upIndex) {
+      if (result.horizontal) {
+        right = right || keys_[upIndex];
+        left = left || keys_[downIndex];
+      } else {
+        up = up || keys_[upIndex];
+        down = down || keys_[downIndex];
+      }
+    };
+    if (keyMode == 5 || keyMode == 10) {
+      scratch(5, 6);
+      if (keyMode == 10) scratch(12, 13);
+    } else if (keyMode == 7 || keyMode == 14) {
+      scratch(7, 8);
+      if (keyMode == 14) scratch(16, 17);
+    } else if (keyMode == 24 || keyMode == 48) {
+      scratch(24, 25);
+      if (keyMode == 48) scratch(50, 51);
+    }
+    if (result.horizontal) analogX_ += pendingAnalog_;
+    else analogY_ -= pendingAnalog_;
+    pendingAnalog_ = 0;
+  }
+  horizontal_ = result.horizontal;
+  if (directions != previousDirections_) nextHoldTick_ = 0;
+  previousDirections_ = directions;
+  if ((up || down || left || right) && nextHoldTick_ <= nowMillis) {
+    nextHoldTick_ = nowMillis + std::max(1, nextHoldTick_ == 0
+        ? initialDelayMillis : repeatDelayMillis);
+    if (right) ++result.value;
+    else if (left) --result.value;
+    else if (down) ++result.selection;
+    else if (up) --result.selection;
+  }
+  const int threshold = std::max(1, analogTicksPerScroll);
+  result.selection += analogY_ / threshold;
+  analogY_ %= threshold;
+  return result;
+}
+
+int SkinMenuInputController::extractAnalogValueTicks(
+    std::size_t selectedElement, int analogTicksPerScroll) noexcept {
+  const bool fine = selectedElement == 0 || selectedElement == 1 ||
+                    (selectedElement >= 4 && selectedElement <= 7);
+  const int threshold = fine ? 1 : std::max(1, analogTicksPerScroll);
+  const int ticks = analogX_ / threshold;
+  analogX_ %= threshold;
+  return ticks;
 }
 
 void applySkinMenuPracticeModifier(bms_parser::Chart &chart,

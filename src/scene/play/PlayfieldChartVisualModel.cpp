@@ -616,6 +616,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
   result.chartMd5 = chart.Meta.MD5;
   result.chartSha256 = chart.Meta.SHA256;
   result.keyCount = chart.Meta.KeyMode;
+  result.popnFiveKeys = chart.Meta.IsPopnFiveKey();
   result.scratchlessSinglePlay = gameplay::isScratchlessSinglePlay(chart);
   result.initialBpm = chart.Meta.Bpm;
   result.text.title = chart.Meta.Title;

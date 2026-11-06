@@ -21,6 +21,8 @@ struct SkinGeneratedTextureKey {
   SkinObjectId sourceObject = 0;
   std::uint32_t authoredOrdinal = 0;
   SkinGeneratedTextureLayer layer = SkinGeneratedTextureLayer::Primary;
+  // A legacy Practice object owns separate normal/judge/early-late graphs.
+  std::uint8_t variant = 0;
 
   auto operator<=>(const SkinGeneratedTextureKey &) const = default;
 };

@@ -18,6 +18,7 @@
 #include "GuidedAccessButtonCue.h"
 #include "GamePlayTiming.h"
 #include "GameplaySkinPracticeClock.h"
+#include "GameplaySkinPracticeSongInformation.h"
 #include "JudgementTimingSample.h"
 #include "PracticeNoteFinalizer.h"
 #include "../../ChartPlaybackDuration.h"
@@ -476,16 +477,17 @@ std::string formatPracticeTime(long long micros) {
 }
 
 std::pair<bool, bool> practiceLegacyInputState(
-    const std::unordered_map<int, bool> &lanePressed, int keyMode) {
+    const std::unordered_map<int, bool> &lanePressed, int keyMode,
+    bool popnFiveKeys) {
   const auto pressed = [&lanePressed](int index) {
     const auto found = lanePressed.find(index);
     return found != lanePressed.end() && found->second;
   };
-  if (keyMode == 9) {
+  if (keyMode == 9 && !popnFiveKeys) {
     return {false, pressed(4)};
   }
   const bool baseTurbo = pressed(3);
-  const bool turbo = baseTurbo || (keyMode == 14 && pressed(12)) ||
+  const bool turbo = baseTurbo || (keyMode == 14 && pressed(11)) ||
                      ((keyMode == 24 || keyMode == 48) && pressed(8));
   return {pressed(1) || baseTurbo, turbo};
 }
@@ -1999,10 +2001,10 @@ bool GamePlayScene::enterPracticeMenu() {
        .doublePlay = options.doublePlayFlip ? 1 : 0,
        .horizontalInputMode =
            practiceLegacyInputState(lanePressed,
-                                    playfieldChartVisualModel.keyCount)
+                                    playfieldChartVisualModel.keyCount, chart->Meta.IsPopnFiveKey())
                .first,
        .inputTurbo = practiceLegacyInputState(
-                         lanePressed, playfieldChartVisualModel.keyCount)
+                         lanePressed, playfieldChartVisualModel.keyCount, chart->Meta.IsPopnFiveKey())
                          .second});
   ownedState = std::make_unique<RhythmState>(chart, false,
                                              rulesetPolicyBuild.policy->gauge);
@@ -2055,6 +2057,13 @@ bool GamePlayScene::enterPracticeMenu() {
     return true;
   }
   practiceMenuActive = true;
+  if (const auto timing = presentation->selectedSkinGameplayTiming()) {
+    const long long loadMillis = static_cast<long long>(timing->loadStartMillis) +
+                                 timing->loadEndMillis;
+    practiceMenuStartBlockedUntilMicros = std::max(
+        practiceMenuStartBlockedUntilMicros,
+        practiceMenuPresentationStartMicros + loadMillis * 1'000LL);
+  }
   practiceMenuStartRequested = false;
   return true;
 }
@@ -2068,8 +2077,9 @@ void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
   if (pressed && ((pauseLayout && pauseLayout->getVisible()) ||
                   context.appInBackground.load(std::memory_order_acquire))) return;
   lanePressed[lane] = pressed;
+  practiceMenuInput.setLanePressed(chart->Meta.KeyMode, lane, pressed);
   if (options.practiceSession) {
-    const auto [horizontal, turbo] = practiceLegacyInputState(lanePressed, chart->Meta.KeyMode);
+    const auto [horizontal, turbo] = practiceLegacyInputState(lanePressed, chart->Meta.KeyMode, chart->Meta.IsPopnFiveKey());
     options.practiceSession->setSkinMenuInputModifiers(horizontal, turbo);
   }
   const auto keys = chart->Meta.GetKeyLaneIndices();
@@ -2088,7 +2098,12 @@ void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
 bool GamePlayScene::preparePracticeAttemptFromMenu(
     const practice::SkinMenuAttemptPlan &attempt,
     std::string_view logContext) {
+  const GameplaySkinPracticeSongInformation originalInformation(
+      playfieldChartVisualModel);
   applySkinMenuAttemptPlanToStartOptions(options, attempt);
+  if (!originalPracticeTotalNotes.has_value()) {
+    originalPracticeTotalNotes = chart->Meta.TotalNotes;
+  }
   practice::applySkinMenuPracticeModifier(*chart, attempt);
   if (!applyPracticePlayOptions(*chart, options, logContext)) {
     showPlaybackInitializationFailure(
@@ -2138,6 +2153,7 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode,
                                      rulesetPolicyBuild.policy->gauge.effectiveTotal);
+  originalInformation.restore(playfieldChartVisualModel);
   initializePlayfieldVisualNoteSources();
   if (playfieldVisualStateStore != nullptr) {
     playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
@@ -2261,6 +2277,7 @@ void GamePlayScene::clearPracticeMenuInput() {
   if (practiceMenuTouchInput) practiceMenuTouchInput->cancel(nowMicros());
   practiceMenuTouchInput.reset();
   practiceMenuTouchLayoutKey.reset();
+  practiceMenuInput = {};
   practiceMenuStartRequested = false;
   if (practiceMenuActive) {
     for (auto &[lane, pressed] : lanePressed) pressed = false;
@@ -5145,22 +5162,15 @@ void GamePlayScene::consumeStartSelectInput(
     return;
   }
   if (practiceMenuActive && options.practiceSession &&
-      replay::isDirectionalScratchControl(input.control.kind) &&
-      !startButtonPressed && !selectButtonPressed) {
+      replay::isDirectionalScratchControl(input.control.kind)) {
     if ((pauseLayout && pauseLayout->getVisible()) ||
         context.appInBackground.load(std::memory_order_acquire)) return;
-    if (input.analogScratchTicks > 0 || (input.pressed && !input.analogScratch)) {
-      const bool forward = input.control.kind == replay::LogicalControlKind::ScratchClockwise;
-      const auto [horizontal, turbo] = practiceLegacyInputState(lanePressed, chart->Meta.KeyMode);
-      const int steps = std::max(1, input.analogScratchTicks);
-      for (int step = 0; step < steps; ++step) {
-        if (horizontal) {
-          (void)options.practiceSession->changeSkinMenuSelection(
-              forward, input.analogScratchTicks > 0, turbo);
-        } else {
-          options.practiceSession->moveSkinMenuSelection(forward);
-        }
-      }
+    const bool clockwise = input.control.kind == replay::LogicalControlKind::ScratchClockwise;
+    if (input.analogScratchTicks > 0) {
+      practiceMenuInput.addAnalogTicks(clockwise, input.analogScratchTicks);
+    } else if (!input.analogScratch) {
+      practiceMenuInput.setScratchPressed(chart->Meta.KeyMode,
+          input.control.player, clockwise, input.pressed);
     }
     return;
   }
@@ -5178,7 +5188,8 @@ void GamePlayScene::consumeStartSelectInput(
   if (practiceMenuActive &&
       (input.control.kind == replay::LogicalControlKind::Start ||
        input.control.kind == replay::LogicalControlKind::Select)) {
-    practiceMenuStartBlockedUntilMicros = nowMicros() + 1'000'000;
+    practiceMenuStartBlockedUntilMicros = std::max(
+        practiceMenuStartBlockedUntilMicros, nowMicros() + 1'000'000);
     practiceMenuStartRequested = false;
   }
   applyStartSelectControlActions(
@@ -6989,13 +7000,14 @@ void GamePlayScene::capturePlayfieldVisualState(
                  .doublePlay = options.doublePlayFlip ? 1 : 0,
                  .horizontalInputMode =
                      practiceLegacyInputState(
-                         lanePressed, playfieldChartVisualModel.keyCount)
+                         lanePressed, playfieldChartVisualModel.keyCount, chart->Meta.IsPopnFiveKey())
                          .first,
                  .inputTurbo = practiceLegacyInputState(
                                    lanePressed,
-                                   playfieldChartVisualModel.keyCount)
+                                   playfieldChartVisualModel.keyCount, chart->Meta.IsPopnFiveKey())
                                    .second})};
       }(),
+      .originalPracticeTotalNotes = originalPracticeTotalNotes,
   };
   authority.presentationMetadata = presentationMetadata;
   playfieldVisualStateStore->applyAuthorityUpdate(authority);
@@ -7071,7 +7083,7 @@ void GamePlayScene::capturePlayfieldVisualState(
                                  : getStartPositionMicros(),
         configuration != nullptr ? configuration->endMicros
                                  : chart->Meta.PlayLength,
-        practiceMenuActive);
+        practiceMenuActive, options.playback.percent);
   }
   if (practiceMenuActive) {
     // The jukebox is stopped in setup and can still retain the previous song's
@@ -7614,12 +7626,33 @@ void GamePlayScene::update(float dt) {
       return;
     }
     if (practiceMenuTouchInput) practiceMenuTouchInput->advance(nowMicros());
+    if (options.practiceSession) {
+      const auto input = practiceMenuInput.read(chart->Meta.KeyMode,
+          nowMicros() / 1'000, context.settings.skinMusicSelectScrollDurationLow,
+          context.settings.skinMusicSelectScrollDurationHigh,
+          context.settings.skinMusicSelectAnalogTicksPerScroll,
+          chart->Meta.IsPopnFiveKey());
+      options.practiceSession->setSkinMenuInputModifiers(input.horizontal, input.turbo);
+      for (int tick = 0; tick < std::abs(input.selection); ++tick) {
+        options.practiceSession->moveSkinMenuSelection(input.selection > 0);
+      }
+      if (input.value != 0) {
+        (void)options.practiceSession->changeSkinMenuSelection(input.value > 0, false, input.turbo);
+      }
+      const int analog = practiceMenuInput.extractAnalogValueTicks(
+          options.practiceSession->skinMenuState().cursorPosition,
+          context.settings.skinMusicSelectAnalogTicksPerScroll);
+      for (int tick = 0; tick < std::abs(analog); ++tick) {
+        (void)options.practiceSession->changeSkinMenuSelection(analog > 0, true, input.turbo);
+      }
+    }
     if (startSelectControl) {
       applyStartSelectControlActions(startSelectControl->tick(nowMicros()));
       if (resultTransitionScheduled) return;
     }
     if (startButtonPressed || selectButtonPressed) {
-      practiceMenuStartBlockedUntilMicros = nowMicros() + 1'000'000;
+      practiceMenuStartBlockedUntilMicros = std::max(
+          practiceMenuStartBlockedUntilMicros, nowMicros() + 1'000'000);
       practiceMenuStartRequested = false;
     }
     const auto keys = chart->Meta.GetKeyLaneIndices();
@@ -9730,6 +9763,22 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   }
   if (handleCoursePauseButtonEvent(event)) {
     return {};
+  }
+
+  if (practiceMenuActive && !(pauseLayout && pauseLayout->getVisible()) &&
+      (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP)) {
+    std::optional<practice::SkinMenuDirection> direction;
+    switch (event.key.key) {
+    case SDLK_UP: direction = practice::SkinMenuDirection::Up; break;
+    case SDLK_DOWN: direction = practice::SkinMenuDirection::Down; break;
+    case SDLK_LEFT: direction = practice::SkinMenuDirection::Left; break;
+    case SDLK_RIGHT: direction = practice::SkinMenuDirection::Right; break;
+    default: break;
+    }
+    if (direction) {
+      practiceMenuInput.setDirectionPressed(*direction, event.type == SDL_EVENT_KEY_DOWN);
+      return {};
+    }
   }
 
   Scene::handleEvents(event);

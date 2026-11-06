@@ -16,6 +16,7 @@
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/JudgementTimingSample.h"
 #include "scene/play/PlayfieldVisualState.h"
+#include "scene/play/GameplaySkinPracticeSongInformation.h"
 #include "scene/play/CompletionCelebrationSound.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
 #include "scene/play/QuickRetry.h"
@@ -270,6 +271,9 @@ public:
       bool ipadGestureReminderEnabled = false;
       int notesDisplayTimingMilliseconds = 0;
       bool notesDisplayTimingAutoAdjust = false;
+      int skinMusicSelectScrollDurationLow = 300;
+      int skinMusicSelectScrollDurationHigh = 50;
+      int skinMusicSelectAnalogTicksPerScroll = 3;
     } settings;
     ReminderSceneManager reminderSceneManager;
     ReminderSceneManager *sceneManager = &reminderSceneManager;
@@ -287,6 +291,7 @@ public:
   std::unique_ptr<FixtureRealtimeSession> realtimeGameplaySession;
   std::optional<gameplay::StartSelectControl> startSelectControl;
   bool practiceMenuActive = false;
+  practice::SkinMenuInputController practiceMenuInput;
   std::unique_ptr<gameplay::PracticeMenuTouchInput> practiceMenuTouchInput;
   std::optional<gameplay::RealtimeTouchLayoutRefreshKey> practiceMenuTouchLayoutKey;
   void clearPracticeMenuInput();
@@ -780,8 +785,11 @@ void testPracticeFirstKeyWaitsOnlyForStartSelectCooldown() {
     scene.state->isPlaying = false;
     scene.startSelectControl.emplace(gameplay::StartSelectControl::Configuration{.keyMode = 7});
     scene.clock = 2'000'000;
+    scene.practiceMenuStartBlockedUntilMicros = 5'000'000;
     scene.consumeStartSelectInput({.control = {.kind = kind}, .pressed = true,
                                    .timestampMicros = scene.clock});
+    require(scene.practiceMenuStartBlockedUntilMicros == 5'000'000,
+            "Start/Select does not shorten a longer skin loading deadline");
     scene.consumePracticeMenuLaneInput(0, true);
     scene.consumePracticeMenuLaneInput(0, false);
     scene.clock += 2'000'000;
@@ -817,9 +825,10 @@ void testRestartStartsPracticeMenuAttempt() {
     require(scene.options.practiceSession->skinMenuState().cursorPosition == 0,
             "analog scratch direction alone does not duplicate a menu tick");
     scene.consumeStartSelectInput({.control = {.kind = replay::LogicalControlKind::ScratchClockwise},
-                                   .analogScratchTicks = 2});
+                                   .analogScratchTicks = 6});
+    scene.update(0);
     require(scene.options.practiceSession->skinMenuState().cursorPosition == 2,
-            "spin scratch advances the menu once per angular tick");
+            "spin scratch advances the menu at the configured coarse tick threshold");
     scene.clock = 100;
     scene.consumePracticeMenuLaneInput(7, true);
     require(!scene.practiceMenuStartRequested,

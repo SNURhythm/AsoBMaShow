@@ -35,11 +35,12 @@ struct PlayfieldPlayTimerAuthority {
   bool active = false;
   long long startMicros = 0;
   // True when gameplayTimeMicros - startMicros is the captured elapsed
-  // domain paired with playtimeMillis. Native practice uses chart time for
-  // both, rather than the upstream frequency-adjusted wall clock.
+  // domain paired with playtimeMillis. Practice encodes a synthetic origin
+  // here to expose the source frequency-adjusted clock without changing
+  // native gameplay/replay chart timestamps.
   bool elapsedMillisExact = false;
   // BMSPlayer.getPlaytime()-equivalent value for ordinary gameplay, or the
-  // selected native practice duration in the paired chart-time domain.
+  // source practice end position plus its tail/margin in the paired domain.
   // No static full-chart duration is a substitute for a practice range.
   std::optional<std::int32_t> playtimeMillis;
 
@@ -376,6 +377,9 @@ struct PlayfieldAuthorityUpdate {
   // true only while the source-shaped settings menu owns the session.
   bool practiceMenuActive = false;
   std::optional<practice::SkinMenuState> practiceMenu;
+  // SongData retains the original chart count while practice's JudgeManager
+  // and visual model use the selected section's playable notes.
+  std::optional<int> originalPracticeTotalNotes;
   // Live gameplay shares static strings across frame copies. Preview/export
   // callers may continue supplying the owning legacy fields above instead.
   std::shared_ptr<const PlayfieldPresentationMetadata> presentationMetadata;
@@ -566,18 +570,35 @@ skinStateTimestampMicros(const PlayfieldVisualState &state,
       state.sceneStartMicros == kPlayfieldTimestampOff) {
     return visualTimestampMicros;
   }
+  constexpr auto maximum = std::numeric_limits<long long>::max();
+  constexpr auto minimum = std::numeric_limits<long long>::min() + 1;
+  long long relative;
   if (state.sceneStartMicros < 0 &&
-      visualTimestampMicros >
-          std::numeric_limits<long long>::max() + state.sceneStartMicros) {
-    return std::numeric_limits<long long>::max();
+      visualTimestampMicros > maximum + state.sceneStartMicros) {
+    relative = maximum;
+  } else if (state.sceneStartMicros > 0 &&
+             visualTimestampMicros <= minimum - 1 + state.sceneStartMicros) {
+    relative = minimum;
+  } else {
+    relative = visualTimestampMicros - state.sceneStartMicros;
   }
-  // Preserve the explicit OFF sentinel for timer consumers.
-  if (state.sceneStartMicros > 0 &&
-      visualTimestampMicros <=
-          std::numeric_limits<long long>::min() + state.sceneStartMicros) {
-    return std::numeric_limits<long long>::min() + 1;
+  if (state.authority.gameplayMode == PlayfieldGameplayMode::Practice &&
+      !state.authority.practiceMenuActive && state.authority.practiceMenu &&
+      state.authority.practiceMenu->frequencyPercent > 0) {
+    // The native clock and event timestamps retain original chart time.
+    // TimerManager's skin clock advances in wall time even when practice
+    // scales the model, so map every animation timestamp into that domain.
+    const long long frequency = state.authority.practiceMenu->frequencyPercent;
+    const long long quotient = relative / frequency;
+    if (quotient > maximum / 100) return maximum;
+    if (quotient < minimum / 100) return minimum;
+    const long long scaled = quotient * 100;
+    const long long remainder = relative % frequency * 100 / frequency;
+    if (remainder > 0 && scaled > maximum - remainder) return maximum;
+    if (remainder < 0 && scaled < minimum - remainder) return minimum;
+    relative = scaled + remainder;
   }
-  return visualTimestampMicros - state.sceneStartMicros;
+  return relative;
 }
 
 [[nodiscard]] inline constexpr long long

@@ -37,7 +37,7 @@ bool prepareRetryChart(const bms_parser::ChartMeta &, const StartOptions &,
                        std::unique_ptr<bms_parser::Chart> &, StartOptions &,
                        std::atomic_bool &);
 
-struct PreparationVisualModel {};
+using PreparationVisualModel = PlayfieldChartVisualModel;
 PreparationVisualModel buildPreparationVisualModel(
     const bms_parser::Chart &, int, std::optional<double> = std::nullopt) { return {}; }
 struct PreparationVisualStore {
@@ -64,6 +64,7 @@ public:
   long long latePoorTiming = 0;
   ScoreProvenance attemptProvenance = ScoreProvenance::Legacy();
   PreparationVisualModel playfieldChartVisualModel;
+  std::optional<int> originalPracticeTotalNotes;
   PreparationVisualStore *playfieldVisualStateStore = nullptr;
   PreparationPresentation *builtInPresentation = nullptr;
   std::unique_ptr<PreparationLaneController> ownedLaneInputController;

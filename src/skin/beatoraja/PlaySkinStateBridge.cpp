@@ -44,6 +44,18 @@ std::int64_t capturedJudgeFastSlowCount(const PlayfieldVisualState &snapshot,
   return fast ? found->second.fast : found->second.slow;
 }
 
+double practiceModelBpm(const PlayfieldVisualState &snapshot, double bpm) {
+  if (snapshot.authority.gameplayMode == PlayfieldGameplayMode::Practice &&
+      !snapshot.authority.practiceMenuActive && snapshot.authority.practiceMenu) {
+    // BMSPlayer scales its model with a float frequency rate before READY.
+    // Native playback keeps the original chart clock and model instead.
+    const float rate =
+        snapshot.authority.practiceMenu->frequencyPercent / 100.0F;
+    return bpm * rate;
+  }
+  return bpm;
+}
+
 const PlayfieldPersistedScoreState *
 capturedPersistedScore(const PlayfieldVisualState &snapshot) {
   return snapshot.authority.persistedScore
@@ -157,8 +169,12 @@ int targetScore(const PlayfieldVisualState &snapshot) {
 
 std::optional<PlayfieldRivalScoreState>
 targetRivalScore(const PlayfieldVisualState &snapshot) {
-  if (usesSkinIrTarget(snapshot.authority) &&
-      snapshot.authority.gameplayMode != PlayfieldGameplayMode::Practice) {
+  // Practice initializes ScoreDataProperty with no rival ScoreData, even
+  // when the selection resource still retains a target from another mode.
+  if (snapshot.authority.gameplayMode == PlayfieldGameplayMode::Practice) {
+    return std::nullopt;
+  }
+  if (usesSkinIrTarget(snapshot.authority)) {
     const int score = targetScore(snapshot);
     // TargetProperty synthesizes only PGREAT/GREAT from EX score. It does
     // not copy the IR record's judgement breakdown or note count.
@@ -473,6 +489,23 @@ std::int64_t saturatingVisualTimestampForGameplayTimestamp(
   return addVisualTimestamp(gameplayTimestampMicros, visual - gameplay);
 }
 
+std::int64_t playTimerStartInSkinClock(const PlayfieldVisualState &snapshot) {
+  if (snapshot.authority.gameplayMode == PlayfieldGameplayMode::Practice) {
+    // Practice's synthetic start already encodes frequency-adjusted elapsed
+    // time. Applying the ordinary event timestamp conversion would scale it
+    // twice, so subtract that elapsed duration directly from the skin clock.
+    const auto elapsed = javaLongSubtract(snapshot.clock.gameplayTimeMicros,
+                                          snapshot.clock.playTimer.startMicros);
+    return std::max(std::numeric_limits<std::int64_t>::min() + 1,
+                    saturatingSubtract(skinStateClockMicros(snapshot), elapsed));
+  }
+  return snapshot.sceneStartMicros == kPlayfieldTimestampOff
+             ? snapshot.clock.playTimer.startMicros
+             : skinStateTimestampMicros(
+                   snapshot, saturatingVisualTimestampForGameplayTimestamp(
+                                 snapshot, snapshot.clock.playTimer.startMicros));
+}
+
 } // namespace
 
 namespace skin {
@@ -662,22 +695,46 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
     return;
   }
 
+  if (snapshot->authority.practiceMenuActive) {
+    // STATE_PRACTICE clears attempt timers once when returning from play,
+    // then runs the two neutral motions while PLAY remains off.
+    if (practicePlayTimerWasActive_) {
+      rhythmTimerStartMicros_ = kPlayfieldTimestampOff;
+      rhythmPreviousClockMicros_.reset();
+      endOfNoteTimerStartMicros_ = kPlayfieldTimestampOff;
+      fadeoutTimerStartMicros_ = kPlayfieldTimestampOff;
+      musicEndTimerStartMicros_ = kPlayfieldTimestampOff;
+      pinnedSwitchTimerStarts_.erase(3);
+      pomyuTimerStarts_.fill(kPlayfieldTimestampOff);
+      pomyuDanceTimerStartMicros_ = kPlayfieldTimestampOff;
+      pomyuLastNotes_ = {};
+    }
+    if (pomyuTimerStarts_[0] == kPlayfieldTimestampOff ||
+        pomyuTimerStarts_[5] == kPlayfieldTimestampOff) {
+      pomyuTimerStarts_[0] = skinStateClockMicros(*snapshot);
+      pomyuTimerStarts_[5] = skinStateClockMicros(*snapshot);
+    }
+    practicePlayTimerWasActive_ = false;
+  } else if (snapshot->authority.gameplayMode == PlayfieldGameplayMode::Practice &&
+             snapshot->clock.playTimer.active) {
+    practicePlayTimerWasActive_ = true;
+  }
+
   // BMSPlayer owns one RhythmTimerProcessor per play session. Its accumulator
   // is updated once per frame, then a single crossed section line restarts
   // TIMER_RHYTHM at TimerManager's current microsecond clock.
   if (snapshot->clock.playTimer.active) {
     const std::int64_t now = skinStateClockMicros(*snapshot);
     if (!rhythmPreviousClockMicros_.has_value()) {
-      rhythmTimerStartMicros_ = skinStateTimestampMicros(
-          *snapshot, saturatingVisualTimestampForGameplayTimestamp(
-                         *snapshot, snapshot->clock.playTimer.startMicros));
+      rhythmTimerStartMicros_ = playTimerStartInSkinClock(*snapshot);
       rhythmPreviousClockMicros_ = now;
     } else {
       const std::int64_t delta =
           javaLongSubtract(now, *rhythmPreviousClockMicros_);
       const double sourceIncrement =
           static_cast<double>(delta) *
-          (100.0 - snapshot->authority.currentBpm * 100.0 / 60.0) / 100.0;
+          (100.0 - practiceModelBpm(*snapshot, snapshot->authority.currentBpm) *
+                       100.0 / 60.0) / 100.0;
       rhythmAccumulatorMicros_ = javaDoubleToLong(
           static_cast<double>(rhythmAccumulatorMicros_) + sourceIncrement);
       rhythmTimerStartMicros_ = rhythmAccumulatorMicros_;
@@ -695,7 +752,15 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
           context_.chartModel.timelines[rhythmSectionIndex_];
       // The source retains only section lines and evaluates one cursor entry
       // per update, even after a frame crosses multiple measures.
-      if (timeline.sectionLine && timeline.timeMicros <= playElapsedMicros) {
+      const int frequency = snapshot->authority.practiceMenu
+                                ? snapshot->authority.practiceMenu->frequencyPercent
+                                : 100;
+      // RhythmTimerProcessor intentionally performs integer 100 / freq
+      // before multiplying. Preserve that source quirk for authored timing.
+      const auto sectionTime = std::bit_cast<std::int64_t>(
+          static_cast<std::uint64_t>(timeline.timeMicros) *
+          static_cast<std::uint64_t>(100 / std::max(1, frequency)));
+      if (timeline.sectionLine && sectionTime <= playElapsedMicros) {
         ++rhythmSectionIndex_;
         rhythmTimerStartMicros_ = now;
         rhythmAccumulatorMicros_ = now;
@@ -767,7 +832,8 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
       pinnedSwitchTimerStarts_.erase(1);
     }
   }
-  if (snapshot->authority.failureAnimationActive) {
+  if (!snapshot->authority.practiceMenuActive &&
+      snapshot->authority.failureAnimationActive) {
     // BMSPlayer enters STATE_FAILED and calls TimerManager.setTimerOn here;
     // retain the first authoritative presentation frame for the animation.
     pinnedSwitchTimerStarts_.try_emplace(3, skinStateClockMicros(*snapshot));
@@ -1849,12 +1915,16 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     return {.value = gaugeTypeIndex(snapshot->authority.gaugeType) >= 3,
             .supported = true};
   case 80:
-    return {.value = snapshot->authority.loadingState ==
-                         PlayfieldLoadingState::Loading,
+    // Practice enters STATE_PRACTICE directly, while media can still load.
+    // These options describe STATE_PRELOAD, not media readiness.
+    return {.value = !snapshot->authority.practiceMenuActive &&
+                         snapshot->authority.loadingState ==
+                             PlayfieldLoadingState::Loading,
             .supported = true};
   case 81:
-    return {.value = snapshot->authority.loadingState ==
-                         PlayfieldLoadingState::Loaded,
+    return {.value = snapshot->authority.practiceMenuActive ||
+                         snapshot->authority.loadingState ==
+                             PlayfieldLoadingState::Loaded,
             .supported = true};
   case 84:
     return {.value = snapshot->authority.gameplayMode ==
@@ -2409,7 +2479,8 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
       // ValueType.duration_green then applies its integer `* 3 / 5`
       // conversion afterwards.
       const auto current = gameplay_hispeed::liveDurationMilliseconds(
-          snapshot->authority.currentBpm, builtInTraversal_->configuredHispeed,
+          practiceModelBpm(*snapshot, snapshot->authority.currentBpm),
+          builtInTraversal_->configuredHispeed,
           snapshot->authority.laneCoverPercent,
           snapshot->authority.laneCoverEnabled,
           snapshot->authority.currentScrollRate,
@@ -2429,7 +2500,11 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
       case 0:
         return snapshot->authority.currentBpm;
       case 1:
-        return context_.chartModel.staticMetadata.mainBpm;
+        // Practice retains SongInformation's original main BPM for selector
+        // 92, while LaneRenderer derives this duration from the section model.
+        return snapshot->authority.originalPracticeTotalNotes.has_value()
+                   ? context_.chartModel.skinGameplayGraph.mainBpm
+                   : context_.chartModel.staticMetadata.mainBpm;
       case 2:
         return context_.chartModel.staticMetadata.minimumBpm;
       default:
@@ -2439,7 +2514,7 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     // IntegerPropertyFactory.createDurationLanecoverProperty uses the raw
     // PlayConfig lane-cover value for this family, independently of whether
     // the lane cover is currently enabled for current-duration rendering.
-    return durationFor(bpm, cover, green);
+    return durationFor(practiceModelBpm(*snapshot, bpm), cover, green);
   };
   if (const auto duration = durationValue()) {
     return {.value = *duration, .supported = true};
@@ -2608,7 +2683,8 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     return {.value = capturedJudgeCount(*snapshot, Poor),
             .supported = true};
   case 160:
-    return {.value = static_cast<std::int64_t>(snapshot->authority.currentBpm),
+    return {.value = javaDoubleToInt(
+                practiceModelBpm(*snapshot, snapshot->authority.currentBpm)),
             .supported = true};
   case 161:
   case 162: {
@@ -2638,7 +2714,8 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   }
   case 74:
   case 106:
-    return {.value = context_.chartModel.staticMetadata.totalNotes,
+    return {.value = snapshot->authority.originalPracticeTotalNotes.value_or(
+                context_.chartModel.staticMetadata.totalNotes),
             .supported = true};
   case 90:
     return {.value =
@@ -3514,13 +3591,7 @@ std::int64_t PlaySkinStateBridge::timerProperty(
   case 41:
     return snapshot->clock.playTimer.active &&
                    snapshot->clock.playTimer.elapsedMillisExact
-               ? (snapshot->sceneStartMicros == kPlayfieldTimestampOff
-                      ? snapshot->clock.playTimer.startMicros
-                      : skinStateTimestampMicros(
-                            *snapshot,
-                            saturatingVisualTimestampForGameplayTimestamp(
-                                *snapshot,
-                                snapshot->clock.playTimer.startMicros)))
+               ? playTimerStartInSkinClock(*snapshot)
                : INT64_MIN;
   case 46:
   case 47:
@@ -3688,6 +3759,7 @@ SkinPracticeStateView PlaySkinStateBridge::practiceState() const noexcept {
       .horizontalInputMode = menu.horizontalInputMode,
       .inputTurbo = menu.inputTurbo,
       .keyMode = context_.chartModel.keyCount,
+      .popnFiveKeys = context_.chartModel.popnFiveKeys,
       .cursorPosition = menu.cursorPosition,
       .graphType = menu.graphType,
       .startTimeMillis = menu.startTimeMillis,

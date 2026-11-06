@@ -1919,7 +1919,8 @@ PracticeLoweringResult lowerPracticeLegacy(
     const SkinObjectDefinition &object, const SkinDestination &destination,
     const AuthoredDestinationGeometry &region,
     const SkinPracticeStateView &practice, std::size_t maximumGlyphs,
-    std::size_t maximumCommands, std::size_t maximumPrimitiveVertices) {
+    std::size_t maximumCommands, std::size_t maximumPrimitiveVertices,
+    SkinGeneratedTextureCache &cache) {
   PracticeLoweringResult result;
   if (!practice.supported) {
     return result;
@@ -2013,7 +2014,7 @@ PracticeLoweringResult lowerPracticeLegacy(
 
   std::string helpLine1;
   std::string helpLine2;
-  if (practice.keyMode == 9) {
+  if (practice.keyMode == 9 && !practice.popnFiveKeys) {
     helpLine1 = "KEYS: 2/8=UP, 3/7=DOWN, 4=LEFT, 6=RIGHT,";
     helpLine2 = "5=TURBO";
   } else if (practice.keyMode == 24 || practice.keyMode == 48) {
@@ -2064,9 +2065,12 @@ PracticeLoweringResult lowerPracticeLegacy(
   const std::int64_t playTimerStart =
       inputs.state.timerProperty(SkinBuiltinPropertySelector{41});
   if (playTimerStart != INT64_MIN) {
-    currentMillis = (inputs.visualTimeMicros / 1'000 -
-                     playTimerStart / 1'000) *
-                    practice.frequencyPercent / 100;
+    currentMillis = inputs.visualTimeMicros / 1'000 - playTimerStart / 1'000;
+    if (practice.frequencyPercent > 0) {
+      const float scaled = static_cast<float>(*currentMillis) *
+                           (practice.frequencyPercent / 100.0F);
+      currentMillis = static_cast<std::int64_t>(scaled);
+    }
   }
   const std::size_t remainingCommands =
       maximumCommands - std::min(maximumCommands, result.commands.size());
@@ -2077,13 +2081,18 @@ PracticeLoweringResult lowerPracticeLegacy(
        .state = inputs.state.gameplayGraphState(),
        .geometry = graphGeometry,
        .viewport = inputs.viewport,
-       .pmsMode = practice.keyMode == 9,
+       .pmsMode = practice.keyMode == 9 && !practice.popnFiveKeys,
        .elapsedMillis = inputs.visualTimeMicros / 1'000,
-       .startMillis = practice.startTimeMillis,
-       .endMillis = practice.endTimeMillis,
+       .startMillis = practice.startTimeMillis >= 0
+                          ? std::optional<std::int64_t>(practice.startTimeMillis)
+                          : std::nullopt,
+       .endMillis = practice.endTimeMillis >= 0
+                        ? std::optional<std::int64_t>(practice.endTimeMillis)
+                        : std::nullopt,
        .currentMillis = currentMillis,
        .maximumCommands = remainingCommands,
-       .maximumPrimitiveVertices = maximumPrimitiveVertices});
+       .maximumPrimitiveVertices = maximumPrimitiveVertices,
+       .cache = &cache});
   if (lowered.failure) {
     result.failure = std::move(lowered.failure);
     result.commands.clear();
@@ -4564,20 +4573,6 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             std::make_move_iterator(lowered.interactions.end()));
         continue;
       }
-      if (const auto *practiceObject =
-              std::get_if<SkinPracticeObject>(&object->payload);
-          practiceObject != nullptr && practiceObject->visibleItems > 0) {
-        if (!inputs.state.stagePracticeVisibleItemCount(
-                practiceObject->visibleItems)) {
-          if (reportObjectFailure(
-                  result, *object,
-                  diagnostic("skin.renderer.practice.mutation",
-                             "Practice visible-row count could not be staged."))) {
-            return result;
-          }
-        }
-        continue;
-      }
       // JsonSkinLoader removes ordinary empty-dst SkinObjects during
       // validation. JsonPlaySkinObjectLoader has two exceptions: SkinNote
       // owns independent per-lane note.dst geometry, while SkinJudge keeps
@@ -4617,6 +4612,33 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         }
       }
       if (rejectedByConfiguredOption) {
+        continue;
+      }
+      if (const auto *practiceObject =
+              std::get_if<SkinPracticeObject>(&object->payload);
+          practiceObject != nullptr && practiceObject->visibleItems > 0) {
+        // SkinPractice.prepare calls super.prepare before updating the menu,
+        // even when a dynamic condition or timer hides the object. Static
+        // removal above still prevents preparation entirely.
+        auto resolved = resolveDestination(inputs, lookupIndex,
+                                            destination.presentation);
+        bool failed = false;
+        for (auto &failure : resolved.failures) {
+          if (reportObjectFailure(result, *object, std::move(failure))) {
+            return result;
+          }
+          failed = true;
+        }
+        if (failed) continue;
+        if (!inputs.state.stagePracticeVisibleItemCount(
+                practiceObject->visibleItems)) {
+          if (reportObjectFailure(
+                  result, *object,
+                  diagnostic("skin.renderer.practice.mutation",
+                             "Practice visible-row count could not be staged."))) {
+            return result;
+          }
+        }
         continue;
       }
       const auto *image = std::get_if<SkinImageObject>(&object->payload);
@@ -5035,7 +5057,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             inputs.state.practiceState(),
             skinFrameMaximumGlyphInstances(inputs) - glyphInstances,
             skinFrameMaximumCommands(inputs) - buffer.commands.size(),
-            skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices);
+            skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+            generatedTextureCache_);
         if (lowered.failure) {
           if (reportObjectFailure(result, *object, *lowered.failure)) {
             return result;
@@ -5292,7 +5315,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .state = inputs.state.gameplayGraphState(),
              .geometry = *evaluated.geometry,
              .viewport = inputs.viewport,
-             .pmsMode = inputs.model.model.header.type == 4,
+             .pmsMode = inputs.model.model.header.type == 4 &&
+                        !(practice.practiceMode && practice.popnFiveKeys),
              .elapsedMillis = inputs.visualTimeMicros / 1000,
              .startMillis = practiceActive && practice.startTimeMillis >= 0
                                 ? std::optional<std::int64_t>(practice.startTimeMillis)
@@ -6015,13 +6039,17 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
 
       if (bga) {
         const auto practiceState = inputs.state.practiceState();
-        if (practiceState.practiceMode && !modelHasPracticeObject) {
+        if (practiceState.practiceMode) {
+          // SkinBGA never draws media in practice mode. An authored Practice
+          // owns the panel even when its destination is hidden or removed.
+          if (modelHasPracticeObject) continue;
           auto lowered = lowerPracticeLegacy(
               inputs, lookupIndex, *object, destination, *evaluated.geometry,
               practiceState,
               skinFrameMaximumGlyphInstances(inputs) - glyphInstances,
               skinFrameMaximumCommands(inputs) - buffer.commands.size(),
-              skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices);
+              skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+              generatedTextureCache_);
           if (lowered.failure) {
             if (reportObjectFailure(result, *object, *lowered.failure)) {
               return result;
@@ -6521,7 +6549,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             *resolved.geometry, framePracticeState,
             skinFrameMaximumGlyphInstances(inputs) - glyphInstances,
             skinFrameMaximumCommands(inputs) - buffer.commands.size(),
-            skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices);
+            skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices,
+            generatedTextureCache_);
         if (lowered.failure) {
           if (reportObjectFailure(result, *fallback.object, *lowered.failure)) {
             return result;

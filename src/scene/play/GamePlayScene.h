@@ -35,6 +35,7 @@
 #include "../../input/InputTypes.h"
 #include "../../input/VirtualControllerConfig.h"
 #include "../../practice/PracticeResultFlow.h"
+#include "../../practice/PracticeConfiguration.h"
 #include "../../replay/ChartReplayCapture.h"
 #include "../../replay/ReplayInputRecorder.h"
 #include "../../skin/SkinPresentationTypes.h"
@@ -438,6 +439,8 @@ private:
   size_t replayLaneCoverCursor = 0;
   bool playbackInitializationFailed = false;
   bool practiceMenuActive = false;
+  std::optional<int> originalPracticeTotalNotes;
+  practice::SkinMenuInputController practiceMenuInput;
   bool practiceMenuStartRequested = false;
   long long practiceMenuStartBlockedUntilMicros = 0;
   long long practiceMenuPresentationStartMicros = 0;

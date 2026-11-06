@@ -2164,6 +2164,31 @@ void testPracticePositiveViewportStagesMutationAndDrawsNothing() {
              state.stagedPracticeVisibleItemCount == 7,
          "positive SkinPractice stages its retained viewport update and "
          "emits no draw command");
+
+  model.model.booleanProperties.push_back(
+      {.id = SkinBooleanPropertyId{1},
+       .source = SkinBuiltinPropertySelector{1080}});
+  model.model.destinations.front().presentation.conditions = {
+      SkinBooleanPropertyId{1}};
+  state.booleanResults[1080] = {.value = false, .supported = true};
+  state.stagedPracticeVisibleItemCount.reset();
+  const auto hidden = evaluate(renderer, runtime, model, resources, state, 2);
+  expect(hidden.submitReady && state.booleanCalls == 1 &&
+             state.stagedPracticeVisibleItemCount == 7,
+         "positive Practice prepares runtime conditions before staging its "
+         "viewport, including when hidden");
+
+  state.stagedPracticeVisibleItemCount.reset();
+  model.model.destinations.front().presentation.conditions = {9999};
+  const auto disabled = evaluate(renderer, runtime, model, resources, state, 3);
+  expect(disabled.submitReady && !state.stagedPracticeVisibleItemCount,
+         "statically removed Practice does not change the viewport");
+
+  model.model.destinations.front().presentation.conditions.clear();
+  model.model.destinations.front().presentation.frames.clear();
+  const auto empty = evaluate(renderer, runtime, model, resources, state, 4);
+  expect(empty.submitReady && !state.stagedPracticeVisibleItemCount,
+         "Practice with no destination frames is removed before preparation");
 }
 
 void testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph() {
@@ -2271,6 +2296,61 @@ void testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph() {
          "destination region");
   expect(!state.stagedPracticeVisibleItemCount.has_value(),
          "legacy fallback does not mutate the retained modern viewport");
+
+  state.practiceResult.startTimeMillis = -1;
+  state.practiceResult.endTimeMillis = -1;
+  state.practiceResult.frequencyPercent = 0;
+  const auto unscaled =
+      evaluate(renderer, runtime, model, resources, state, 2, 2'100'000);
+  const SkinGeneratedTexturedQuadCommand *cursor = nullptr;
+  if (unscaled.submitReady) {
+    for (const auto &command : unscaled.submitReady->commands) {
+      const auto *texture =
+          std::get_if<SkinGeneratedTexturedQuadCommand>(&command.payload);
+      if (texture && texture->key.layer == SkinGeneratedTextureLayer::Cursor)
+        cursor = texture;
+    }
+  }
+  expect(cursor && cursor->texture.rgba &&
+             (*cursor->texture.rgba)[3] == 0 &&
+             (*cursor->texture.rgba)[8 * 4 + 3] == 255,
+         "legacy graph omits negative range markers and leaves the play cursor "
+         "unscaled for nonpositive frequency");
+}
+
+void testLegacyPracticeDistinguishesPopnFiveKeyHelp() {
+  RuntimeHarness runtime;
+  FakeResources resources;
+  resources.addTextAtlas(1, practiceAsciiAtlas());
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1,
+                          .payload = SkinPracticeObject{.visibleItems = 0},
+                          .critical = true}};
+  auto presented = destination(1, 1, 0.0);
+  presented.presentation.loop = 0;
+  model.model.destinations.push_back(presented);
+  for (const bool fiveKeys : {false, true}) {
+    Skin2DRenderer renderer;
+    FakeState state;
+    state.practiceResult.supported = true;
+    state.practiceResult.practiceMode = true;
+    state.practiceResult.active = true;
+    state.practiceResult.keyMode = 9;
+    state.practiceResult.popnFiveKeys = fiveKeys;
+    const auto frame = evaluate(renderer, runtime, model, resources, state, fiveKeys ? 2 : 1,
+                                 1'000'000);
+    bool foundHelp = false;
+    const std::string expected = fiveKeys
+        ? "KEYS: SCR=UP/DOWN, 2+SCR=LEFT/RIGHT, 4=TURBO"
+        : "KEYS: 2/8=UP, 3/7=DOWN, 4=LEFT, 6=RIGHT,";
+    if (frame.submitReady) {
+      for (const auto &command : frame.submitReady->commands) {
+        foundHelp = foundHelp || glyphRunText(command) == expected;
+      }
+    }
+    expect(frame.submitReady && foundHelp,
+           "POPN 5K uses normal key help while POPN 9K keeps its dedicated help");
+  }
 }
 
 void testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback() {
@@ -2363,6 +2443,98 @@ void testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback() {
   state.practiceResult.practiceMode = false;
   expect(labelCount(6) == 0,
          "ordinary gameplay never resurrects the practice panel");
+}
+
+void testLegacyPracticeCachesEachGraphTypeIndependently() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.practiceResult.supported = true;
+  state.practiceResult.practiceMode = true;
+  std::array<SkinNormalDistribution, 10> normal{};
+  std::array<SkinJudgeDistribution, 10> judge{};
+  normal[0][0] = 1;
+  judge[0][1] = 1;
+  state.graphResult.normalDistribution = normal;
+  state.graphResult.judgementDistribution = judge;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1, .payload = SkinBgaObject{},
+                          .critical = true}};
+  auto presented = destination(1, 1, 0.0);
+  presented.presentation.loop = 0;
+  model.model.destinations.push_back(presented);
+  const auto first = evaluate(renderer, runtime, model, resources, state, 1,
+                              1'000'000);
+  const auto steady = evaluate(renderer, runtime, model, resources, state, 2,
+                               1'016'000);
+  const auto cached = renderer.generatedTextureCacheStatsForTesting();
+  expect(first.submitReady && steady.submitReady &&
+             cached.rasterizations == 3 && cached.reuses == 3,
+         "legacy Practice retains its graph textures between source update ticks");
+  state.practiceResult.graphType = 1;
+  const auto changed = evaluate(renderer, runtime, model, resources, state, 3,
+                                1'020'000);
+  const auto shape = [](const SkinFrameEvaluationResult &frame) {
+    const SkinGeneratedTexturedQuadCommand *result = nullptr;
+    if (frame.submitReady) {
+      for (const auto &command : frame.submitReady->commands) {
+        const auto *texture =
+            std::get_if<SkinGeneratedTexturedQuadCommand>(&command.payload);
+        if (texture && texture->key.layer == SkinGeneratedTextureLayer::Shape)
+          result = texture;
+      }
+    }
+    return result;
+  };
+  const auto *normalShape = shape(first);
+  const auto *judgeShape = shape(changed);
+  expect(normalShape && judgeShape && normalShape->key != judgeShape->key &&
+             *normalShape->texture.rgba != *judgeShape->texture.rgba,
+         "changing legacy graph type immediately selects an independent texture");
+  state.practiceResult.graphType = 0;
+  const auto restored = evaluate(renderer, runtime, model, resources, state, 4,
+                                 1'030'000);
+  const auto *restoredShape = shape(restored);
+  expect(normalShape && restoredShape &&
+             normalShape->key == restoredShape->key &&
+             normalShape->texture.rgba == restoredShape->texture.rgba,
+         "returning to the normal graph reuses its retained texture");
+}
+
+void testAuthoredPracticeSuppressesBgaThroughoutPracticeMode() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  state.practiceResult.supported = true;
+  state.practiceResult.practiceMode = true;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {
+      {.id = 1, .payload = SkinBgaObject{}, .critical = true},
+      {.id = 2, .payload = SkinPracticeObject{.visibleItems = 10},
+       .critical = true}};
+  model.model.destinations.push_back(destination(1, 1, 0.0));
+  // PlaySkin retains its Practice reference even when the object is hidden
+  // or removed for an empty destination.
+  auto hiddenPractice = destination(2, 2, 0.0);
+  hiddenPractice.presentation.frames.clear();
+  model.model.destinations.push_back(hiddenPractice);
+  for (const bool active : {true, false}) {
+    state.practiceResult.active = active;
+    const auto frame = evaluate(renderer, runtime, model, resources, state,
+                                active ? 1 : 2);
+    expect(frame.submitReady && frame.submitReady->commands.empty() &&
+               frame.diagnostics.empty(),
+           "authored Practice suppresses both BGA media and legacy fallback "
+           "in setup and playback");
+  }
+  state.practiceResult.practiceMode = false;
+  const auto ordinary = evaluate(renderer, runtime, model, resources, state, 3);
+  expect(ordinary.submitReady && ordinary.submitReady->commands.size() == 1 &&
+             std::holds_alternative<SkinBgaCommand>(
+                 ordinary.submitReady->commands.front().payload),
+         "an authored Practice does not suppress ordinary gameplay BGA");
 }
 
 SkinObjectDefinition textObject(SkinObjectId id, bool critical,
@@ -7888,7 +8060,10 @@ int main(int argc, char **argv) {
   testLr2ImageTextUsesHeightMarginAlignmentShrinkAndMissingNoDraw();
   testPracticePositiveViewportStagesMutationAndDrawsNothing();
   testPracticeZeroRendersPinnedLegacyFallbackAndSelectedGraph();
+  testLegacyPracticeDistinguishesPopnFiveKeyHelp();
   testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback();
+  testAuthoredPracticeSuppressesBgaThroughoutPracticeMode();
+  testLegacyPracticeCachesEachGraphTypeIndependently();
   testTextVerticalPlacementMatchesPinnedBitmapFontBaseline();
   testMissingTextGlyphHonorsCriticalityWithoutPartialCommands();
   testSelectorCompatibilitySkipsTransientlyMissingGlyphs();

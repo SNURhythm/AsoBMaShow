@@ -110,7 +110,8 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
        .verticalFlip = true,
        .diagnosticObject = "Note distribution background",
        .cache = request.cache,
-       .contentRevision = 1});
+       .contentRevision = 1,
+       .variant = static_cast<std::uint8_t>(request.graph.type)});
   if (auto *pixmap = background.pixmap(); pixmap != nullptr) {
     pixmap->clear(0U);
     if (!request.graph.backgroundTextureOff) {
@@ -160,7 +161,8 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
        .minimumUpdateIntervalMillis =
            request.graph.type == SkinNoteDistributionGraphType::Normal
                ? 0
-               : 750});
+               : 750,
+       .variant = static_cast<std::uint8_t>(request.graph.type)});
   if (auto *pixmap = shape.pixmap(); pixmap != nullptr) {
     const auto type = static_cast<std::size_t>(request.graph.type);
     const auto &palette = request.pmsMode ? kPmsColorsAbgr[type]
@@ -204,7 +206,8 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
        .contentRevision = static_cast<std::uint64_t>(
                               std::max<std::int64_t>(0,
                                   request.elapsedMillis / 50)) + 1U,
-       .minimumUpdateIntervalMillis = 50});
+       .minimumUpdateIntervalMillis = 50,
+       .variant = static_cast<std::uint8_t>(request.graph.type)});
   if (auto *pixmap = cursor.pixmap(); pixmap != nullptr) {
     const auto drawCursor = [&](std::optional<std::int64_t> millis,
                                 std::uint32_t color) {
