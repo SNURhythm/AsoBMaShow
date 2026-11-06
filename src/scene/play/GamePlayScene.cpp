@@ -17,6 +17,7 @@
 #include "GamePlayStartup.h"
 #include "GuidedAccessButtonCue.h"
 #include "GamePlayTiming.h"
+#include "GameplaySkinPracticeClock.h"
 #include "JudgementTimingSample.h"
 #include "PracticeNoteFinalizer.h"
 #include "../../ChartPlaybackDuration.h"
@@ -6765,7 +6766,7 @@ void GamePlayScene::capturePlayfieldVisualState(
     playfieldVisualStateStore->setNoteStates(std::move(noteStates));
   }
 
-  const PlayfieldFrameClock frameClock =
+  PlayfieldFrameClock frameClock =
       {
           .serial = ++playfieldFrameSerial,
           .visualTimeMicros = visualTimeMicros,
@@ -6782,6 +6783,18 @@ void GamePlayScene::capturePlayfieldVisualState(
                       chart, options, playfieldChartVisualModel.staticMetadata.lastEventTimeMicros),
               },
       };
+  if (options.practiceSession != nullptr || options.practiceMode) {
+    const auto *configuration = options.practiceSession != nullptr
+                                    ? &options.practiceSession->configuration()
+                                    : nullptr;
+    frameClock.playTimer = practiceSkinPlayTimer(
+        gameplayTimeMicros,
+        configuration != nullptr ? configuration->startMicros
+                                 : getStartPositionMicros(),
+        configuration != nullptr ? configuration->endMicros
+                                 : chart->Meta.PlayLength,
+        practiceMenuActive);
+  }
   capturedPlayfieldVisualState =
       selectedSkinActive
           ? playfieldVisualStateStore->captureForPresentation(

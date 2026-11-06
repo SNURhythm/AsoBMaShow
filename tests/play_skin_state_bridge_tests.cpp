@@ -1,5 +1,6 @@
 #include "skin/beatoraja/PlaySkinStateBridge.h"
 #include "scene/SettingsScenePreviewAuthority.h"
+#include "scene/play/GameplaySkinPracticeClock.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
@@ -3090,6 +3091,54 @@ void testScoreAndComboTimersUseCapturedGameplayState() {
   bridge.discardFrame();
 }
 
+void testPracticeSuppliesGameplayTimeProperties() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  std::uint64_t serial = 0;
+  // Menu, count-in, attempt start, halfway, end, and loop restart.
+  for (const auto [time, menuActive] : std::array{
+           std::pair{30'000'000LL, true}, std::pair{29'000'000LL, false},
+           std::pair{30'000'000LL, false}, std::pair{45'000'000LL, false},
+           std::pair{60'000'000LL, false}, std::pair{30'000'000LL, false}}) {
+    auto state = stateAt(++serial);
+    state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+    state.clock.gameplayTimeMicros = time;
+    state.clock.playTimer =
+        practiceSkinPlayTimer(time, 30'000'000, 60'000'000, menuActive);
+    bridge.beginFrame(state, projectionAt(serial));
+    for (const int id : {161, 162, 163, 164}) {
+      expect(bridge.integerProperty({id}).supported,
+             "practice elapsed and remaining numbers must not reject the skin");
+    }
+    const auto progress = bridge.floatProperty({6});
+    expect(progress.supported &&
+               std::abs(progress.value -
+                        std::clamp((time - 30'000'000) / 35'000'000.0, 0.0, 1.0)) < 0.000001,
+           "practice progress follows the selected range and resets each loop");
+    expect(bridge.integerProperty({162}).value ==
+               std::max(0LL, time - 30'000'000) / 1'000'000,
+           "practice elapsed seconds start at the selected range");
+    expect(bridge.integerProperty({164}).value ==
+               (36'000'000 - std::max(0LL, time - 30'000'000)) / 1'000'000,
+           "practice remaining time uses the range and standard skin end margin");
+    expect(bridge.floatProperty({101}).supported &&
+               bridge.floatProperty({101}).value == progress.value,
+           "both song-progress selectors are supported in practice");
+    expect((bridge.timerProperty({41}) != kPlayfieldTimestampOff) ==
+               (!menuActive && time >= 30'000'000),
+           "practice play timer stays off in the menu and count-in");
+    expect(bridge.timerProperty({143}) == kPlayfieldTimestampOff,
+           "practice end-of-notes animation does not start before the range ends");
+    bridge.discardFrame();
+  }
+}
+
 void testSettingsPreviewSuppliesGameplayTimeProperties() {
   PlayfieldChartVisualModel chart;
   ValidatedBeatorajaSkinModel model;
@@ -4495,6 +4544,7 @@ int main() {
   testIrTargetsUseCompleteRankingAndPinnedSelection();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
+  testPracticeSuppliesGameplayTimeProperties();
   testSettingsPreviewSuppliesGameplayTimeProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();

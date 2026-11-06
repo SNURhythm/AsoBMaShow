@@ -34,13 +34,13 @@
 struct PlayfieldPlayTimerAuthority {
   bool active = false;
   long long startMicros = 0;
-  // True only when gameplayTimeMicros - startMicros reproduces the pinned
-  // TimerManager elapsed-millisecond domain. Practice's frequency-adjusted
-  // lead-in has no equivalent Aso clock authority yet.
+  // True when gameplayTimeMicros - startMicros is the captured elapsed
+  // domain paired with playtimeMillis. Native practice uses chart time for
+  // both, rather than the upstream frequency-adjusted wall clock.
   bool elapsedMillisExact = false;
-  // Exact BMSPlayer.getPlaytime()-equivalent value when the session can
-  // capture a paired elapsed clock. No static chart duration is a substitute:
-  // manual, autoplay, and practice have distinct upstream formulas.
+  // BMSPlayer.getPlaytime()-equivalent value for ordinary gameplay, or the
+  // selected native practice duration in the paired chart-time domain.
+  // No static full-chart duration is a substitute for a practice range.
   std::optional<std::int32_t> playtimeMillis;
 
   bool operator==(const PlayfieldPlayTimerAuthority &) const = default;
