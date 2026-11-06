@@ -1,0 +1,8 @@
+# Model-free authoring route for pinned Earshot 0.4.0; Python 3.12.
+numpy==2.5.4
+scipy==1.18.1
+soundfile==0.14.0
+pyloudnorm==0.2.0
+numba==0.68.1
+fonttools==4.68.0
+brotli==1.2.1
