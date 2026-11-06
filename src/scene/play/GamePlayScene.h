@@ -4,6 +4,7 @@
 
 #pragma once
 #include "QuickRetry.h"
+#include "CompletionCelebrationSound.h"
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayData.h"
@@ -130,6 +131,11 @@ private:
   void playGuidedAccessChime();
   void stopGuidedAccessChime(bool release = false);
   std::optional<audio::SkinSoundHandle> guidedAccessChime;
+  void prepareCompletionSounds();
+  void stopCompletionSounds(bool release = false);
+  void playCompletionSound(bool builtInPresented);
+  std::array<std::optional<audio::SkinSoundHandle>, 3> completionSounds;
+  completion_celebration::SoundTrigger completionSoundTrigger;
   gameplay::GuidedAccessReminder guidedAccessReminder;
   bool guidedAccessReminderPending = false;
   bool guidedAccessReminderExiting = false;
@@ -147,6 +153,8 @@ private:
   TextView *guidedAccessButtonCheck = nullptr;
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
+  bool retainRealtimeCompletionFeedback(long long gameplayTimeMicros);
+  void transferRealtimeGameplayResult(bool transferReplay);
   void setRealtimeGameplayIngressEnabled(bool enabled);
   void drainRealtimeTouchSamples(
       std::optional<long long> cancelPresentationAtSteadyMicros =

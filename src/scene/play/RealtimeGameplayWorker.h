@@ -237,16 +237,18 @@ public:
   bool requestSuspend() noexcept;
   bool suspend();
   bool resume();
+  bool completeChartWhileSuspended(std::int64_t songTimeMicros);
   bool enqueueInput(const RealtimeGameplayInput &input) noexcept;
   [[nodiscard]] SnapshotLease acquireLatestSnapshot() const noexcept;
   [[nodiscard]] RealtimeGameplayFault fault() const noexcept;
   [[nodiscard]] bool running() const noexcept;
+  // Owner-thread reads require stop() or an acknowledged suspend().
   [[nodiscard]] std::vector<GameplayReplayEvent>
-  copyReplayEventsAfterStop() const;
+  copyReplayEventsWhileQuiescent() const;
   [[nodiscard]] std::optional<std::vector<replay::InputTransition>>
-  copyAcceptedReplayInputAfterStop() const;
-  [[nodiscard]] std::vector<float> copyGaugeHistoryAfterStop() const;
-  [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesAfterStop() const;
+  copyAcceptedReplayInputWhileQuiescent() const;
+  [[nodiscard]] std::vector<float> copyGaugeHistoryWhileQuiescent() const;
+  [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesWhileQuiescent() const;
 
 private:
   static constexpr std::size_t kOwnedInputSourceCount = 3;

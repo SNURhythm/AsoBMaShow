@@ -1140,6 +1140,7 @@ struct GamePlayScene::RealtimeGameplaySession {
   gameplay::RealtimeTouchHitCaptureTracker rawHitCaptures;
   std::atomic<std::uint64_t> requestedHitCaptureReset{0};
   std::uint64_t appliedRawHitCaptureReset = 0;
+  bool resultTransferred = false;
   std::uint64_t appliedSnapshotGeneration = 0;
   std::uint64_t appliedNoteRevision = 0;
   std::uint64_t appliedGraphJudgementRevision = 0;
@@ -3012,7 +3013,7 @@ bool GamePlayScene::drainRealtimeInputInterruption() {
     session.inputInterrupted.store(false, std::memory_order_release);
   }
   setRealtimeGameplayIngressEnabled(!context.appInBackground.load(std::memory_order_acquire) &&
-      state != nullptr && state->isPlaying && !state->isEnding &&
+      state != nullptr && state->isPlaying && (!state->isEnding || naturalResultDelay) &&
       !context.jukebox.isPaused() && (pauseLayout == nullptr || !pauseLayout->getVisible()));
   SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "Gameplay input recovered; playback state unchanged.");
   return true;
@@ -3346,6 +3347,70 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
   updateLaneStateText();
 }
 
+bool GamePlayScene::retainRealtimeCompletionFeedback(long long gameplayTimeMicros) {
+  if (!realtimeGameplayAuthorityActive()) return true;
+  auto &worker = *realtimeGameplaySession->worker;
+  // Capture the final score/replay without tearing down physical/touch ownership.
+  // The completed simulation now accepts only beam feedback and keysounds.
+  if (!worker.suspend() || !worker.completeChartWhileSuspended(gameplayTimeMicros)) return false;
+  syncRealtimeGameplaySnapshot();
+  transferRealtimeGameplayResult(true);
+  return worker.resume();
+}
+
+void GamePlayScene::transferRealtimeGameplayResult(bool transferReplay) {
+  auto &session = *realtimeGameplaySession;
+  if (session.resultTransferred) return;
+  if (state != nullptr) {
+    state->gaugeHistory = session.worker->copyGaugeHistoryWhileQuiescent();
+    state->gaugeHistories = session.worker->copyGaugeHistoriesWhileQuiescent();
+  }
+
+  if (transferReplay) {
+    if (modernReplayInputRecorder != nullptr) {
+      completedModernReplayInput =
+          session.worker->copyAcceptedReplayInputWhileQuiescent();
+      if (!completedModernReplayInput.has_value()) {
+        modernReplayCaptureDiagnostic =
+            "Realtime raw replay input capture was unavailable.";
+      }
+      modernReplayInputRecorder.reset();
+    }
+    const auto capturePolicy = resultCapturePolicy();
+    const auto workerEvents = session.worker->copyReplayEventsWhileQuiescent();
+    for (const auto &source : workerEvents) {
+      ReplayEvent event{
+          .action = replayActionFromRealtime(source.action),
+          .lane = source.lane,
+          .noteTimeMicros = source.noteTimeMicros,
+          .songTimeMicros = source.songTimeMicros,
+          .judgeTimeMicros = source.judgeTimeMicros,
+          .judgement = source.judgement,
+          .diffMicros = source.diffMicros,
+          .gauge = source.gauge,
+          .gaugeType = source.gaugeType,
+          .combo = source.combo,
+          .score = source.score,
+          .releaseByBackspin = source.releaseByBackspin,
+          .releaseByHolding = source.releaseByHolding,
+          .audioLanePressed = source.audioLanePressed,
+      };
+      const bool representable = source.noteId == gameplay::kInvalidNoteId ||
+          (source.noteId < session.notes.size() &&
+           replay_note::hasActiveIdentity(session.notes[source.noteId]));
+      if (capturePolicy.captureAnalytics) {
+        analyticsReplay.consumerIdentityCompatible &= representable;
+        analyticsReplay.events.push_back(event);
+      }
+      if (capturePolicy.recordReplay) {
+        recordedReplay.consumerIdentityCompatible &= representable;
+        recordedReplay.events.push_back(event);
+      }
+    }
+  }
+  session.resultTransferred = transferReplay;
+}
+
 void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   if (!realtimeGameplayAuthorityActive()) {
     return;
@@ -3391,53 +3456,7 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
 #endif
   session.worker->stop();
   syncRealtimeGameplaySnapshot();
-  if (state != nullptr) {
-    state->gaugeHistory = session.worker->copyGaugeHistoryAfterStop();
-    state->gaugeHistories = session.worker->copyGaugeHistoriesAfterStop();
-  }
-
-  if (transferReplay) {
-    if (modernReplayInputRecorder != nullptr) {
-      completedModernReplayInput =
-          session.worker->copyAcceptedReplayInputAfterStop();
-      if (!completedModernReplayInput.has_value()) {
-        modernReplayCaptureDiagnostic =
-            "Realtime raw replay input capture was unavailable.";
-      }
-      modernReplayInputRecorder.reset();
-    }
-    const auto capturePolicy = resultCapturePolicy();
-    const auto workerEvents = session.worker->copyReplayEventsAfterStop();
-    for (const auto &source : workerEvents) {
-      ReplayEvent event{
-          .action = replayActionFromRealtime(source.action),
-          .lane = source.lane,
-          .noteTimeMicros = source.noteTimeMicros,
-          .songTimeMicros = source.songTimeMicros,
-          .judgeTimeMicros = source.judgeTimeMicros,
-          .judgement = source.judgement,
-          .diffMicros = source.diffMicros,
-          .gauge = source.gauge,
-          .gaugeType = source.gaugeType,
-          .combo = source.combo,
-          .score = source.score,
-          .releaseByBackspin = source.releaseByBackspin,
-          .releaseByHolding = source.releaseByHolding,
-          .audioLanePressed = source.audioLanePressed,
-      };
-      const bool representable = source.noteId == gameplay::kInvalidNoteId ||
-          (source.noteId < session.notes.size() &&
-           replay_note::hasActiveIdentity(session.notes[source.noteId]));
-      if (capturePolicy.captureAnalytics) {
-        analyticsReplay.consumerIdentityCompatible &= representable;
-        analyticsReplay.events.push_back(event);
-      }
-      if (capturePolicy.recordReplay) {
-        recordedReplay.consumerIdentityCompatible &= representable;
-        recordedReplay.events.push_back(event);
-      }
-    }
-  }
+  transferRealtimeGameplayResult(transferReplay);
   if (inputHandler != nullptr) {
     inputHandler->discardPendingTouchEvents();
   }
@@ -3500,6 +3519,7 @@ int GamePlayScene::presentationKeyMode() const {
 }
 
 GamePlayScene::~GamePlayScene() {
+  stopCompletionSounds(true);
   clearPracticeMenuInput();
   if (skinIrRankingGeneration != 0 && context.irRankingService) {
     context.irRankingService->close(skinIrRankingGeneration);
@@ -4113,6 +4133,8 @@ void GamePlayScene::init() {
 
 bool GamePlayScene::reset() {
   clearPracticeMenuInput();
+  stopCompletionSounds();
+  completionSoundTrigger.reset();
   stopGuidedAccessChime(true);
   guidedAccessReminderExiting = false;
   guidedAccessReminder.reset();
@@ -4343,12 +4365,47 @@ bool GamePlayScene::reset() {
   }
   updateSkinResetLayoutVisibility();
 #endif
+  prepareCompletionSounds();
   if (guidedAccessReminderPending) {
     prepareGuidedAccessChime();
     showGuidedAccessReminder();
     return true;
   }
   return startPreparedAttempt();
+}
+
+void GamePlayScene::prepareCompletionSounds() {
+  if (options.practiceMode || options.practiceSession) return;
+  std::atomic_bool cancelled{false};
+  for (std::size_t i = 0; i < completionSounds.size(); ++i) {
+    if (!completionSounds[i]) {
+      completionSounds[i] = context.systemAudio().loadSkinSound(
+          fspath_to_path_t(std::filesystem::path(completion_celebration::kSoundPaths[i])),
+          cancelled, 1024 * 1024, std::numeric_limits<std::size_t>::max()).handle;
+    }
+  }
+}
+
+void GamePlayScene::stopCompletionSounds(bool release) {
+  for (auto &sound : completionSounds) {
+    if (!sound) continue;
+    context.systemAudio().stopSkinSound(*sound);
+    if (release) {
+      context.systemAudio().disposeSkinSound(*sound);
+      sound.reset();
+    }
+  }
+}
+
+void GamePlayScene::playCompletionSound(bool builtInPresented) {
+  if (context.jukebox.isPaused() || isGamePaused) return;
+  const auto sound = completionSoundTrigger.poll(
+      capturedPlayfieldVisualState.completionCelebration,
+      capturedPlayfieldVisualState.clock.visualTimeMicros, builtInPresented);
+  if (sound && completionSounds[*sound]) {
+    context.systemAudio().playSkinSound(*completionSounds[*sound],
+        context.settings.audioVideo.audio.masterVolume, false);
+  }
 }
 
 void GamePlayScene::prepareGuidedAccessChime() {
@@ -4496,7 +4553,7 @@ void GamePlayScene::onApplicationBackgroundChanged(bool background) {
     if (!background) session.cancelNativeUiTouches();
 #endif
     setRealtimeGameplayIngressEnabled(!background && state != nullptr &&
-        state->isPlaying && !state->isEnding && !context.jukebox.isPaused() &&
+        state->isPlaying && (!state->isEnding || naturalResultDelay) && !context.jukebox.isPaused() &&
         (pauseLayout == nullptr || !pauseLayout->getVisible()));
   }
   if (background) {
@@ -7556,6 +7613,7 @@ void GamePlayScene::update(float dt) {
   updatePauseButtonAction();
   updateCoursePauseHoldProgress(nowMicros());
   if (state == nullptr || !state->isPlaying || state->isEnding) {
+    if (naturalResultDelay && realtimeAtFrameStart) syncRealtimeGameplaySnapshot();
     return;
   }
 
@@ -7650,7 +7708,14 @@ void GamePlayScene::update(float dt) {
           i18n::tr("gameplay.input.integrity_failure_notice"));
       return;
     }
-    stopRealtimeGameplayAuthority(true);
+    if (resultDelaySkipRequested) {
+      stopRealtimeGameplayAuthority(true);
+    } else if (!retainRealtimeCompletionFeedback(gameplayTimeMicros)) {
+      stopRealtimeGameplayAuthority(false);
+      state->isEnding = true;
+      showPlaybackInitializationFailure(i18n::tr("gameplay.input.integrity_failure_notice"));
+      return;
+    }
     state->passedMeasureCount = chart->Measures.size();
     state->passedTimelineCount = 0;
   } else if (finishIfGaugeFailed()) {
@@ -7692,16 +7757,6 @@ void GamePlayScene::update(float dt) {
 
   SDL_Log("Gameplay complete%s", resultDelaySkipRequested ? " (delay skipped)" : "");
   state->isEnding = true;
-  // Ending rejects further key/finger releases, and the stopped worker may
-  // retain held lanes. Retire their presentation after its final snapshot,
-  // without judging releases or adding input to the completed replay.
-  const auto releaseVisualMicros = getVisualTimeMicros(gameplayTimeMicros);
-  for (auto &[lane, pressed] : lanePressed) {
-    if (!pressed) continue;
-    pressed = false;
-    presentationEventFanout->onLaneReleased(lane, releaseVisualMicros);
-  }
-  updateLaneStateText();
   finishReplayRecording();
   recordedAttemptCompleted = options.practiceMode;
   publishPracticeGhost();
@@ -7784,6 +7839,8 @@ void GamePlayScene::renderScene() {
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
       presentation->render(renderContext);
+  playCompletionSound(presentationFrame.outcome == PresentationFrameOutcome::Ready &&
+                      presentationFrame.submittedMode == PresentationMode::BuiltIn);
   // Skin lane quads are published by rendering, including after viewport or
   // presentation changes. SDL input must see that newly published geometry.
   refreshLegacyTouchLayout();
@@ -8174,6 +8231,7 @@ void GamePlayScene::renderCoursePauseHoldRing() {
 }
 
 void GamePlayScene::cleanupScene() {
+  stopCompletionSounds(true);
   stopGuidedAccessChime(true);
   SDL_Log("Cleaning up GamePlayScene");
   cancelGameplaySkinPreparation();
@@ -8250,7 +8308,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     return nullptr;
   }
   if (isGamePaused || state == nullptr || !state->isPlaying ||
-      state->isEnding) {
+      (state->isEnding && !naturalResultDelay)) {
     return nullptr;
   }
   if (realtimeGameplayAuthorityActive()) {
@@ -8276,7 +8334,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
-  const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
+  const bool preparationInput = naturalResultDelay || gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
       options.practiceSession != nullptr);
   if (preparationInput) {
@@ -8289,7 +8347,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       context.jukebox.playKeySound(result.keySoundNote->Wav,
           reinterpret_cast<std::uintptr_t>(result.keySoundNote));
     }
-    if (result.hasReplayEvent) {
+    if (result.hasReplayEvent && !naturalResultDelay) {
       const auto &event = result.replayEvent;
       recordPreparationLaneEvent(event.action, event.lane,
                                  event.songTimeMicros);
@@ -8350,7 +8408,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
                                              bool isBackSpin) {
   if (isGamePaused || state == nullptr || !state->isPlaying ||
-      state->isEnding) {
+      (state->isEnding && !naturalResultDelay)) {
     return nullptr;
   }
   if (realtimeGameplayAuthorityActive()) {
@@ -8375,14 +8433,14 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
-  const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
+  const bool preparationInput = naturalResultDelay || gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
       options.practiceSession != nullptr);
   if (preparationInput) {
     const auto result =
         laneInputController->releaseLaneForPreparation(lane, inputContext);
     updateLaneStateText();
-    if (result.hasReplayEvent) {
+    if (result.hasReplayEvent && !naturalResultDelay) {
       const auto &event = result.replayEvent;
       recordPreparationLaneEvent(event.action, event.lane,
                                  event.songTimeMicros);

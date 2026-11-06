@@ -258,6 +258,9 @@ public:
   finalizePracticeRange(std::int64_t finalizationTimeMicros,
                         std::int64_t visualTimeMicros);
   GameplayAdvanceResult finalizeAbortedAttempt(std::int64_t finalizationTimeMicros);
+  // The presentation deadline can precede trailing non-playable timelines.
+  // Seal scoring without releasing physical lanes or judging additional notes.
+  void completeChart(std::int64_t songTimeMicros);
   [[nodiscard]] NoteId
   previewPressSoundNote(int mainLane, int compensateLane,
                         const GameplayInputContext &context);

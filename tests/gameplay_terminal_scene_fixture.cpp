@@ -15,6 +15,7 @@
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/JudgementTimingSample.h"
 #include "scene/play/PlayfieldVisualState.h"
+#include "scene/play/CompletionCelebrationSound.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
 #include "scene/play/QuickRetry.h"
 #include "scene/play/RhythmLaneInputController.h"
@@ -132,14 +133,15 @@ struct FixtureWorker {
   bool suspend() { return native ? native->suspend() : true; }
   bool requestSuspend() { return native ? native->requestSuspend() : true; }
   bool resume() { return native ? native->resume() : true; }
+  bool completeChartWhileSuspended(std::int64_t time) { return native->completeChartWhileSuspended(time); }
   void stop() {
     if (beforeStop) beforeStop();
     native->stop();
   }
-  auto copyGaugeHistoryAfterStop() const { return native->copyGaugeHistoryAfterStop(); }
-  auto copyGaugeHistoriesAfterStop() const { return native->copyGaugeHistoriesAfterStop(); }
-  auto copyAcceptedReplayInputAfterStop() const { return native->copyAcceptedReplayInputAfterStop(); }
-  auto copyReplayEventsAfterStop() const { return native->copyReplayEventsAfterStop(); }
+  auto copyGaugeHistoryWhileQuiescent() const { return native->copyGaugeHistoryWhileQuiescent(); }
+  auto copyGaugeHistoriesWhileQuiescent() const { return native->copyGaugeHistoriesWhileQuiescent(); }
+  auto copyAcceptedReplayInputWhileQuiescent() const { return native->copyAcceptedReplayInputWhileQuiescent(); }
+  auto copyReplayEventsWhileQuiescent() const { return native->copyReplayEventsWhileQuiescent(); }
 };
 
 struct FixtureRealtimeSession {
@@ -171,6 +173,7 @@ struct FixtureRealtimeSession {
   gameplay::BoundedMpscQueue<gameplay::StartSelectControlInput, 16> startSelectInputs;
   std::atomic_bool startSelectInputOverflow{false};
   std::vector<bms_parser::Note *> notes;
+  bool resultTransferred = false;
   std::uint64_t appliedSnapshotGeneration = 0;
   std::uint64_t appliedNoteRevision = 0;
   std::uint64_t appliedGraphJudgementRevision = 0;
@@ -341,6 +344,8 @@ public:
   int chimePlays = 0;
   int chimeStops = 0;
   int chimeReleases = 0;
+  completion_celebration::SoundTrigger completionSoundTrigger;
+  void stopCompletionSounds() {}
   void playGuidedAccessChime() { ++chimePlays; }
   void stopGuidedAccessChime(bool release = false) {
     ++chimeStops;
@@ -493,6 +498,14 @@ public:
   }
   void syncRealtimeGameplaySnapshotFromWorker();
   void stopRealtimeGameplayAuthorityFromWorker(bool transferReplay);
+  void transferRealtimeGameplayResult(bool transferReplay);
+  bool retainRealtimeCompletionFeedbackFromWorker(long long gameplayTimeMicros);
+  bool retainRealtimeCompletionFeedback(long long gameplayTimeMicros) {
+    if (realtimeGameplaySession && realtimeGameplaySession->worker->native)
+      return retainRealtimeCompletionFeedbackFromWorker(gameplayTimeMicros);
+    if (stoppedSnapshot) *state = *stoppedSnapshot;
+    return true;
+  }
   void refreshRealtimeTouchLayout() {}
   long long getVisualOffsetMicros() const { return 0; }
   void updateLaneStateText() {}
@@ -1753,7 +1766,7 @@ void testRealtimeTimingSamplesFollowInputEvents() {
           "recorded autoplay does not inject synthetic timing during replay");
 }
 
-void testGameplayEndReleasesHeldLaneBeams() {
+void testGameplayEndPreservesHeldLaneBeams() {
   for (const bool realtime : {false, true}) {
     GamePlayScene scene;
     scene.sourcePlaytime = 4'000;
@@ -1789,12 +1802,11 @@ void testGameplayEndReleasesHeldLaneBeams() {
     scene.context.jukebox.time = 4'001'000;
     scene.update(0.016F);
     const auto lane = store.capture({}).lanes.at(laneIndex);
-    require(scene.state->isEnding && !scene.lanePressed[0] && !lane.pressed &&
-                lane.releaseMicros == 4'001'000,
-            "gameplay end releases held beams before key/finger releases stop being accepted");
+    require(scene.state->isEnding && scene.lanePressed[0] && lane.pressed,
+            "entering the result fade preserves a held lane until the user releases it");
     require(scene.state->getScore() == 4 && scene.state->judgeCount[Poor] == 0 &&
                 scene.recordedReplay.events.empty(),
-            "terminal beam cleanup does not judge notes or append replay input");
+            "entering the result fade does not judge notes or append replay input");
     scene.context.jukebox.time += 100'000;
     scene.update(0.016F);
     require(store.capture({}).lanes.at(laneIndex).releaseMicros == lane.releaseMicros,
@@ -2021,6 +2033,78 @@ template <typename Predicate> void requireWorkerState(Predicate predicate) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   require(predicate(), "bounded real worker reaches the requested state");
+}
+
+void testResultFadeKeepsNativeInputAndCapturedResult() {
+  for (const bool trailingTimeline : {false, true}) {
+    TerminalWorkerClock clock;
+    GamePlayScene scene;
+    if (trailingTimeline) {
+      auto *background = new bms_parser::TimeLine(8, false);
+      background->Timing = 20'000'000;
+      scene.chart->Measures.front()->TimeLines.push_back(background);
+    }
+    scene.sourcePlaytime = 8'000;
+    configureAbortCapture(scene);
+    const auto policy = buildGameplayRulesetPolicyAtPlayStart(
+        scene.options, scene.chart->Meta, AppSettings::NotePriorityMode::Lowest);
+    require(policy.built(), policy.diagnostic);
+    scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+    auto &session = *scene.realtimeGameplaySession;
+    session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+    session.worker = std::make_unique<FixtureWorker>();
+    session.worker->native = std::make_unique<gameplay::RealtimeGameplayWorker>(
+        gameplay::buildGameplayDefinition(*scene.chart, 0),
+        gameplay::RealtimeGameplayWorkerConfig{
+            .epoch = 17,
+            .simulation = {.judge = policy.policy->judge, .gaugeRules = policy.policy->gauge},
+            .clock = {.context = &clock, .mapSteadyToSong = &TerminalWorkerClock::map,
+                      .currentSongTime = &TerminalWorkerClock::now},
+            .inputTriggeredKeysounds = false});
+    auto &worker = *session.worker->native;
+    const auto input = [&](bool pressed, long long time) {
+      require(worker.enqueueInput({.epoch = 17,
+          .type = pressed ? gameplay::RealtimeGameplayInputType::Press
+                          : gameplay::RealtimeGameplayInputType::Release,
+          .lane = 0, .compensateLane = 0, .steadyTimestampMicros = time,
+          .hasReplayControl = true,
+          .replayControl = {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 0}}),
+          "result fade input accepted");
+    };
+    input(true, 2'000'000);
+    input(false, 2'050'000);
+    input(true, 3'000'000);
+    require(worker.start(), "result fade worker starts");
+    requireWorkerState([&] { return worker.acquireLatestSnapshot()->attempt.stagePassedNotes == 2; });
+    clock.songTimeMicros.store(3'500'000);
+    if (!trailingTimeline) requireWorkerState([&] {
+      return worker.acquireLatestSnapshot()->terminalReason == gameplay::GameplayTerminalReason::ChartComplete;
+    });
+    scene.context.jukebox.time = 8'001'000;
+    scene.update(0.016F);
+    require(scene.state->isEnding && scene.naturalResultDelay && scene.transitions == 1 &&
+                scene.lanePressed[0] && session.resultTransferred && worker.running() &&
+                worker.acquireLatestSnapshot()->terminalReason == gameplay::GameplayTerminalReason::ChartComplete,
+            "result capture preserves held input and the worker through the final fade");
+    const auto replaySize = scene.recordedReplay.events.size();
+    require(replaySize == 3 && scene.completedModernReplayInput &&
+                scene.completedModernReplayInput->size() == 3,
+            "suspended capture retains the final note and raw input before resuming feedback");
+    for (const auto [pressed, time] : {std::pair{false, 8'100'000LL},
+                                     std::pair{true, 8'200'000LL},
+                                     std::pair{false, 8'300'000LL}}) {
+      input(pressed, time);
+      requireWorkerState([&] { return worker.acquireLatestSnapshot()->lanePressed[0] == pressed; });
+      scene.context.jukebox.time = time;
+      scene.update(0.016F);
+      require(scene.lanePressed[0] == pressed && scene.state->getScore() == 4 &&
+                  scene.recordedReplay.events.size() == replaySize && scene.transitions == 1,
+              "final fade publishes new beam edges without changing captured results");
+    }
+    scene.stopRealtimeGameplayAuthority(true);
+    require(scene.recordedReplay.events.size() == replaySize,
+            "later teardown cannot duplicate the captured replay");
+  }
 }
 
 void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
@@ -3071,7 +3155,8 @@ void testAutomaticRetryCue() {
 }
 
 int main(int argc, char **argv) {
-  testGameplayEndReleasesHeldLaneBeams();
+  testGameplayEndPreservesHeldLaneBeams();
+  testResultFadeKeepsNativeInputAndCapturedResult();
   testAutomaticRetryCue();
   testLegacyMissedHcnPreview();
   testLegacyMineKeysoundOnlyOnDetonation();

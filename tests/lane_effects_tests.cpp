@@ -3,6 +3,7 @@
 #include "../src/scene/play/KeybombEffect.h"
 #include "../src/scene/play/CompletionWaveEffect.h"
 #include "../src/scene/play/CompletionCelebrationEffect.h"
+#include "../src/scene/play/CompletionCelebrationSound.h"
 #include <cmath>
 #undef NDEBUG
 #include <cassert>
@@ -214,7 +215,30 @@ void testCompletionWave() {
   }
 }
 
+void testCompletionSoundTrigger() {
+  using namespace completion_celebration;
+  SoundTrigger trigger;
+  const State max{Achievement::Max, 1'000'000};
+  assert(!trigger.poll({}, 0, true));
+  assert(!trigger.poll(max, 999'999, true));
+  assert(trigger.poll(max, 1'000'000, true) == 2);
+  assert(!trigger.poll(max, 1'100'000, true));
+  trigger.reset();
+  assert(trigger.poll({Achievement::Perfect, 0}, 0, true) == 1);
+  trigger.reset();
+  assert(trigger.poll({Achievement::FullCombo, 0}, 0, true) == 0);
+  trigger.reset();
+  assert(!trigger.poll({Achievement::Finish, 0}, 0, true));
+  trigger.reset();
+  assert(!trigger.poll(max, 1'000'000, false));
+  assert(!trigger.poll(max, 1'100'000, true));
+  trigger.reset();
+  assert(!trigger.poll(max, 4'000'000, true));
+  assert(!trigger.poll(max, 1'000'000, true));
+}
+
 int main() {
+  testCompletionSoundTrigger();
   testCompletionWave();
   testMaxFocusGeometry();
   testInvisibleTailsSubmitNothing();

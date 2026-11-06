@@ -62,6 +62,7 @@ def main():
         "bool GamePlayScene::retryIfTargetsUnreachable()",
         "void GamePlayScene::playQuickRetryFeedback()",
         "void GamePlayScene::update(float dt)",
+        "void GamePlayScene::transferRealtimeGameplayResult(",
         "void GamePlayScene::completePracticeSection(",
         "void GamePlayScene::finalizePracticeRangeMisses()",
         "void GamePlayScene::completePracticeAttempt()",
@@ -143,6 +144,8 @@ def main():
     sync_method = extract(source, "void GamePlayScene::syncRealtimeGameplaySnapshot()")
     methods += "\n" + sync_method.replace("syncRealtimeGameplaySnapshot()",
                                            "syncRealtimeGameplaySnapshotFromWorker()", 1)
+    methods += "\n" + extract(source, "bool GamePlayScene::retainRealtimeCompletionFeedback(").replace(
+        "retainRealtimeCompletionFeedback(", "retainRealtimeCompletionFeedbackFromWorker(", 1)
     stop_method = extract(source, "void GamePlayScene::stopRealtimeGameplayAuthority(")
     methods += "\n" + stop_method.replace("stopRealtimeGameplayAuthority(",
                                            "stopRealtimeGameplayAuthorityFromWorker(", 1)
