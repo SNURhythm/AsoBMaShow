@@ -348,6 +348,10 @@ public:
     accessOrder.push_back(1'000 + (std::holds_alternative<int>(selector.value)
                                        ? std::get<int>(selector.value)
                                        : -1));
+    if (const auto *id = std::get_if<int>(&selector.value)) {
+      if (const auto found = booleanResults.find(*id);
+          found != booleanResults.end()) return found->second;
+    }
     return booleanResult;
   }
   SkinPropertyLookup<std::int64_t>
@@ -434,6 +438,7 @@ public:
   SkinPracticeStateView practiceResult;
   SkinLaneCoverStateView laneCoverResult;
   SkinPropertyLookup<bool> booleanResult;
+  std::map<int, SkinPropertyLookup<bool>> booleanResults;
   SkinPropertyLookup<std::int64_t> integerResult;
   SkinPropertyLookup<double> floatResult;
   SkinPropertyLookup<std::string_view> stringResult;
@@ -2308,6 +2313,56 @@ void testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback() {
              !hasBga,
          "practice mode without an authored Practice object renders the "
          "legacy fallback in the BGA destination instead of BGA media");
+
+  // Litone12 has a setup-only BGA and a playback BGA requiring chart media.
+  model.model.booleanProperties = {
+      {.id = SkinBooleanPropertyId{1},
+       .source = SkinBuiltinPropertySelector{1080}},
+      {.id = SkinBooleanPropertyId{2},
+       .source = SkinBuiltinPropertySelector{-1080}},
+      {.id = SkinBooleanPropertyId{3},
+       .source = SkinBuiltinPropertySelector{171}}};
+  model.model.destinations.front().presentation.conditions = {
+      SkinBooleanPropertyId{1}};
+  auto playback = model.model.destinations.front();
+  playback.presentation.authoredOrdinal = 11;
+  playback.presentation.conditions = {SkinBooleanPropertyId{2},
+                                       SkinBooleanPropertyId{3}};
+  model.model.destinations.push_back(playback);
+  const auto labelCount = [&](std::uint64_t serial) {
+    const auto frame = evaluate(renderer, runtime, model, resources, state,
+                                serial, 1'000'000);
+    expect(frame.submitReady && frame.diagnostics.empty(),
+           "conditional practice BGA frame evaluates successfully");
+    std::size_t count = 0;
+    if (frame.submitReady) {
+      for (const auto &command : frame.submitReady->commands) {
+        if (glyphRunText(command) == "START TIME") ++count;
+      }
+    }
+    return count;
+  };
+  state.practiceResult.active = true;
+  state.booleanResults = {{1080, {.value = true, .supported = true}},
+                           {-1080, {.value = false, .supported = true}},
+                           {171, {.value = false, .supported = true}}};
+  expect(labelCount(2) == 1, "no-BGA chart shows one practice setup panel");
+  state.practiceResult.active = false;
+  state.booleanResults[1080].value = false;
+  state.booleanResults[-1080].value = true;
+  expect(labelCount(3) == 1,
+         "no-BGA chart retains the practice panel after section startup");
+  state.booleanResults[171].value = true;
+  expect(labelCount(4) == 1,
+         "a visible playback BGA does not duplicate the practice panel");
+  state.booleanResults[171].value = false;
+  model.model.destinations.front().presentation.conditions.push_back(9999);
+  expect(labelCount(5) == 0,
+         "practice fallback respects other skin visibility conditions");
+  model.model.destinations.front().presentation.conditions.pop_back();
+  state.practiceResult.practiceMode = false;
+  expect(labelCount(6) == 0,
+         "ordinary gameplay never resurrects the practice panel");
 }
 
 SkinObjectDefinition textObject(SkinObjectId id, bool critical,

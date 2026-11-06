@@ -4466,6 +4466,22 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
     std::vector<DeferredNoteLowering> deferredNotes;
     deferredNotes.reserve(inputs.model.model.destinations.size());
     std::map<const SkinDestination *, SkinBlendMode> blendAfterDestination;
+    const auto framePracticeState = inputs.state.practiceState();
+    bool drewLegacyPractice = false;
+    struct PracticeFallbackDestination {
+      const SkinObjectDefinition *object;
+      const SkinDestination *destination;
+      PlaySkinViewport viewport;
+    };
+    std::vector<PracticeFallbackDestination> practiceFallbackDestinations;
+    const auto isPracticeSetupCondition = [&](const auto &condition) {
+      const auto *id = std::get_if<SkinBooleanPropertyId>(&condition);
+      const auto *binding = id ? findBinding(modelIndex->booleans, *id) : nullptr;
+      const auto *selector = binding
+          ? std::get_if<SkinBuiltinPropertySelector>(&binding->source) : nullptr;
+      const auto *number = selector ? std::get_if<int>(&selector->value) : nullptr;
+      return number && *number == 1080;
+    };
 
     const auto playArea = inputs.fixedHudViewport
                               ? playSkinAuthoredPlayArea(inputs.model)
@@ -4654,6 +4670,13 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *cover = std::get_if<SkinCoverObject>(&object->payload);
       const auto *judge = std::get_if<SkinJudgeObject>(&object->payload);
       const auto *bga = std::get_if<SkinBgaObject>(&object->payload);
+      if (bga && !modelHasPracticeObject && framePracticeState.practiceMode &&
+          !framePracticeState.active &&
+          std::ranges::any_of(destination.presentation.conditions,
+                              isPracticeSetupCondition)) {
+        practiceFallbackDestinations.push_back({object, &destination,
+                                                inputs.viewport});
+      }
       const auto *practice =
           std::get_if<SkinPracticeObject>(&object->payload);
       const auto *builtinImage =
@@ -6011,6 +6034,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
               buffer.commands.end(),
               std::make_move_iterator(lowered.commands.begin()),
               std::make_move_iterator(lowered.commands.end()));
+          drewLegacyPractice = true;
           continue;
         }
         if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
@@ -6474,6 +6498,43 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       for (auto &control : interactionLayout.textsTopmostFirst) mapControl(control);
       for (auto &control : interactionLayout.controlsTopmostFirst) {
         std::visit(mapControl, control);
+      }
+    }
+    // Some legacy skins (including Litone12) hide their playback BGA when
+    // the chart has no media. Keep the setup panel as a read-only overlay in
+    // that case. Only relax its setup-state option; keep other conditions,
+    // timing, offsets and geometry. Draw above any no-BGA placeholder artwork.
+    if (!drewLegacyPractice) {
+      for (const auto &fallback : practiceFallbackDestinations) {
+        auto presentation = fallback.destination->presentation;
+        std::erase_if(presentation.conditions, isPracticeSetupCondition);
+        inputs.viewport = fallback.viewport;
+        auto resolved = resolveDestination(inputs, lookupIndex, presentation);
+        for (auto &failure : resolved.failures) {
+          if (reportObjectFailure(result, *fallback.object, std::move(failure))) {
+            return result;
+          }
+        }
+        if (!resolved.geometry) continue;
+        auto lowered = lowerPracticeLegacy(
+            inputs, lookupIndex, *fallback.object, *fallback.destination,
+            *resolved.geometry, framePracticeState,
+            skinFrameMaximumGlyphInstances(inputs) - glyphInstances,
+            skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+            skinFrameMaximumPrimitiveVertices(inputs) - primitiveVertices);
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *fallback.object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        if (lowered.commands.empty()) continue;
+        buffer.commands.insert(
+            buffer.commands.end(),
+            std::make_move_iterator(lowered.commands.begin()),
+            std::make_move_iterator(lowered.commands.end()));
+        nextRetainedBlend = SkinBlendMode::Normal;
+        break;
       }
     }
     buildAdjacentBatches(buffer);
