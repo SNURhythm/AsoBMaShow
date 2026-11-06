@@ -219,6 +219,10 @@ private:
   void completePracticeSection(bool realtimeRangeFinalized);
   void finalizePracticeRangeMisses();
   void scheduleResultTransition(std::uint64_t delayMillis);
+  [[nodiscard]] bool canSkipResultDelay() const;
+  void skipResultDelay();
+  void updatePauseButtonAction();
+  bool runResultTransition();
   [[nodiscard]] std::uint64_t
   selectedSkinResultTransitionDelayMillis(long long gameplayTimeMicros) const;
   void updatePracticeHud(long long chartTimeMicros);
@@ -419,6 +423,10 @@ private:
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
+  bool resultDelaySkipRequested = false;
+  bool naturalResultDelay = false;
+  bool pauseButtonShowsSkip = false;
+  std::function<bool()> pendingResultTransition;
   bool resultPersistenceAttemptCreationTried = false;
   std::optional<gameplay::StartSelectControl> startSelectControl;
   std::optional<gameplay_hispeed::State> playfieldHispeedState;

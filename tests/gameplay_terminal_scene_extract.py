@@ -43,6 +43,9 @@ def main():
     args = parser.parse_args()
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     signatures = [
+        "bool GamePlayScene::canSkipResultDelay() const",
+        "void GamePlayScene::skipResultDelay()",
+        "bool GamePlayScene::runResultTransition()",
         "void GamePlayScene::onInputQueueOverflow()",
         "void GamePlayScene::onApplicationBackgroundChanged(",
         "bool GamePlayScene::continuesAudioInBackground() const",

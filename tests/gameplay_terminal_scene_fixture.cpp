@@ -282,6 +282,14 @@ public:
   bool touchVisualizerLoaded = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
+  bool resultDelaySkipRequested = false;
+  bool naturalResultDelay = false;
+  std::function<bool()> pendingResultTransition;
+  bool canSkipResultDelay() const;
+  void skipResultDelay();
+  bool runResultTransition();
+  void updatePauseButtonAction() {}
+
   bool startButtonPressed = false;
   bool selectButtonPressed = false;
   bool playfieldChangeLiftTarget = false;
@@ -1683,6 +1691,92 @@ void testGameplayEndReleasesHeldLaneBeams() {
   }
 }
 
+void testSkipResultDelay() {
+  for (const bool course : {false, true}) {
+    GamePlayScene scene;
+    scene.chart->Meta.PlayLength = 3'000'000;
+    scene.sourcePlaytime = 8'000;
+    scene.context.jukebox.time = 2'999'999;
+    scene.state->stagePassedNotes = scene.chart->Meta.TotalNotes;
+    if (course) {
+      scene.options.courseSession = std::make_shared<CoursePlaySession>();
+    }
+    require(!scene.canSkipResultDelay(), "early judgement cannot skip the final tail");
+    scene.skipResultDelay();
+    require(!scene.resultDelaySkipRequested, "premature Skip is ignored");
+    scene.context.jukebox.time = 3'100'000;
+    --scene.state->stagePassedNotes;
+    require(!scene.canSkipResultDelay(), "Skip waits for the final judgement");
+    ++scene.state->stagePassedNotes;
+    require(scene.canSkipResultDelay(), "Skip is available during the five-second margin");
+    scene.skipResultDelay();
+    scene.update(0.016F);
+    require(scene.state->isEnding && scene.transitions == 1 &&
+                scene.naturalResultDelay,
+            "Skip completes the attempt before the automatic deadline");
+    if (course) {
+      require(scene.options.courseSession->completedResults.size() == 1,
+              "Skip captures the completed course stage");
+    }
+    const int passed = scene.state->stagePassedNotes;
+    scene.update(0.016F);
+    require(scene.transitions == 1 && scene.state->stagePassedNotes == passed,
+            "Skip does not repeat completion or change scoring");
+  }
+  GamePlayScene delayed;
+  delayed.state->isEnding = true;
+  delayed.resultTransitionScheduled = true;
+  require(!delayed.canSkipResultDelay(), "failure/abort transitions are not natural post-delay");
+  delayed.naturalResultDelay = true;
+  int opened = 0;
+  delayed.pendingResultTransition = [&] { ++opened; return false; };
+  require(delayed.canSkipResultDelay(), "Skip remains available during the final delay");
+  delayed.queueDeferred = true;
+  delayed.skipResultDelay();
+  delayed.skipResultDelay();
+  require(opened == 0, "Skip waits until event dispatch has finished");
+  delayed.finishFrame();
+  delayed.finishFrame();
+  require(opened == 1, "repeated Skip taps execute the captured result only once");
+  require(delayed.runResultTransition() && opened == 1,
+          "the original delayed callback cannot open results twice");
+  GamePlayScene autoplay;
+  autoplay.chart->Meta.PlayLength = 3'000'000;
+  autoplay.playfieldChartVisualModel.staticMetadata.lastEventTimeMicros = 6'000'000;
+  autoplay.state->stagePassedNotes = autoplay.chart->Meta.TotalNotes;
+  autoplay.context.jukebox.time = 4'000'000;
+  autoplay.options.autoPlay = true;
+  require(!autoplay.canSkipResultDelay(), "autoplay waits for its last authored event");
+  autoplay.context.jukebox.time = 6'000'000;
+  require(autoplay.canSkipResultDelay(), "autoplay permits Skip in its post-delay");
+  autoplay.options.replayData = std::make_shared<ReplayData>();
+  autoplay.options.replayData->abortedAtSongTimeMicros = 8'000'000;
+  require(!autoplay.canSkipResultDelay(), "Skip cannot bypass a recorded replay abort");
+  autoplay.options.replayData.reset();
+  autoplay.options.practiceMode = true;
+  require(!autoplay.canSkipResultDelay(), "practice retains its own completion flow");
+  GamePlayScene realtime;
+  realtime.chart->Meta.PlayLength = 3'000'000;
+  realtime.context.jukebox.time = 3'100'000;
+  realtime.sourcePlaytime = 8'000;
+  realtime.state->stagePassedNotes = realtime.chart->Meta.TotalNotes;
+  realtime.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  realtime.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  auto &snapshot = realtime.realtimeGameplaySession->worker->snapshot;
+  require(!realtime.canSkipResultDelay(), "the UI count cannot override unresolved worker judgements");
+  snapshot.attempt.stagePassedNotes = realtime.chart->Meta.TotalNotes;
+  require(realtime.canSkipResultDelay(), "completed worker scoring permits Skip before trailing rows");
+  snapshot.terminalReason = gameplay::GameplayTerminalReason::SurvivalGaugeFailed;
+  require(!realtime.canSkipResultDelay(), "worker failure takes priority over Skip");
+  snapshot.terminalReason = gameplay::GameplayTerminalReason::None;
+  realtime.stoppedSnapshot = std::make_unique<RhythmState>(*realtime.state);
+  realtime.skipResultDelay();
+  realtime.update(0.016F);
+  require(realtime.state->isEnding && realtime.transitions == 1 &&
+              !realtime.realtimeGameplaySession,
+          "Skip uses the regular worker handoff before capturing results");
+}
+
 void testRealtimeTerminalRouting() {
   for (const bool practice : {false, true}) {
     GamePlayScene scene;
@@ -3036,6 +3130,7 @@ int main(int argc, char **argv) {
   testCourseAbort();
   testPracticeTerminalExceptions();
   testLongNoteAbortAccounting();
+  testSkipResultDelay();
   testRealtimeTerminalRouting();
   testStoppedWorkerAbortWatch();
   testStoppedWorkerAbortWatch(true);

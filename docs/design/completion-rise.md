@@ -72,6 +72,13 @@ trailing empty, tempo-only and poor-BGA-only rows do not extend it. A replay of
 an autoplay recording still uses REPLAY's last-playable-note endpoint. These
 deadlines do not wait for the final audio sample to finish playing.
 
+During this post-play interval, the pause button becomes a Skip button once
+the applicable endpoint has passed and all counted judgements have resolved.
+Skip bypasses both the five-second margin and the subsequent skin delay,
+using the normal score, replay and course-result capture. Courses use a single
+tap for Skip rather than the pause hold. Practice and aborted replays keep
+their existing completion controls.
+
 ## Motion and rendering
 
 - The independent title anchor is `(640, 285)` in a 1280×720 design space,

@@ -111,6 +111,7 @@ constexpr uint32_t kIconBack = 0xf060;
 constexpr uint32_t kIconLockOpen = 0xf3c1;
 constexpr uint32_t kIconLock = 0xf023;
 constexpr uint32_t kIconPause = 0xf04c;
+constexpr uint32_t kIconSkip = 0xf051;
 constexpr uint32_t kIconRestart = 0xf2f9;
 constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
 constexpr float kReplayTouchMoveMinDistance = 0.002f;
@@ -3863,6 +3864,10 @@ void GamePlayScene::init() {
                                      app_theme::accentBorderStrong);
   pauseButton->setStyledBorderWidth(1);
   pauseButton->setOnClickListener([this]() {
+    if (canSkipResultDelay()) {
+      skipResultDelay();
+      return;
+    }
     if (isCoursePlayback()) {
       return;
     }
@@ -6854,6 +6859,66 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
   return static_cast<std::uint64_t>((remainingRealMicros + 1'000) / 1'000);
 }
 
+bool GamePlayScene::canSkipResultDelay() const {
+  if (resultTransitionScheduled) return naturalResultDelay;
+  if (chart == nullptr || state == nullptr || !state->isPlaying ||
+      state->isEnding || state->activeGaugeFailed() ||
+      context.jukebox.isPaused() || options.practiceMode ||
+      options.practiceSession != nullptr ||
+      (isReplayPlayback() && options.replayData->abortedAtSongTimeMicros)) {
+    return false;
+  }
+  const auto terminalMicros = gameplay::terminalMicrosForGameplayMode(
+      chart->Meta.PlayLength,
+      playfieldChartVisualModel.staticMetadata.lastEventTimeMicros,
+      options.autoPlay && !isReplayPlayback());
+  if (getGameplayTimeMicros(context.jukebox.getTimeMicros()) < terminalMicros) {
+    return false;
+  }
+  // An early judgement must not bypass an authored tail, and late misses
+  // must resolve before Skip can capture the completed score.
+  int handledNotes = state->stagePassedNotes;
+  if (realtimeGameplayAuthorityActive()) {
+    const auto snapshot = realtimeGameplaySession->worker->acquireLatestSnapshot();
+    if (!snapshot || realtimeGameplaySession->worker->fault() !=
+                         gameplay::RealtimeGameplayFault::None ||
+        (snapshot->terminalReason != gameplay::GameplayTerminalReason::None &&
+         snapshot->terminalReason != gameplay::GameplayTerminalReason::ChartComplete)) {
+      return false;
+    }
+    handledNotes = snapshot->attempt.stagePassedNotes;
+  }
+  return handledNotes >= chart->Meta.TotalNotes;
+}
+
+void GamePlayScene::skipResultDelay() {
+  if (!canSkipResultDelay()) return;
+  if (resultTransitionScheduled) {
+    // Reuse the captured result; the original timer becomes a harmless no-op.
+    defer([this]() { return runResultTransition(); }, 0, true);
+  } else {
+    // Let update perform the normal terminal routing, worker handoff and
+    // course bookkeeping before capturing the result exactly once.
+    resultDelaySkipRequested = true;
+  }
+}
+
+void GamePlayScene::updatePauseButtonAction() {
+  const bool skip = canSkipResultDelay();
+  if (pauseButton == nullptr || pauseButtonShowsSkip == skip) return;
+  pauseButtonShowsSkip = skip;
+  resetCoursePauseHold();
+  static_cast<TextView *>(pauseButton->getContentView())->setText(
+      ui_icons::textForCodepoint(skip ? kIconSkip : kIconPause));
+}
+
+bool GamePlayScene::runResultTransition() {
+  if (!pendingResultTransition) return true;
+  auto transition = std::move(pendingResultTransition);
+  pendingResultTransition = {};
+  return transition();
+}
+
 void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
   if (resultTransitionScheduled) {
     return;
@@ -6999,7 +7064,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
     }
   }
 
-  defer(
+  pendingResultTransition =
       [this, capturePolicy]() {
         const ReplayData *presentationReplay =
             shouldPersistRecordedReplay() ? &recordedReplay : nullptr;
@@ -7130,8 +7195,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                 skinIrPreviousUserRank),
             false);
         return false;
-      },
-      delayMillis, true);
+      };
+  defer([this]() { return runResultTransition(); }, delayMillis, true);
 }
 
 bool GamePlayScene::finishIfGaugeFailed() {
@@ -7254,6 +7319,7 @@ void GamePlayScene::update(float dt) {
     applyStartSelectControlActions(startSelectControl->tick(
         nowMicros(), {.noteEnd = state != nullptr && state->isEnding}));
   }
+  updatePauseButtonAction();
   updateCoursePauseHoldProgress(nowMicros());
   if (state == nullptr || !state->isPlaying || state->isEnding) {
     return;
@@ -7287,9 +7353,10 @@ void GamePlayScene::update(float dt) {
   const auto playtimeMillis = beatorajaPlaytimeMillis(
       chart, options, playfieldChartVisualModel.staticMetadata.lastEventTimeMicros);
   const bool sourcePlaytimeElapsed =
-      playtimeMillis.has_value() &&
-      skin::beatorajaGameplayStateFinished(gameplayTimeMicros,
-                                           *playtimeMillis);
+      (resultDelaySkipRequested && canSkipResultDelay()) ||
+      (playtimeMillis.has_value() &&
+       skin::beatorajaGameplayStateFinished(gameplayTimeMicros,
+                                            *playtimeMillis));
   if (realtimeAtFrameStart) {
     const auto fault = realtimeGameplaySession->worker->fault();
     const auto terminalReason = [this] {
@@ -7389,7 +7456,7 @@ void GamePlayScene::update(float dt) {
     return;
   }
 
-  SDL_Log("Pinned Beatoraja gameplay playtime elapsed");
+  SDL_Log("Gameplay complete%s", resultDelaySkipRequested ? " (delay skipped)" : "");
   state->isEnding = true;
   // Ending rejects further key/finger releases, and the stopped worker may
   // retain held lanes. Retire their presentation after its final snapshot,
@@ -7420,8 +7487,10 @@ void GamePlayScene::update(float dt) {
       options.courseSession->recordReplayStage(recordedReplay);
     }
   }
-  scheduleResultTransition(
+  naturalResultDelay = true;
+  scheduleResultTransition(resultDelaySkipRequested ? 0 :
       selectedSkinResultTransitionDelayMillis(gameplayTimeMicros));
+  updatePauseButtonAction();
 }
 
 void GamePlayScene::renderScene() {
@@ -7664,7 +7733,7 @@ bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
     resetCoursePauseHold();
     return true;
   }
-  if (!isCoursePlayback() || pauseButton == nullptr ||
+  if (!isCoursePlayback() || canSkipResultDelay() || pauseButton == nullptr ||
       !pauseButton->getVisible()) {
     return false;
   }
@@ -7826,7 +7895,7 @@ void GamePlayScene::updateCoursePauseHoldProgress(long long currentMicros) {
 }
 
 void GamePlayScene::renderCoursePauseHoldRing() {
-  if (!isCoursePlayback() || pauseButton == nullptr ||
+  if (!isCoursePlayback() || canSkipResultDelay() || pauseButton == nullptr ||
       !pauseButton->getVisible()) {
     return;
   }
