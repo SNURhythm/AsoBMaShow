@@ -18,12 +18,19 @@ struct AudioSettings;
 
 namespace audio {
 
-enum class Bus : std::uint8_t { Bgm, Keysound, System };
+enum class Bus : std::uint8_t { Bgm, Keysound, System, MenuSfx, GameplaySfx };
+
+// These voices outlive the chart clock and remain audible while it is stopped.
+constexpr bool IsSystemBus(Bus bus) noexcept {
+  return bus == Bus::System || bus == Bus::MenuSfx || bus == Bus::GameplaySfx;
+}
 
 struct Volumes {
   float master = 1.0f;
   float bgm = 1.0f;
   float keysound = 1.0f;
+  float menuSfx = 1.0f;
+  float gameplaySfx = 1.0f;
 };
 
 float EffectiveGain(Bus bus, const Volumes &volumes);
@@ -221,10 +228,10 @@ struct AudioCallbackState {
 namespace audio::playback {
 
 enum class MixScope : std::uint8_t {
-  // Mix every active bus (Bgm, Keysound, System). Used while the gameplay
+  // Mix every active bus. Used while the gameplay
   // clock is running.
   AllBuses,
-  // Mix only Bus::System voices, skipping Bgm/Keysound. Used while the
+  // Mix system music and both SFX groups, skipping Bgm/Keysound. Used while the
   // gameplay clock is stopped so select SEs / BGM / previews remain audible
   // without resuming gameplay audio.
   SystemOnly,
@@ -342,6 +349,7 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,
                      int playbackRatePercent,
-                     MixScope scope = MixScope::AllBuses);
+                     MixScope scope = MixScope::AllBuses,
+                     float menuSfxGain = 1.0F, float gameplaySfxGain = 1.0F);
 
 } // namespace audio::playback

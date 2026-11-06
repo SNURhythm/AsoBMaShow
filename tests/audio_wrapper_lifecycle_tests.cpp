@@ -3467,6 +3467,40 @@ void testChartUnloadLeavesSystemPlaybackRunning() {
           "chart unload does not invalidate a system handle");
 }
 
+void testSfxVolumesReachActiveApplicationVoices() {
+  Stopwatch clock;
+  auto control = std::make_shared<FactoryControl>();
+  audio::ApplicationAudio audio(&clock, std::make_unique<FakeConfigurableFactory>(control));
+  auto &system = audio.systemSounds();
+  const path_t path = PATH("sfx-volume-loop");
+  require(system.loadGeneratedSound(path, std::vector<short>(64, 16000), 1, 44100),
+          "SFX volume fixture loads");
+  std::atomic_bool cancelled{false};
+  const auto sound = system.loadSkinSound(path, cancelled, 1024, 1024);
+  require(sound.handle &&
+              system.playSkinSound(*sound.handle, 1.0F, true, audio::Bus::MenuSfx) &&
+              system.playSkinSound(*sound.handle, 1.0F, true, audio::Bus::GameplaySfx),
+          "both SFX categories admit a voice from the shared cache");
+  const auto render = [&](float master, float menu, float gameplay) {
+    audio.setVolumes({.master = master, .menuSfx = menu, .gameplaySfx = gameplay});
+    std::array<short, 2> output{};
+    control->renderCallback(output.data(), 1, 2, control->renderUserData);
+    return output[0];
+  };
+  require(std::abs(render(0.5F, 0.25F, 0.0F) - 1800) <= 1,
+          "menu SFX uses master once and its own volume while the chart is stopped");
+  require(std::abs(render(0.5F, 0.0F, 0.75F) - 5400) <= 1,
+          "live volume updates independently mute menu and change gameplay SFX");
+  require(render(0.0F, 1.0F, 1.0F) == 0,
+          "master mute silences both active SFX voices");
+  require(system.playSkinSound(*sound.handle, 0.25F, true),
+          "legacy music/preview voice retains its source-gain contract");
+  require(std::abs(render(1.0F, 0.0F, 0.0F) - 3600) <= 1,
+          "muting SFX leaves the preview/system music bus audible");
+  require(control->opens.size() == 1,
+          "SFX changes do not restart the audio output");
+}
+
 void testSystemSubmixIgnoresGameplayRateAndQueuePressure() {
   Stopwatch clock;
   auto control = std::make_shared<FactoryControl>();
@@ -3914,6 +3948,7 @@ int main(int argc, char **argv) {
     testSystemLoadRevalidatesRateAfterConcurrentOutputChange();
     testSubmixStopWaitsForItsActiveCallbackWithoutStoppingDevice();
     testChartUnloadLeavesSystemPlaybackRunning();
+    testSfxVolumesReachActiveApplicationVoices();
     testSystemSubmixIgnoresGameplayRateAndQueuePressure();
     testSharedOutputPreservesFloatHeadroomAndCallbackTiming();
     testApplicationAudioReconfigurationPreservesSystemHandles();

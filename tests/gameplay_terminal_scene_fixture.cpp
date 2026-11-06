@@ -1,3 +1,4 @@
+#include "audio/AudioMix.h"
 #include "scene/play/PracticeMenuTouchInput.h"
 #include "i18n/Localization.h"
 #include "GameplayKeyMode.h"
@@ -247,7 +248,11 @@ public:
       int plays = 0;
       float gain = -1.0F;
       void stopSkinSound(int) {}
-      void playSkinSound(int, float value, bool) { ++plays; gain = value; }
+      int lastSound = 0;
+      audio::Bus bus = audio::Bus::System;
+      void playSkinSound(int sound, float value, bool, audio::Bus category) {
+        ++plays; lastSound = sound; gain = value; bus = category;
+      }
     } systemSounds;
     auto &systemAudio() { return systemSounds; }
     struct {
@@ -345,6 +350,9 @@ public:
   int chimePlays = 0;
   int chimeStops = 0;
   int chimeReleases = 0;
+  bool isGamePaused = false;
+  std::array<std::optional<int>, 3> completionSounds{11, 22, 33};
+  void playCompletionSound(bool builtInPresented);
   completion_celebration::SoundTrigger completionSoundTrigger;
   void stopCompletionSounds() {}
   void playGuidedAccessChime() { ++chimePlays; }
@@ -3161,6 +3169,26 @@ void testLegacyMineKeysoundOnlyOnDetonation() {
   }
 }
 
+void testCompletionCuesUseGameplaySfx() {
+  using completion_celebration::Achievement;
+  int index = 0;
+  for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect, Achievement::Max}) {
+    GamePlayScene scene;
+    scene.context.settings.audioVideo.audio.masterVolume = 0.25F;
+    scene.capturedPlayfieldVisualState.completionCelebration = {achievement, 1000};
+    scene.capturedPlayfieldVisualState.clock.visualTimeMicros = 1000;
+    scene.playCompletionSound(true);
+    require(scene.context.systemSounds.plays == 1 &&
+                scene.context.systemSounds.lastSound == *scene.completionSounds[index++] &&
+                scene.context.systemSounds.gain == 1.0F &&
+                scene.context.systemSounds.bus == audio::Bus::GameplaySfx,
+            "each completion cue routes to gameplay SFX with master applied only by mixer");
+    scene.playCompletionSound(true);
+    require(scene.context.systemSounds.plays == 1,
+            "routing preserves one cue per completion");
+  }
+}
+
 void testAutomaticRetryCue() {
   for (const bool reshuffle : {false, true}) {
     GamePlayScene scene;
@@ -3185,8 +3213,9 @@ void testAutomaticRetryCue() {
     scene.clock = 1234;
     scene.context.settings.audioVideo.audio.masterVolume = volume;
     scene.playQuickRetryFeedback();
-    require(scene.context.systemSounds.gain == volume,
-            "retry cue passes master attenuation and mute to the system voice");
+    require(scene.context.systemSounds.gain == 1.0F &&
+                scene.context.systemSounds.bus == audio::Bus::GameplaySfx,
+            "retry cue uses gameplay SFX so the mixer applies master exactly once");
     require(scene.context.quickRetryFeedback.startedMicros == 1234,
             "visual cue still starts when audio is muted");
   }
@@ -3198,6 +3227,7 @@ void testAutomaticRetryCue() {
 int main(int argc, char **argv) {
   testGameplayEndPreservesHeldLaneBeams();
   testResultFadeKeepsNativeInputAndCapturedResult();
+  testCompletionCuesUseGameplaySfx();
   testAutomaticRetryCue();
   testLegacyMissedHcnPreview();
   testLegacyMineKeysoundOnlyOnDetonation();

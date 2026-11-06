@@ -15,7 +15,9 @@ StreamRequest requestFrom(const player_settings::AudioSettings &settings) {
 Volumes volumesFrom(const player_settings::AudioSettings &settings) {
   return {.master = settings.masterVolume,
           .bgm = settings.bgmVolume,
-          .keysound = settings.keysoundVolume};
+          .keysound = settings.keysoundVolume,
+          .menuSfx = settings.menuSfxVolume,
+          .gameplaySfx = settings.gameplaySfxVolume};
 }
 
 template <typename Value>
@@ -34,7 +36,8 @@ void appendMessage(i18n::Text &message, i18n::Text addition) {
 
 bool sameVolumes(const Volumes &left, const Volumes &right) {
   return left.master == right.master && left.bgm == right.bgm &&
-         left.keysound == right.keysound;
+         left.keysound == right.keysound && left.menuSfx == right.menuSfx &&
+         left.gameplaySfx == right.gameplaySfx;
 }
 
 void updateVolumeFields(player_settings::AudioSettings &settings,
@@ -42,6 +45,8 @@ void updateVolumeFields(player_settings::AudioSettings &settings,
   settings.masterVolume = volumes.master;
   settings.bgmVolume = volumes.bgm;
   settings.keysoundVolume = volumes.keysound;
+  settings.menuSfxVolume = volumes.menuSfx;
+  settings.gameplaySfxVolume = volumes.gameplaySfx;
 }
 
 } // namespace

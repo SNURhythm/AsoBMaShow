@@ -4417,7 +4417,7 @@ void GamePlayScene::playCompletionSound(bool builtInPresented) {
       capturedPlayfieldVisualState.clock.visualTimeMicros, builtInPresented);
   if (sound && completionSounds[*sound]) {
     context.systemAudio().playSkinSound(*completionSounds[*sound],
-        context.settings.audioVideo.audio.masterVolume, false);
+        1.0F, false, audio::Bus::GameplaySfx);
   }
 }
 
@@ -4430,7 +4430,7 @@ void GamePlayScene::prepareGuidedAccessChime() {
 
 void GamePlayScene::playGuidedAccessChime() {
   if (guidedAccessChime) {
-    context.systemAudio().playSkinSound(*guidedAccessChime, 1.0F, false);
+    context.systemAudio().playSkinSound(*guidedAccessChime, 1.0F, false, audio::Bus::MenuSfx);
   }
 }
 
@@ -5775,7 +5775,7 @@ void GamePlayScene::playQuickRetryFeedback() {
   if (feedback.sound) {
     auto &audio = context.systemAudio();
     audio.stopSkinSound(*feedback.sound);
-    audio.playSkinSound(*feedback.sound, context.settings.audioVideo.audio.masterVolume, false);
+    audio.playSkinSound(*feedback.sound, 1.0F, false, audio::Bus::GameplaySfx);
   }
 }
 

@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <limits>
 #include <optional>
-namespace audio { struct SkinSoundHandle { int value=0; explicit operator bool() const { return value!=0; } }; }
+namespace audio { enum class Bus { System, MenuSfx }; struct SkinSoundHandle { int value=0; explicit operator bool() const { return value!=0; } }; }
 std::filesystem::path fspath_to_path_t(const std::filesystem::path &p) { return p; }
 struct AudioWrapper {
   int loads=0, plays=0, disposed=0;
@@ -17,7 +17,7 @@ struct AudioWrapper {
     loadedBytes += 200*1024;
     return {audio::SkinSoundHandle{loads}};
   }
-  void playSkinSound(audio::SkinSoundHandle, float gain, bool loop) { assert(gain==1 && !loop); ++plays; }
+  void playSkinSound(audio::SkinSoundHandle, float gain, bool loop, audio::Bus bus = audio::Bus::System) { assert(gain==1 && !loop && bus == audio::Bus::MenuSfx); ++plays; }
   void stopSkinSound(audio::SkinSoundHandle) {}
   void disposeSkinSound(audio::SkinSoundHandle) { ++disposed; }
 };

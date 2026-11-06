@@ -278,6 +278,10 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   volumeControls->addView(makeVolumeRow(i18n::message("settings.audio.volume.bgm.label"), 1, &bgmVolumeInput));
   volumeControls->addView(
       makeVolumeRow(i18n::message("settings.audio.volume.keysound.label"), 2, &keysoundVolumeInput));
+  volumeControls->addView(
+      makeVolumeRow(i18n::message("settings.audio.volume.menu_sfx.label"), 3, &menuSfxVolumeInput));
+  volumeControls->addView(
+      makeVolumeRow(i18n::message("settings.audio.volume.gameplay_sfx.label"), 4, &gameplaySfxVolumeInput));
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.audio.volume.label"), "",
       volumeControls, metrics.modeCardHeight, metrics.cardsWidth));
@@ -971,6 +975,8 @@ void SettingsScene::syncVolumeInputText(bool force) {
   sync(masterVolumeInput, audio.masterVolume);
   sync(bgmVolumeInput, audio.bgmVolume);
   sync(keysoundVolumeInput, audio.keysoundVolume);
+  sync(menuSfxVolumeInput, audio.menuSfxVolume);
+  sync(gameplaySfxVolumeInput, audio.gameplaySfxVolume);
 }
 
 void SettingsScene::commitVolumeInput(TextInputBox *input, int busIndex) {
@@ -983,15 +989,22 @@ void SettingsScene::commitVolumeInput(TextInputBox *input, int busIndex) {
     float master = current.masterVolume;
     float bgm = current.bgmVolume;
     float keysound = current.keysoundVolume;
+    float menuSfx = current.menuSfxVolume;
+    float gameplaySfx = current.gameplaySfxVolume;
     const float value = static_cast<float>(percent) / 100.0F;
     if (busIndex == 0) {
       master = value;
     } else if (busIndex == 1) {
       bgm = value;
-    } else {
+    } else if (busIndex == 2) {
       keysound = value;
+    } else if (busIndex == 3) {
+      menuSfx = value;
+    } else {
+      gameplaySfx = value;
     }
-    const auto result = audioVideoSession->applyVolumes(master, bgm, keysound);
+    const auto result = audioVideoSession->applyVolumes(master, bgm, keysound,
+                                                       menuSfx, gameplaySfx);
     audioDraft = context.settings.audioVideo.audio;
     if (result.status != audio::ApplyStatus::Applied) {
       setAudioStatus(audioApplyMessage(result), audioApplyColor(result.status));
@@ -1006,11 +1019,15 @@ void SettingsScene::adjustVolume(int busIndex, int deltaPercent) {
   const auto &audio = context.settings.audioVideo.audio;
   int percent = busIndex == 0   ? volumePercent(audio.masterVolume)
                 : busIndex == 1 ? volumePercent(audio.bgmVolume)
-                                : volumePercent(audio.keysoundVolume);
+                : busIndex == 2 ? volumePercent(audio.keysoundVolume)
+                : busIndex == 3 ? volumePercent(audio.menuSfxVolume)
+                                : volumePercent(audio.gameplaySfxVolume);
   percent = std::clamp(percent + deltaPercent, 0, 100);
   TextInputBox *input = busIndex == 0   ? masterVolumeInput
                         : busIndex == 1 ? bgmVolumeInput
-                                        : keysoundVolumeInput;
+                        : busIndex == 2 ? keysoundVolumeInput
+                        : busIndex == 3 ? menuSfxVolumeInput
+                                        : gameplaySfxVolumeInput;
   if (input != nullptr) {
     input->setEditingText(std::to_string(percent));
   }

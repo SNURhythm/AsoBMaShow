@@ -61,6 +61,7 @@ def main():
         "void GamePlayScene::consumePracticeMenuLaneInput(",
         "bool GamePlayScene::retryIfTargetsUnreachable()",
         "void GamePlayScene::playQuickRetryFeedback()",
+        "void GamePlayScene::playCompletionSound(",
         "void GamePlayScene::update(float dt)",
         "void GamePlayScene::transferRealtimeGameplayResult(",
         "void GamePlayScene::completePracticeSection(",
