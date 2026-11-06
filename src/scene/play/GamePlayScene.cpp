@@ -2009,12 +2009,16 @@ bool GamePlayScene::enterPracticeMenu() {
   state->configureGauge(options.gaugeType, options.gaugeAutoShift,
                         options.gaugeProfile, options.gaugeAutoShiftLowerBound);
   state->isPlaying = false;
+  practiceMenuActive = true;
+  practiceMenuStartPressedMicros = 0;
+  practiceMenuPresentationStartMicros = nowMicros();
   capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
   acquireGameplaySkinForAttempt();
   if (presentation == nullptr) {
     return false;
   }
   if (presentation->activeMode() != PresentationMode::Skin) {
+    practiceMenuActive = false;
     if (retainedSkinMenuAttempt) {
       const auto attempt = options.practiceSession->beginSkinMenuAttempt();
       return attempt.has_value() &&
@@ -3678,7 +3682,10 @@ void GamePlayScene::init() {
     refreshGameplayPresentationGeometry();
     if (!guidedAccessReminderPending) {
       inputHandler->startListenSDL();
-#if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+      // The practice menu has no realtime worker/raw touch registration yet.
+      if (practiceMenuActive) inputHandler->startListenTouch();
+#else
       inputHandler->startListenTouch();
 #endif
     }
@@ -5116,7 +5123,11 @@ void GamePlayScene::restartCurrentPattern() {
   context.jukebox.stop();
   defer(
       [this]() {
-        reset();
+        if (practiceMenuActive) {
+          startPracticeAttemptFromMenu();
+        } else {
+          reset();
+        }
         return true;
       },
       0, true);
@@ -6794,6 +6805,12 @@ void GamePlayScene::capturePlayfieldVisualState(
         configuration != nullptr ? configuration->endMicros
                                  : chart->Meta.PlayLength,
         practiceMenuActive);
+  }
+  if (practiceMenuActive) {
+    // The jukebox is stopped in setup and can still retain the previous song's
+    // position. Skin animations need their own advancing, scene-relative clock.
+    frameClock.skinTimeMicros =
+        std::max(0LL, nowMicros() - practiceMenuPresentationStartMicros);
   }
   capturedPlayfieldVisualState =
       selectedSkinActive

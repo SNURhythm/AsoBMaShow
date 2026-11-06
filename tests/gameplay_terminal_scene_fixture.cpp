@@ -450,7 +450,15 @@ public:
   void setRealtimeGameplayIngressEnabledFromProduction(bool enabled);
   void drainRealtimeTouchSamples() { if (onTouchDrain) onTouchDrain(); }
   long long nowMicros() const { return clock; }
-  void startPracticeAttemptFromMenu() { require(false, "unexpected practice menu"); }
+  void startPracticeAttemptFromMenu();
+  void consumePracticeMenuLaneInput(int lane, bool pressed);
+  int practiceMenuPreparations = 0;
+  bool preparePracticeAttemptFromMenu(const practice::SkinMenuAttemptPlan &attempt,
+                                      std::string_view) {
+    ++practiceMenuPreparations;
+    applySkinMenuAttemptPlanToStartOptions(options, attempt);
+    return true;
+  }
   bool isReplayPlayback() const { return options.replayData != nullptr; }
   void applyStartSelectControlActions(
       const std::vector<gameplay::StartSelectControlAction> &actions) {
@@ -713,6 +721,42 @@ void testAbortExportAdmission(const ReplayData &replay) {
 }
 
 #include "gameplay_terminal_persistence_fixture.h"
+
+void testRestartStartsPracticeMenuAttempt() {
+  for (const bool restartButton : {true, false}) {
+    GamePlayScene scene;
+    practice::Configuration configuration{
+        .startMicros = 0, .endMicros = 10'000'000};
+    scene.options.practiceSession = std::make_shared<practice::Session>(configuration);
+    scene.options.practiceSession->configureSkinMenu(
+        {.lastTimelineMicros = 10'000'000, .keyMode = 7});
+    scene.practiceMenuActive = true;
+    scene.state->isPlaying = false;
+    if (restartButton) {
+      scene.restartCurrentPattern();
+    } else {
+      scene.clock = 1'000'000;
+      scene.consumePracticeMenuLaneInput(
+          scene.chart->Meta.GetTotalLaneIndices().front(), true);
+      scene.clock += 1'000'001;
+      scene.update(0.0F);
+    }
+    require(!scene.practiceMenuActive && scene.practiceMenuStartPressedMicros == 0,
+            "starting practice must leave the menu before gameplay updates");
+    require(scene.resets == 1 && scene.practiceMenuPreparations == 1 &&
+                scene.options.practiceSession->hasActivatedSkinMenuAttempt(),
+            "restart and held first key use the same prepared practice attempt");
+    scene.update(0.0F);
+    require(!scene.state->isEnding && scene.transitions == 0,
+            "the started practice attempt remains in gameplay");
+    scene.useProductionJudging = true;
+    scene.context.jukebox.time = 2'500'000;
+    scene.update(0.0F);
+    require(scene.state->judgeCount[Poor] == 1 &&
+                scene.state->stagePassedNotes == 1 && !scene.state->isEnding,
+            "the started practice attempt advances real timeline judgements");
+  }
+}
 
 void testPausePenaltyAndFreshAttemptBoundary() {
   for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
@@ -3103,6 +3147,7 @@ int main(int argc, char **argv) {
     }
   }
   std::cout << "COR01 actual scene practice tests passed\n";
+  testRestartStartsPracticeMenuAttempt();
   testQueuedAbortLifetime();
   testPausePenaltyAndFreshAttemptBoundary();
   testPauseOnlyPenalizesUnfinishedNotePlay();

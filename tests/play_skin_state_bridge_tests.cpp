@@ -3139,6 +3139,37 @@ void testPracticeSuppliesGameplayTimeProperties() {
   }
 }
 
+void testPracticeMenuUsesItsOwnAnimationClock() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  std::uint64_t serial = 0;
+  for (const auto elapsed : {0LL, 250'000LL, 2'000'000LL, 60'000'000LL}) {
+    auto state = stateAt(++serial);
+    state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+    state.authority.practiceMenuActive = true;
+    state.sceneStartMicros = 0;
+    // The old song's stopped clock must not fast-forward or freeze the menu.
+    state.clock.visualTimeMicros = 180'000'000;
+    state.clock.gameplayTimeMicros = 180'000'000;
+    state.clock.skinTimeMicros = elapsed;
+    state.clock.playTimer = practiceSkinPlayTimer(
+        state.clock.gameplayTimeMicros, 0, 30'000'000, true);
+    bridge.beginFrame(state, projectionAt(serial));
+    expect(skinStateClockMicros(state) == elapsed,
+           "practice menu animation follows its own elapsed clock");
+    for (const int timer : {40, 41, 143, 908, 2}) {
+      expect(bridge.timerProperty({timer}) == kPlayfieldTimestampOff,
+             "setup never starts ready, play, or ending animations");
+    }
+    bridge.discardFrame();
+  }
+}
+
 void testPracticeClockNeverSynthesizesResultFadeout() {
   PlayfieldChartVisualModel chart;
   ValidatedBeatorajaSkinModel model;
@@ -4578,6 +4609,7 @@ int main() {
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPracticeSuppliesGameplayTimeProperties();
+  testPracticeMenuUsesItsOwnAnimationClock();
   testPracticeClockNeverSynthesizesResultFadeout();
   testSettingsPreviewSuppliesGameplayTimeProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();

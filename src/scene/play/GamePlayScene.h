@@ -420,6 +420,7 @@ private:
   bool playbackInitializationFailed = false;
   bool practiceMenuActive = false;
   long long practiceMenuStartPressedMicros = 0;
+  long long practiceMenuPresentationStartMicros = 0;
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;

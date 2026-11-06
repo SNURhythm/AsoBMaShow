@@ -56,6 +56,8 @@ def main():
         "bool GamePlayScene::drainRealtimeInputInterruption()",
         "void GamePlayScene::togglePauseMenuFromInput()",
         "void GamePlayScene::restartCurrentPattern()",
+        "void GamePlayScene::startPracticeAttemptFromMenu()",
+        "void GamePlayScene::consumePracticeMenuLaneInput(",
         "bool GamePlayScene::retryIfTargetsUnreachable()",
         "void GamePlayScene::playQuickRetryFeedback()",
         "void GamePlayScene::update(float dt)",
@@ -172,10 +174,10 @@ def main():
     ])
     fallback_source = extract(source, "bool GamePlayScene::enterPracticeMenu()")
     fallback_start = fallback_source.index('    if (!applyPracticePlayOptions(')
-    fallback_end = fallback_source.index('\n  practiceMenuActive = true;')
+    fallback_end = fallback_source.rindex('\n  practiceMenuActive = true;')
     fallback_body = fallback_source[fallback_start:fallback_end].rsplit('\n  }', 1)[0]
     state_start = fallback_source.index('  ownedState = std::make_unique<RhythmState>')
-    state_end = fallback_source.index('  capturePlayfieldVisualState(')
+    state_end = fallback_source.index('  practiceMenuActive = true;')
     preparation_methods += '\nbool PreparedGamePlayScene::prepareBuiltInFallback() {\n'
     preparation_methods += fallback_source[state_start:state_end] + fallback_body + '\n}\n'
     reset_source = extract(source, "bool GamePlayScene::reset()")

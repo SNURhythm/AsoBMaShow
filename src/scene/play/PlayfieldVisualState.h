@@ -53,6 +53,8 @@ struct PlayfieldFrameClock {
   long long replayTouchTimeMicros = 0;
   long long bgaTimeMicros = 0;
   PlayfieldPlayTimerAuthority playTimer;
+  // Non-playing setup can animate independently of the stopped audio clock.
+  std::optional<long long> skinTimeMicros;
 
   bool operator==(const PlayfieldFrameClock &) const = default;
 };
@@ -580,7 +582,8 @@ skinStateTimestampMicros(const PlayfieldVisualState &state,
 
 [[nodiscard]] inline constexpr long long
 skinStateClockMicros(const PlayfieldVisualState &state) noexcept {
-  return skinStateTimestampMicros(state, state.clock.visualTimeMicros);
+  return state.clock.skinTimeMicros.value_or(
+      skinStateTimestampMicros(state, state.clock.visualTimeMicros));
 }
 
 class PlayfieldVisualStateStore final : public IPlayfieldPresentationEvents {

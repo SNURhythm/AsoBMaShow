@@ -3506,7 +3506,8 @@ std::int64_t PlaySkinStateBridge::timerProperty(
   }
   switch (*id) {
   case 40:
-    return snapshot->sceneStartMicros != kPlayfieldTimestampOff &&
+    return !snapshot->authority.practiceMenuActive &&
+                   snapshot->sceneStartMicros != kPlayfieldTimestampOff &&
                    skinStateClockMicros(*snapshot) >= 0
                ? 0
                : INT64_MIN;
