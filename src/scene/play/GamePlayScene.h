@@ -438,7 +438,8 @@ private:
   size_t replayLaneCoverCursor = 0;
   bool playbackInitializationFailed = false;
   bool practiceMenuActive = false;
-  long long practiceMenuStartPressedMicros = 0;
+  bool practiceMenuStartRequested = false;
+  long long practiceMenuStartBlockedUntilMicros = 0;
   long long practiceMenuPresentationStartMicros = 0;
   std::unique_ptr<gameplay::PracticeMenuTouchInput> practiceMenuTouchInput;
   std::optional<gameplay::RealtimeTouchLayoutRefreshKey> practiceMenuTouchLayoutKey;

@@ -42,7 +42,7 @@ struct GamePlayScene : Scene {
   Context context;
   bool playbackInitializationFailed = false, guidedAccessReminderPending = false;
   bool practiceMenuActive = false, coursePauseHoldActive = false, coursePauseHoldRewinding = false;
-  long long practiceMenuStartPressedMicros = 0;
+  bool practiceMenuStartRequested = false;
   struct State { bool isPlaying = true, isEnding = false; };
   State *state = nullptr;
   Presentation *presentation = nullptr;
@@ -118,7 +118,7 @@ int main() {
   game.presentation = &builtIn;
   game.practiceMenuActive = true;
   assert(!game.needsContinuousPresentation());
-  game.practiceMenuStartPressedMicros = 100;
+  game.practiceMenuStartRequested = true;
   assert(game.needsContinuousPresentation());
   game.playbackInitializationFailed = true;
   assert(!game.needsContinuousPresentation());

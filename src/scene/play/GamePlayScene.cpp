@@ -2011,8 +2011,9 @@ bool GamePlayScene::enterPracticeMenu() {
                         options.gaugeProfile, options.gaugeAutoShiftLowerBound);
   state->isPlaying = false;
   practiceMenuActive = true;
-  practiceMenuStartPressedMicros = 0;
+  practiceMenuStartRequested = false;
   practiceMenuPresentationStartMicros = nowMicros();
+  practiceMenuStartBlockedUntilMicros = practiceMenuPresentationStartMicros + 1'000'000;
   capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
   acquireGameplaySkinForAttempt();
   if (presentation == nullptr) {
@@ -2054,7 +2055,7 @@ bool GamePlayScene::enterPracticeMenu() {
     return true;
   }
   practiceMenuActive = true;
-  practiceMenuStartPressedMicros = 0;
+  practiceMenuStartRequested = false;
   return true;
 }
 
@@ -2075,7 +2076,13 @@ void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
   if (keys.empty() || lane != keys.front()) {
     return;
   }
-  practiceMenuStartPressedMicros = pressed ? nowMicros() : 0;
+  // Retain a valid press until update() even if a quick touch Up is drained
+  // in the same batch. Beatoraja's one-second guard belongs to Start/Select,
+  // not to the duration of the first-key press.
+  if (pressed && !startButtonPressed && !selectButtonPressed &&
+      nowMicros() > practiceMenuStartBlockedUntilMicros) {
+    practiceMenuStartRequested = true;
+  }
 }
 
 bool GamePlayScene::preparePracticeAttemptFromMenu(
@@ -2157,7 +2164,7 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
   clearPracticeMenuInput();
   if (inputHandler != nullptr) inputHandler->cancelInputState();
   practiceMenuActive = false;
-  practiceMenuStartPressedMicros = 0;
+  practiceMenuStartRequested = false;
   updatePracticeMenuControls();
   (void)reset();
 }
@@ -2254,7 +2261,7 @@ void GamePlayScene::clearPracticeMenuInput() {
   if (practiceMenuTouchInput) practiceMenuTouchInput->cancel(nowMicros());
   practiceMenuTouchInput.reset();
   practiceMenuTouchLayoutKey.reset();
-  practiceMenuStartPressedMicros = 0;
+  practiceMenuStartRequested = false;
   if (practiceMenuActive) {
     for (auto &[lane, pressed] : lanePressed) pressed = false;
     if (options.practiceSession) options.practiceSession->setSkinMenuInputModifiers(false, false);
@@ -2333,6 +2340,7 @@ bool GamePlayScene::handlePracticeMenuTouch(SDL_FingerID finger,
                                            ReplayTouchAction action,
                                            Vector3 normalizedLocation) {
   const bool cancelled = action == ReplayTouchAction::Cancel;
+  if (cancelled) practiceMenuStartRequested = false;
   if (!cancelled && ((pauseLayout && pauseLayout->getVisible()) ||
                     context.appInBackground.load(std::memory_order_acquire))) return true;
   if (!practiceMenuTouchInput && !cancelled) refreshPracticeMenuInput();
@@ -4950,7 +4958,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
 }
 
 void GamePlayScene::showPauseMenu(bool pausePlayback) {
-  if (practiceMenuActive) practiceMenuStartPressedMicros = 0;
+  if (practiceMenuActive) practiceMenuStartRequested = false;
   setRealtimeGameplayIngressEnabled(false);
   if (gameplay::shouldSuspendRealtimeGameplayForPause(pausePlayback) &&
       realtimeGameplayAuthorityActive() &&
@@ -5166,6 +5174,12 @@ void GamePlayScene::consumeStartSelectInput(
     break;
   default:
     break;
+  }
+  if (practiceMenuActive &&
+      (input.control.kind == replay::LogicalControlKind::Start ||
+       input.control.kind == replay::LogicalControlKind::Select)) {
+    practiceMenuStartBlockedUntilMicros = nowMicros() + 1'000'000;
+    practiceMenuStartRequested = false;
   }
   applyStartSelectControlActions(
       input.analogScratchTicks > 0
@@ -7538,7 +7552,7 @@ bool GamePlayScene::needsContinuousPresentation() const {
   if (guidedAccessReminderPending) return true;
   if (presentation && presentation->activeMode() == PresentationMode::Skin)
     return true;
-  if (practiceMenuActive) return practiceMenuStartPressedMicros != 0;
+  if (practiceMenuActive) return practiceMenuStartRequested;
   if (coursePauseHoldActive || coursePauseHoldRewinding) return true;
   // Course menus do not pause playback. Built-in ordinary pauses use the
   // frozen song clock, but a video may still need to promote a decoded frame.
@@ -7604,8 +7618,14 @@ void GamePlayScene::update(float dt) {
       applyStartSelectControlActions(startSelectControl->tick(nowMicros()));
       if (resultTransitionScheduled) return;
     }
-    if (practiceMenuStartPressedMicros != 0 &&
-        nowMicros() - practiceMenuStartPressedMicros > 1'000'000) {
+    if (startButtonPressed || selectButtonPressed) {
+      practiceMenuStartBlockedUntilMicros = nowMicros() + 1'000'000;
+      practiceMenuStartRequested = false;
+    }
+    const auto keys = chart->Meta.GetKeyLaneIndices();
+    const bool firstKeyHeld = !keys.empty() && laneIsPressed(lanePressed, keys.front());
+    if (nowMicros() > practiceMenuStartBlockedUntilMicros &&
+        (practiceMenuStartRequested || firstKeyHeld)) {
       startPracticeAttemptFromMenu();
     }
     return;

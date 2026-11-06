@@ -30,9 +30,14 @@ class ScenePresentationActivityTests(unittest.TestCase):
                      "IrUploadsScene", "MusicSelectSkinErrorScene", "MusicSelectScene"):
             method = extract((ROOT / "src/scene" / f"{name}.h").read_text(),
                              "bool needsContinuousPresentation() const override")
-            classes.append(f"struct {name} : Scene {{ {method} }};")
+            members = ("struct { bool running = false; bool hasWorker() const { return running; } } candidateLoadTask;"
+                       if name == "IrUploadsScene" else "")
+            classes.append(f"struct {name} : Scene {{ {members} {method} }};")
             expected = "true" if name == "MusicSelectScene" else "false"
             checks.append(f"assert({name}().needsContinuousPresentation() == {expected});")
+            if name == "IrUploadsScene":
+                checks.append("IrUploadsScene uploads; uploads.candidateLoadTask.running = true; "
+                              "assert(uploads.needsContinuousPresentation());")
         self.compile_and_run("#include <cassert>\nstruct Scene { " + base + " };\n" +
                              "\n".join(classes) + "\nint main() {\n" +
                              "assert(Scene().needsContinuousPresentation());\n" +
@@ -278,7 +283,7 @@ struct Hispeed {
 struct GamePlayScene {
   bool playbackInitializationFailed = false, guidedAccessReminderPending = false;
   bool practiceMenuActive = false, coursePauseHoldActive = false, coursePauseHoldRewinding = false;
-  long long practiceMenuStartPressedMicros = 0;
+  bool practiceMenuStartRequested = false;
   struct State {} ownedState;
   State *state = &ownedState;
   struct {

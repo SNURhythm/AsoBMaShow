@@ -286,7 +286,8 @@ public:
   std::optional<gameplay::RealtimeTouchLayoutRefreshKey> practiceMenuTouchLayoutKey;
   void clearPracticeMenuInput();
   void updatePracticeMenuControls() {}
-  long long practiceMenuStartPressedMicros = 0;
+  bool practiceMenuStartRequested = false;
+  long long practiceMenuStartBlockedUntilMicros = 0;
   bool touchVisualizerLoaded = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
@@ -751,12 +752,45 @@ void testPracticeMenuPauseClearsStartHold() {
   scene.showPauseMenu(false);
   scene.clock += 2'000'000;
   scene.update(0);
-  require(scene.practiceMenuStartPressedMicros == 0 && !scene.lanePressed[0],
+  require(!scene.practiceMenuStartRequested && !scene.lanePressed[0],
           "pausing setup clears held-key feedback and the pending start");
   scene.closePauseMenu();
   scene.update(0);
   require(scene.practiceMenuActive && scene.resets == 0,
           "closing setup pause cannot start a held section");
+}
+
+void testPracticeFirstKeyWaitsOnlyForStartSelectCooldown() {
+  for (const auto kind : {replay::LogicalControlKind::Start,
+                           replay::LogicalControlKind::Select}) {
+    GamePlayScene scene;
+    scene.options.practiceSession = std::make_shared<practice::Session>(
+        practice::Configuration{.startMicros = 0, .endMicros = 10'000'000});
+    scene.options.practiceSession->configureSkinMenu(
+        {.lastTimelineMicros = 10'000'000, .keyMode = 7});
+    scene.practiceMenuActive = true;
+    scene.state->isPlaying = false;
+    scene.startSelectControl.emplace(gameplay::StartSelectControl::Configuration{.keyMode = 7});
+    scene.clock = 2'000'000;
+    scene.consumeStartSelectInput({.control = {.kind = kind}, .pressed = true,
+                                   .timestampMicros = scene.clock});
+    scene.consumePracticeMenuLaneInput(0, true);
+    scene.consumePracticeMenuLaneInput(0, false);
+    scene.clock += 2'000'000;
+    scene.update(0);
+    require(scene.practiceMenuActive && scene.resets == 0,
+            "holding Start or Select blocks first-key startup without queuing an old tap");
+    scene.consumeStartSelectInput({.control = {.kind = kind}, .pressed = false,
+                                   .timestampMicros = scene.clock});
+    scene.consumePracticeMenuLaneInput(0, true);
+    scene.clock += 999'999;
+    scene.update(0);
+    require(scene.practiceMenuActive, "first key respects the Start/Select release cooldown");
+    scene.clock += 2;
+    scene.update(0);
+    require(!scene.practiceMenuActive && scene.resets == 1,
+            "a held first key starts as soon as the control cooldown expires");
+  }
 }
 
 void testRestartStartsPracticeMenuAttempt() {
@@ -780,7 +814,7 @@ void testRestartStartsPracticeMenuAttempt() {
             "spin scratch advances the menu once per angular tick");
     scene.clock = 100;
     scene.consumePracticeMenuLaneInput(7, true);
-    require(scene.practiceMenuStartPressedMicros == 0,
+    require(!scene.practiceMenuStartRequested,
             "scratch navigation never starts a practice attempt");
     scene.consumePracticeMenuLaneInput(7, false);
     scene.consumePracticeMenuLaneInput(1, true);
@@ -798,6 +832,8 @@ void testRestartStartsPracticeMenuAttempt() {
       if (startMethod == 1) {
         scene.consumePracticeMenuLaneInput(
             scene.chart->Meta.GetKeyLaneIndices().front(), true);
+        scene.consumePracticeMenuLaneInput(
+            scene.chart->Meta.GetKeyLaneIndices().front(), false);
       } else {
         scene.practiceMenuTouchInput = std::make_unique<gameplay::PracticeMenuTouchInput>(
             gameplay::RealtimeTouchInputSink{
@@ -819,16 +855,18 @@ void testRestartStartsPracticeMenuAttempt() {
                              .uiWidth = 100, .uiHeight = 100}}, scene.clock);
         scene.practiceMenuTouchInput->consume(1, gameplay::RealtimeTouchPhase::Down,
                                               0.5F, 0.5F, scene.clock);
+        scene.practiceMenuTouchInput->consume(1, gameplay::RealtimeTouchPhase::Up,
+                                              0.5F, 0.5F, scene.clock + 1);
       }
-      scene.clock += 1'000'001;
+      scene.clock += 2;
       scene.update(0.0F);
     }
     require(!scene.practiceMenuTouchInput, "attempt retires the setup touch router");
-    require(!scene.practiceMenuActive && scene.practiceMenuStartPressedMicros == 0,
+    require(!scene.practiceMenuActive && !scene.practiceMenuStartRequested,
             "starting practice must leave the menu before gameplay updates");
     require(scene.resets == 1 && scene.practiceMenuPreparations == 1 &&
                 scene.options.practiceSession->hasActivatedSkinMenuAttempt(),
-            "restart and held first key use the same prepared practice attempt");
+            "restart and quick first-key taps use the same prepared practice attempt");
     scene.update(0.0F);
     require(!scene.state->isEnding && scene.transitions == 0,
             "the started practice attempt remains in gameplay");
@@ -3303,6 +3341,7 @@ int main(int argc, char **argv) {
   }
   std::cout << "COR01 actual scene practice tests passed\n";
   testPracticeMenuPauseClearsStartHold();
+  testPracticeFirstKeyWaitsOnlyForStartSelectCooldown();
   testRestartStartsPracticeMenuAttempt();
   testQueuedAbortLifetime();
   testPausePenaltyAndFreshAttemptBoundary();
