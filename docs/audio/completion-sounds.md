@@ -7,7 +7,8 @@ ending on F-sharp 6, the same highest note as Perfect. These WAVs are identical
 to the approved `earshot-max-high-finish` audition (without its preview lead-in).
 
 The scene preloads the 48 kHz stereo PCM24 assets and plays the matching cue
-once when its built-in animation starts, at the current master volume. The
+once when its built-in animation starts, using Gameplay SFX × Master Volume.
+Both controls are available in Settings → Audio. The
 sound's 80 ms Full Combo/Perfect accent and 140 ms MAX accent align with the
 animation. Finish and practice do not play these cues. Authored skin playback
 keeps its own sounds. Retry resets the trigger; scene exit stops and releases

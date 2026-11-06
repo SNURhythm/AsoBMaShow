@@ -1,0 +1,8 @@
+-r requirements.txt
+# Earshot model-backed critic / calibrated descriptions / independent AST tags.
+earshot @ git+https://github.com/Leonxlnx/earshot.git@591fa3e028032e6dce56620a20e932e35667e8d8
+torch==2.15.0
+transformers==5.22.1
+scikit-learn==1.9.1
+librosa==1.0.0
+matplotlib==3.11.2
