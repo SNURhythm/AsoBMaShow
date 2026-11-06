@@ -362,6 +362,7 @@ public:
   long long offset = 0;
   long long clock = 0;
   std::optional<std::int64_t> sourcePlaytime;
+  PlayfieldChartVisualModel playfieldChartVisualModel;
   Judge judge{2};
   gameplay::GameplayPolicyBuildOutcome rulesetPolicyBuild;
   std::unordered_map<int, bool> lanePressed;
@@ -489,7 +490,7 @@ public:
   void processReplayLaneCoverEvents(long long) {}
   bool preparationIndicatorActive(long long) const { return false; }
   std::optional<std::int64_t> beatorajaPlaytimeMillis(
-      bms_parser::Chart *, const StartOptions &) const { return sourcePlaytime; }
+      bms_parser::Chart *, const StartOptions &, long long) const { return sourcePlaytime; }
   void stopRealtimeGameplayAuthority(bool transferReplay) {
     if (realtimeGameplaySession && realtimeGameplaySession->worker &&
         realtimeGameplaySession->worker->native) {
@@ -1658,6 +1659,13 @@ void testGameplayEndReleasesHeldLaneBeams() {
       scene.realtimeGameplaySession->worker->snapshot.terminalReason =
           gameplay::GameplayTerminalReason::ChartComplete;
       scene.stoppedSnapshot = std::make_unique<RhythmState>(*scene.state);
+      scene.context.jukebox.time = 4'000'999;
+      scene.updateWhileBackgrounded();
+      require(!scene.context.jukebox.isPaused(),
+              "a completed worker must not pause the background clock before the playtime margin");
+      scene.update(0.016F);
+      require(!scene.state->isEnding && scene.transitions == 0 && scene.lanePressed[0],
+              "a completed worker must not open results before the strict playtime boundary");
     }
     scene.context.jukebox.time = 4'001'000;
     scene.update(0.016F);

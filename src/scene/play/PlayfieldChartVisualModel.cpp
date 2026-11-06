@@ -721,6 +721,12 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           hasAny(timeline->LandmineNotes)) {
         lastVisualNoteTimelineOrdinal = authoredTimelineOrdinal;
       }
+      if (hasAny(timeline->Notes) || hasAny(timeline->InvisibleNotes) ||
+          hasAny(timeline->LandmineNotes) || hasAny(timeline->BackgroundNotes) ||
+          timeline->BgaBase != -1 || timeline->BgaLayer != -1) {
+        result.staticMetadata.lastEventTimeMicros =
+            std::max(result.staticMetadata.lastEventTimeMicros, timeline->Timing);
+      }
       ++authoredTimelineOrdinal;
     }
   }

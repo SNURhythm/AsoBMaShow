@@ -155,6 +155,13 @@ void testExistingExclusionsAndNormalActivationRemain() {
 
 void testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline() {
   require(gameplay::classifyRealtimeGameplayTerminal(
+              gameplay::GameplayTerminalReason::ChartComplete, false, false) ==
+              gameplay::RealtimeGameplayTerminalAction::Wait &&
+              gameplay::classifyRealtimeGameplayTerminal(
+                  gameplay::GameplayTerminalReason::ChartComplete, false, true) ==
+                  gameplay::RealtimeGameplayTerminalAction::CompleteChart,
+          "a completed scoring worker must still wait for the five-second playtime margin");
+  require(gameplay::classifyRealtimeGameplayTerminal(
               gameplay::GameplayTerminalReason::None, false, true) ==
               gameplay::RealtimeGameplayTerminalAction::CompleteChart &&
               gameplay::classifyRealtimeGameplayTerminal(
@@ -176,14 +183,17 @@ void testReplayStatePlayCompletesBeforeTrailingTimeline() {
           "timeline-bound completion");
 }
 
-void testAllNonPracticeModesUseLastPlayableNoteInsteadOfTrailingTimeline() {
+void testAutoplayUsesLastEventWhilePlayAndReplayUseLastNote() {
   constexpr std::int64_t lastPlayableNoteMicros = 10'000'000;
-  constexpr std::int64_t lastTimelineMicros = 80'000'000;
+  constexpr std::int64_t lastEventMicros = 80'000'000;
   require(gameplay::terminalMicrosForGameplayMode(lastPlayableNoteMicros,
-                                                   lastTimelineMicros) ==
+                                                   lastEventMicros, false) ==
               lastPlayableNoteMicros,
-          "normal play, autoplay, and replay must all leave gameplay from "
-          "the final playable note rather than a trailing empty timeline");
+          "normal play and replay use the final playable note");
+  require(gameplay::terminalMicrosForGameplayMode(lastPlayableNoteMicros,
+                                                   lastEventMicros, true) ==
+              lastEventMicros,
+          "separately launched autoplay waits for the final chart event");
 }
 
 } // namespace
@@ -194,6 +204,6 @@ int main() {
   testExistingExclusionsAndNormalActivationRemain();
   testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline();
   testReplayStatePlayCompletesBeforeTrailingTimeline();
-  testAllNonPracticeModesUseLastPlayableNoteInsteadOfTrailingTimeline();
+  testAutoplayUsesLastEventWhilePlayAndReplayUseLastNote();
   return 0;
 }

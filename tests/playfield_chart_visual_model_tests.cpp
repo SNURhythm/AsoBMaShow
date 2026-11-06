@@ -544,7 +544,50 @@ bool testSaturatedStopRetainsExactIntegerValue() {
              std::numeric_limits<long long>::max();
 }
 
+bool testAutoplayEndpointIgnoresEmptyRowsAndPoorBga() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.Bpm = chart.Meta.MinBpm = chart.Meta.MaxBpm = 120;
+  chart.Meta.PlayLength = 1'000'000;
+  chart.Meta.TotalLength = 10'000'000;
+  auto *measure = new bms_parser::Measure();
+  chart.Measures.push_back(measure);
+  auto *lastNote = new bms_parser::TimeLine(8, false);
+  lastNote->Timing = 1'000'000;
+  lastNote->Bpm = 120;
+  lastNote->SetNote(0, new bms_parser::Note(1));
+  auto *event = new bms_parser::TimeLine(8, false);
+  event->Timing = 3'000'000;
+  event->Bpm = 120;
+  auto *empty = new bms_parser::TimeLine(8, false);
+  empty->Timing = 9'000'000;
+  empty->Bpm = 180;
+  empty->BpmChange = true;
+  empty->BgaPoor = bms_parser::BgaPoorSequence{{1}};
+  measure->TimeLines = {lastNote, event, empty};
+  if (buildPlayfieldChartVisualModel(chart, 0).staticMetadata.lastEventTimeMicros != 1'000'000)
+    return false;
+  for (const bool layer : {false, true}) {
+    event->BgaBase = layer ? -1 : 1;
+    event->BgaLayer = layer ? 1 : -1;
+    if (buildPlayfieldChartVisualModel(chart, 0).staticMetadata.lastEventTimeMicros != 3'000'000)
+      return false;
+  }
+  event->BgaLayer = -1;
+  event->SetInvisibleNote(0, new bms_parser::Note(2));
+  if (buildPlayfieldChartVisualModel(chart, 0).staticMetadata.lastEventTimeMicros != 3'000'000)
+    return false;
+  event->Timing = 4'000'000;
+  event->SetInvisibleNote(0, nullptr);
+  event->BackgroundNotes.push_back(new bms_parser::Note(3));
+  return buildPlayfieldChartVisualModel(chart, 0).staticMetadata.lastEventTimeMicros == 4'000'000;
+}
+
 int main() {
+  if (!testAutoplayEndpointIgnoresEmptyRowsAndPoorBga()) {
+    std::cerr << "autoplay endpoint must include BGM/BGA/hidden notes but exclude empty/poor-only rows\n";
+    return EXIT_FAILURE;
+  }
   if (!testLongNoteGraphsPreserveReferencePairTraversal() ||
       !testSaturatedStopRetainsExactIntegerValue()) return EXIT_FAILURE;
   if (!testStaticChartMetadata()) {

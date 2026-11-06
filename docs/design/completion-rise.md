@@ -54,6 +54,24 @@ wall time, animation counters, and frame rate do not advance it.
 Only the built-in render pass draws it. The selected-skin HUD pass does not;
 custom skins retain their authored timers and animations.
 
+## Result transition timing
+
+Automatic result entry is independent of the celebration. Normal play and
+replay retain Beatoraja's five-second margin after the last playable chart
+note (including long-note tails). A completed scoring worker cannot bypass
+that margin, including while the app is backgrounded. The built-in presentation
+then waits one second, matching the default Beatoraja 7-key skin's transition
+duration; selected skins use their own `finishmargin` and `fadeout` instead.
+At normal speed, built-in result entry is therefore approximately six seconds
+after the last note, plus frame scheduling and result preparation overhead.
+
+Separately launched autoplay anchors the five-second margin to the last
+note, hidden note, BGM, base-BGA or layer-BGA event, matching
+`BMSModel.getLastTime()`. The visual model caches this endpoint once per chart;
+trailing empty, tempo-only and poor-BGA-only rows do not extend it. A replay of
+an autoplay recording still uses REPLAY's last-playable-note endpoint. These
+deadlines do not wait for the final audio sample to finish playing.
+
 ## Motion and rendering
 
 - The independent title anchor is `(640, 285)` in a 1280×720 design space,

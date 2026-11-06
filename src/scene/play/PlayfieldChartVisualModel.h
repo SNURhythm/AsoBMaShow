@@ -136,6 +136,8 @@ struct PlayfieldChartStaticMetadata {
   double maximumBpm = 0.0;
   double mainBpm = 0.0;
   long long durationMicros = 0;
+  // BMSModel.getLastTime() endpoint, cached independently of empty chart rows.
+  long long lastEventTimeMicros = 0;
   std::string authoredPlayLevel;
   int playLevel = 0;
   int normalKeyNotes = 0;

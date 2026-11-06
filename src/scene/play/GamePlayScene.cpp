@@ -427,7 +427,8 @@ std::int32_t javaIntAdd(std::int32_t left, std::int32_t right) noexcept {
 
 std::optional<std::int32_t>
 beatorajaPlaytimeMillis(const bms_parser::Chart *chart,
-                        const StartOptions &options) noexcept {
+                        const StartOptions &options,
+                        long long lastEventMicros) noexcept {
   if (chart == nullptr) {
     return std::nullopt;
   }
@@ -443,7 +444,8 @@ beatorajaPlaytimeMillis(const bms_parser::Chart *chart,
   }
   const long long terminalMicros =
       gameplay::terminalMicrosForGameplayMode(chart->Meta.PlayLength,
-                                              chart->Meta.TotalLength);
+                                              lastEventMicros,
+                                              options.autoPlay && options.replayData == nullptr);
   return javaIntAdd(javaLongToInt(terminalMicros / 1'000),
                     kBeatorajaPlaytimeMarginMillis);
 }
@@ -4219,7 +4221,8 @@ void GamePlayScene::updateWhileBackgrounded() {
     gameplayTimeMicros = timing.chartTimeMicros;
     practiceSectionComplete = timing.sectionComplete;
   }
-  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
+  const auto playtimeMillis = beatorajaPlaytimeMillis(
+      chart, options, playfieldChartVisualModel.staticMetadata.lastEventTimeMicros);
   const bool sourcePlaytimeElapsed = playtimeMillis.has_value() &&
       skin::beatorajaGameplayStateFinished(gameplayTimeMicros, *playtimeMillis);
   if (realtimeGameplayAuthorityActive()) {
@@ -6770,7 +6773,8 @@ void GamePlayScene::capturePlayfieldVisualState(
                   .startMicros = getStartPositionMicros(),
                   .elapsedMillisExact = options.practiceSession == nullptr &&
                                         !options.practiceMode,
-                  .playtimeMillis = beatorajaPlaytimeMillis(chart, options),
+                  .playtimeMillis = beatorajaPlaytimeMillis(
+                      chart, options, playfieldChartVisualModel.staticMetadata.lastEventTimeMicros),
               },
       };
   capturedPlayfieldVisualState =
@@ -6837,7 +6841,8 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
       chart == nullptr
           ? gameplayTimeMicros
           : gameplay::terminalMicrosForGameplayMode(chart->Meta.PlayLength,
-                                                    chart->Meta.TotalLength);
+                playfieldChartVisualModel.staticMetadata.lastEventTimeMicros,
+                options.autoPlay && !isReplayPlayback());
   const long long deadline = skin::gameplaySkinAnimationCompletionDeadlineMicros(
       terminalMicros, *timing);
   const long long remainingChartMicros =
@@ -7279,7 +7284,8 @@ void GamePlayScene::update(float dt) {
   if (preparationIndicatorActive(rawSongTimeMicros)) {
     return;
   }
-  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
+  const auto playtimeMillis = beatorajaPlaytimeMillis(
+      chart, options, playfieldChartVisualModel.staticMetadata.lastEventTimeMicros);
   const bool sourcePlaytimeElapsed =
       playtimeMillis.has_value() &&
       skin::beatorajaGameplayStateFinished(gameplayTimeMicros,

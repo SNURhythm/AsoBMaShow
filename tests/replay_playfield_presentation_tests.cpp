@@ -1102,7 +1102,7 @@ void testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote() {
   preparation::Plan plan;
 
   expect(replay_video_export::replayGameplayTransitionDurationMicros(
-             chart, replay, plan, 0) == 17'000'000,
+             chart, replay, plan, 0) == 16'000'000,
          "replay gameplay transition uses last-note state-play and transition "
          "windows rather than the chart tail");
 }
