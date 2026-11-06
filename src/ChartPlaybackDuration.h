@@ -9,7 +9,9 @@
 
 namespace chart_playback_duration {
 
-inline constexpr long long kGameplayResultTransitionDelayMicros = 2000000LL;
+// Built-in presentation uses the default Beatoraja play skin's one-second
+// result transition, after the separate five-second end-of-notes margin.
+inline constexpr long long kGameplayResultTransitionDelayMicros = 1000000LL;
 
 // Parser timelines mark authored events, not the implicit end of the final
 // measure. Rendering needs that endpoint to continue scroll geometry across a

@@ -153,6 +153,8 @@ bool testPracticeMenuSamePatternSeedSelection() {
 
 bool testRetainedSkinMenuAttemptProjectsCompleteRetryOptions() {
   StartOptions options;
+  options.gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
+  options.gaugeAutoShiftLowerBound = GaugeType::Easy;
   options.playOption = "RANDOM";
   options.playOptionSeed = 1234;
   options.playOption2 = "MIRROR";
@@ -178,7 +180,8 @@ bool testRetainedSkinMenuAttemptProjectsCompleteRetryOptions() {
   return expect(options.startPosition == 1'250'000 &&
                     options.gaugeType == GaugeType::Hard &&
                     options.gaugeProfile == GaugeProfile::Standard9Keys &&
-                    options.gaugeAutoShift == GaugeAutoShiftMode::None &&
+                    options.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder &&
+                    options.gaugeAutoShiftLowerBound == GaugeType::Easy &&
                     options.startingGaugePercent == 42 &&
                     options.playback == attempt.playback &&
                     options.doublePlayFlip &&

@@ -43,6 +43,9 @@ def main():
     args = parser.parse_args()
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     signatures = [
+        "bool GamePlayScene::canSkipResultDelay() const",
+        "void GamePlayScene::skipResultDelay()",
+        "bool GamePlayScene::runResultTransition()",
         "void GamePlayScene::onInputQueueOverflow()",
         "void GamePlayScene::onApplicationBackgroundChanged(",
         "bool GamePlayScene::continuesAudioInBackground() const",
@@ -53,9 +56,14 @@ def main():
         "bool GamePlayScene::drainRealtimeInputInterruption()",
         "void GamePlayScene::togglePauseMenuFromInput()",
         "void GamePlayScene::restartCurrentPattern()",
+        "void GamePlayScene::startPracticeAttemptFromMenu()",
+        "void GamePlayScene::clearPracticeMenuInput()",
+        "void GamePlayScene::consumePracticeMenuLaneInput(",
         "bool GamePlayScene::retryIfTargetsUnreachable()",
         "void GamePlayScene::playQuickRetryFeedback()",
+        "void GamePlayScene::playCompletionSound(",
         "void GamePlayScene::update(float dt)",
+        "void GamePlayScene::transferRealtimeGameplayResult(",
         "void GamePlayScene::completePracticeSection(",
         "void GamePlayScene::finalizePracticeRangeMisses()",
         "void GamePlayScene::completePracticeAttempt()",
@@ -83,6 +91,7 @@ def main():
     fixture = (args.root / "tests/gameplay_terminal_scene_fixture.cpp").read_text()
     helpers = [
         "bool laneIsPressed(",
+        "std::pair<bool, bool> practiceLegacyInputState(",
         "bool hasReachedFirstPlayableNote(",
         "replay::ReplayTouchAction modernTouchAction(",
         "bool longNoteTailJudgedBeforeTiming(",
@@ -136,6 +145,8 @@ def main():
     sync_method = extract(source, "void GamePlayScene::syncRealtimeGameplaySnapshot()")
     methods += "\n" + sync_method.replace("syncRealtimeGameplaySnapshot()",
                                            "syncRealtimeGameplaySnapshotFromWorker()", 1)
+    methods += "\n" + extract(source, "bool GamePlayScene::retainRealtimeCompletionFeedback(").replace(
+        "retainRealtimeCompletionFeedback(", "retainRealtimeCompletionFeedbackFromWorker(", 1)
     stop_method = extract(source, "void GamePlayScene::stopRealtimeGameplayAuthority(")
     methods += "\n" + stop_method.replace("stopRealtimeGameplayAuthority(",
                                            "stopRealtimeGameplayAuthorityFromWorker(", 1)
@@ -169,10 +180,10 @@ def main():
     ])
     fallback_source = extract(source, "bool GamePlayScene::enterPracticeMenu()")
     fallback_start = fallback_source.index('    if (!applyPracticePlayOptions(')
-    fallback_end = fallback_source.index('\n  practiceMenuActive = true;')
+    fallback_end = fallback_source.rindex('\n  practiceMenuActive = true;')
     fallback_body = fallback_source[fallback_start:fallback_end].rsplit('\n  }', 1)[0]
     state_start = fallback_source.index('  ownedState = std::make_unique<RhythmState>')
-    state_end = fallback_source.index('  capturePlayfieldVisualState(')
+    state_end = fallback_source.index('  practiceMenuActive = true;')
     preparation_methods += '\nbool PreparedGamePlayScene::prepareBuiltInFallback() {\n'
     preparation_methods += fallback_source[state_start:state_end] + fallback_body + '\n}\n'
     reset_source = extract(source, "bool GamePlayScene::reset()")

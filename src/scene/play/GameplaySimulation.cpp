@@ -321,6 +321,10 @@ bool GameplaySimulation::terminal() const noexcept {
   return terminalReason_ != GameplayTerminalReason::None;
 }
 
+void GameplaySimulation::completeChart(std::int64_t songTimeMicros) {
+  latchTerminal(GameplayTerminalReason::ChartComplete, songTimeMicros);
+}
+
 GameplayAttemptSnapshot
 GameplaySimulation::terminalSnapshot() const noexcept {
   return terminalSnapshot_;
@@ -1230,6 +1234,9 @@ GameplayAdvanceResult GameplaySimulation::beginInputUpdate(
 
 GameplayAdvanceResult GameplaySimulation::beginInputUpdate(
     std::span<const GameplayLaneInputState> states, const GameplayInputContext &context) {
+  // advanceTo() returns an empty span after completion, but automaticResults_
+  // may still contain the final miss. Do not publish that judgement again.
+  if (terminal()) return emptyAdvanceResult();
   const auto time = inputTime(context);
   if (config_.judge.rules().ruleset != GameplayRuleset::LR2) {
     advanceTo(time, context.laneBeamTimeMicros);
@@ -1790,7 +1797,7 @@ GameplaySimulation::pressLane(int lane, const GameplayInputContext &context) {
 NoteId GameplaySimulation::previewPreparationPressSoundNote(
     int mainLane, int compensateLane,
     const GameplayInputContext &context) const {
-  if (terminal() ||
+  if ((terminal() && terminalReason_ != GameplayTerminalReason::ChartComplete) ||
       (config_.allowedNoteRange.has_value() &&
        context.songTimeMicros >= config_.allowedNoteRange->endMicros)) {
     return kInvalidNoteId;
@@ -1804,7 +1811,7 @@ GameplayInputResult GameplaySimulation::pressLaneForPreparation(
     const GameplayInputContext &context) {
   lastSearchStats_ = {};
   GameplayInputResult result;
-  if (terminal() ||
+  if ((terminal() && terminalReason_ != GameplayTerminalReason::ChartComplete) ||
       (config_.allowedNoteRange.has_value() &&
        context.songTimeMicros >= config_.allowedNoteRange->endMicros)) {
     return result;
@@ -1828,6 +1835,7 @@ GameplayInputResult GameplaySimulation::pressLaneForPreparation(
   result.laneVisual = {LaneVisualAction::Press, mainLane,
                        eventTime, context.laneBeamTimeMicros,
                        JudgeResult(None, 0)};
+  if (terminalReason_ == GameplayTerminalReason::ChartComplete) return result;
   result.hasReplayEvent = true;
   result.replayEvent = {
       .action = GameplayReplayAction::Press,
@@ -1844,7 +1852,7 @@ GameplayInputResult GameplaySimulation::releaseLaneForPreparation(
     int lane, const GameplayInputContext &context) {
   lastSearchStats_ = {};
   GameplayInputResult result;
-  if (terminal() ||
+  if ((terminal() && terminalReason_ != GameplayTerminalReason::ChartComplete) ||
       (config_.allowedNoteRange.has_value() &&
        context.songTimeMicros >= config_.allowedNoteRange->endMicros)) {
     return result;
@@ -1859,6 +1867,7 @@ GameplayInputResult GameplaySimulation::releaseLaneForPreparation(
   result.laneVisual = {LaneVisualAction::Release, lane,
                        eventTime, context.laneBeamTimeMicros,
                        JudgeResult(None, 0)};
+  if (terminalReason_ == GameplayTerminalReason::ChartComplete) return result;
   result.hasReplayEvent = true;
   result.replayEvent = {
       .action = GameplayReplayAction::Release,
@@ -1873,6 +1882,8 @@ GameplayInputResult GameplaySimulation::releaseLaneForPreparation(
 
 NoteId GameplaySimulation::previewPressSoundNote(
     int mainLane, int compensateLane, const GameplayInputContext &context) {
+  if (terminalReason_ == GameplayTerminalReason::ChartComplete)
+    return previewPreparationPressSoundNote(mainLane, compensateLane, context);
   if (terminal() ||
       (config_.allowedNoteRange.has_value() &&
        context.songTimeMicros >= config_.allowedNoteRange->endMicros)) {
@@ -1913,7 +1924,7 @@ GameplayInputBatch GameplaySimulation::pressScratchKey(
   if (config_.allowedNoteRange.has_value() &&
       context.songTimeMicros >= config_.allowedNoteRange->endMicros) return {};
   auto *state = findLane(lane);
-  if (state == nullptr || terminal()) return {};
+  if (state == nullptr || (terminal() && terminalReason_ != GameplayTerminalReason::ChartComplete)) return {};
   const int key = clockwise ? 0 : 1;
   state->scratchKeysKnown = true;
   state->scratchKeysPressed[key] = true;
@@ -1957,10 +1968,12 @@ GameplayInputBatch GameplaySimulation::releaseScratchKey(
   if (config_.allowedNoteRange.has_value() &&
       context.songTimeMicros >= config_.allowedNoteRange->endMicros) return {};
   auto *state = findLane(lane);
-  if (state == nullptr || terminal()) return {};
+  if (state == nullptr || (terminal() && terminalReason_ != GameplayTerminalReason::ChartComplete)) return {};
   const int key = clockwise ? 0 : 1;
   state->scratchKeysKnown = true;
   state->scratchKeysPressed[key] = false;
+  if (terminalReason_ == GameplayTerminalReason::ChartComplete &&
+      (state->scratchKeysPressed[0] || state->scratchKeysPressed[1])) return {};
   const NoteId held = selectReleaseCandidate(lane, inputTime(context));
   if (held != kInvalidNoteId && state->scratchProcessingKey >= 0 &&
       state->scratchProcessingKey != key) {
@@ -1981,6 +1994,11 @@ GameplayInputBatch
 GameplaySimulation::pressLane(int mainLane, int compensateLane,
                               const GameplayInputContext &context) {
   inputTransactions_.clear();
+  if (terminalReason_ == GameplayTerminalReason::ChartComplete) {
+    const auto feedback = pressLaneForPreparation(mainLane, compensateLane, context);
+    inputTransactions_.push_back(feedback);
+    return inputBatch(feedback);
+  }
   if (terminal()) {
     return {};
   }
@@ -2181,6 +2199,11 @@ GameplayInputBatch
 GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
                                 bool isBackSpin) {
   inputTransactions_.clear();
+  if (terminalReason_ == GameplayTerminalReason::ChartComplete) {
+    const auto feedback = releaseLaneForPreparation(lane, context);
+    inputTransactions_.push_back(feedback);
+    return inputBatch(feedback);
+  }
   if (terminal()) {
     return {};
   }

@@ -67,3 +67,5 @@ records large-text timing and retained native attribute bounds.
 - [Gameplay and scoring](gameplay-and-scoring.md)
 - [Replays and video export](replays-and-video-export.md)
 - [Results, records, and persistence](results-records-and-persistence.md)
+
+The [skin practice compatibility audit](../testing/beatoraja-practice-audit-2026-11-06.md) records the beatoraja source comparison, fixes, and retained native behavior.

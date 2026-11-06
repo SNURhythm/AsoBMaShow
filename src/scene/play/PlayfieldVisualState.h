@@ -6,6 +6,7 @@
 #include "../../ReplayData.h"
 #include "../../audio/GameplayBgaMissStateTracker.h"
 #include "GameplayGaugeRules.h"
+#include "CompletionCelebration.h"
 #include "GameplayScoreState.h"
 #include "GameplaySkinIrTarget.h"
 #include "Pacemaker.h"
@@ -33,13 +34,14 @@
 struct PlayfieldPlayTimerAuthority {
   bool active = false;
   long long startMicros = 0;
-  // True only when gameplayTimeMicros - startMicros reproduces the pinned
-  // TimerManager elapsed-millisecond domain. Practice's frequency-adjusted
-  // lead-in has no equivalent Aso clock authority yet.
+  // True when gameplayTimeMicros - startMicros is the captured elapsed
+  // domain paired with playtimeMillis. Practice encodes a synthetic origin
+  // here to expose the source frequency-adjusted clock without changing
+  // native gameplay/replay chart timestamps.
   bool elapsedMillisExact = false;
-  // Exact BMSPlayer.getPlaytime()-equivalent value when the session can
-  // capture a paired elapsed clock. No static chart duration is a substitute:
-  // manual, autoplay, and practice have distinct upstream formulas.
+  // BMSPlayer.getPlaytime()-equivalent value for ordinary gameplay, or the
+  // source practice end position plus its tail/margin in the paired domain.
+  // No static full-chart duration is a substitute for a practice range.
   std::optional<std::int32_t> playtimeMillis;
 
   bool operator==(const PlayfieldPlayTimerAuthority &) const = default;
@@ -52,6 +54,8 @@ struct PlayfieldFrameClock {
   long long replayTouchTimeMicros = 0;
   long long bgaTimeMicros = 0;
   PlayfieldPlayTimerAuthority playTimer;
+  // Non-playing setup can animate independently of the stopped audio clock.
+  std::optional<long long> skinTimeMicros;
 
   bool operator==(const PlayfieldFrameClock &) const = default;
 };
@@ -337,6 +341,12 @@ struct PlayfieldAuthorityUpdate {
   int currentFramesPerSecond = 0;
   std::int64_t applicationUptimeMillis = 0;
   bool autoPlayMarkVisible = false;
+  // Whole-chart, unassisted attempts only. Autoplay/replay may demonstrate it;
+  // practice ranges and settings previews must not claim an achievement.
+  bool completionCelebrationEligible = false;
+  // Whole-chart assisted/modifier play may acknowledge Finish without claiming
+  // the higher achievements. Practice/settings previews leave this disabled.
+  bool completionFinishEligible = false;
   PlayfieldGameplayMode gameplayMode = PlayfieldGameplayMode::Unknown;
   PlayfieldLoadingState loadingState = PlayfieldLoadingState::Unknown;
   // Captured from the active CoursePlaySession or replay-export stage loop.
@@ -367,6 +377,9 @@ struct PlayfieldAuthorityUpdate {
   // true only while the source-shaped settings menu owns the session.
   bool practiceMenuActive = false;
   std::optional<practice::SkinMenuState> practiceMenu;
+  // SongData retains the original chart count while practice's JudgeManager
+  // and visual model use the selected section's playable notes.
+  std::optional<int> originalPracticeTotalNotes;
   // Live gameplay shares static strings across frame copies. Preview/export
   // callers may continue supplying the owning legacy fields above instead.
   std::shared_ptr<const PlayfieldPresentationMetadata> presentationMetadata;
@@ -513,6 +526,7 @@ struct PlayfieldVisualState {
   // Seed for rebuilding the running average before the retained marker history.
   judgement_indicator::TimingAverageHistory judgementIndicatorAverageBeforeSamples;
   GameplayBgaMissState bgaMiss;
+  completion_celebration::State completionCelebration;
   int combo = 0;
   int score = 0;
   int fastSlowMicros = 0;
@@ -556,23 +570,41 @@ skinStateTimestampMicros(const PlayfieldVisualState &state,
       state.sceneStartMicros == kPlayfieldTimestampOff) {
     return visualTimestampMicros;
   }
+  constexpr auto maximum = std::numeric_limits<long long>::max();
+  constexpr auto minimum = std::numeric_limits<long long>::min() + 1;
+  long long relative;
   if (state.sceneStartMicros < 0 &&
-      visualTimestampMicros >
-          std::numeric_limits<long long>::max() + state.sceneStartMicros) {
-    return std::numeric_limits<long long>::max();
+      visualTimestampMicros > maximum + state.sceneStartMicros) {
+    relative = maximum;
+  } else if (state.sceneStartMicros > 0 &&
+             visualTimestampMicros <= minimum - 1 + state.sceneStartMicros) {
+    relative = minimum;
+  } else {
+    relative = visualTimestampMicros - state.sceneStartMicros;
   }
-  // Preserve the explicit OFF sentinel for timer consumers.
-  if (state.sceneStartMicros > 0 &&
-      visualTimestampMicros <=
-          std::numeric_limits<long long>::min() + state.sceneStartMicros) {
-    return std::numeric_limits<long long>::min() + 1;
+  if (state.authority.gameplayMode == PlayfieldGameplayMode::Practice &&
+      !state.authority.practiceMenuActive && state.authority.practiceMenu &&
+      state.authority.practiceMenu->frequencyPercent > 0) {
+    // The native clock and event timestamps retain original chart time.
+    // TimerManager's skin clock advances in wall time even when practice
+    // scales the model, so map every animation timestamp into that domain.
+    const long long frequency = state.authority.practiceMenu->frequencyPercent;
+    const long long quotient = relative / frequency;
+    if (quotient > maximum / 100) return maximum;
+    if (quotient < minimum / 100) return minimum;
+    const long long scaled = quotient * 100;
+    const long long remainder = relative % frequency * 100 / frequency;
+    if (remainder > 0 && scaled > maximum - remainder) return maximum;
+    if (remainder < 0 && scaled < minimum - remainder) return minimum;
+    relative = scaled + remainder;
   }
-  return visualTimestampMicros - state.sceneStartMicros;
+  return relative;
 }
 
 [[nodiscard]] inline constexpr long long
 skinStateClockMicros(const PlayfieldVisualState &state) noexcept {
-  return skinStateTimestampMicros(state, state.clock.visualTimeMicros);
+  return state.clock.skinTimeMicros.value_or(
+      skinStateTimestampMicros(state, state.clock.visualTimeMicros));
 }
 
 class PlayfieldVisualStateStore final : public IPlayfieldPresentationEvents {
@@ -583,6 +615,13 @@ public:
   void resetModel(const PlayfieldChartVisualModel &model);
   void setConfiguration(const PlayfieldPresentationConfig &configuration);
   void applyAuthorityUpdate(const PlayfieldAuthorityUpdate &update);
+  // Realtime snapshots retain this even when their visual history rolls over.
+  void setAuthoritativeCompletionCelebration(completion_celebration::State state) {
+    authoritativeCompletionCelebration_ = state;
+  }
+  void observeCompletionProgress(int passedNotes, long long visualMicros) {
+    completionTracker_.observeResolvedNotes(passedNotes, visualMicros);
+  }
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &state);
   void setNoteState(NotePresentationState state);
   void setNoteStates(std::vector<NotePresentationState> states);
@@ -661,6 +700,9 @@ private:
   mutable TouchLifecycle liveTouches_;
   mutable std::vector<PresentationTouchPoint> touches_;
   GameplayBgaMissStateTracker bgaMissTracker_;
+  completion_celebration::Tracker completionTracker_;
+  std::optional<completion_celebration::State> authoritativeCompletionCelebration_;
+  std::optional<long long> completionFinalTailMicros_;
   std::uint64_t judgeSequence_ = 0;
   JudgeResult lastJudge_ = JudgeResult(None, 0);
   long long lastJudgeVisualMicros_ = kPlayfieldTimestampOff;

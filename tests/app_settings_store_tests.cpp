@@ -266,6 +266,25 @@ AppSettings makeDistinctSettings() {
   return value;
 }
 
+void testSfxVolumeRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "sfx-volumes.json";
+  const auto check = [&](std::string_view input, float menu, float gameplay) {
+    writeFile(path, input);
+    const auto loaded = AppSettingsStore::Load(path);
+    std::string error;
+    expect(AppSettingsStore::Save(path, loaded.settings, error), "SFX settings save");
+    const auto audio = nlohmann::json::parse(readFile(path))["audio"];
+    expect(audio.value("menuSfxVolume", -1.0f) == menu &&
+               audio.value("gameplaySfxVolume", -1.0f) == gameplay,
+           "SFX levels survive load/save independently with safe defaults and bounds");
+  };
+  check(R"({"schemaVersion":8,"audio":{"menuSfxVolume":0.25,"gameplaySfxVolume":0.75}})", 0.25f, 0.75f);
+  check(R"({"schemaVersion":8,"audio":{}})", 1.0f, 1.0f);
+  check(R"({"schemaVersion":8,"audio":{"menuSfxVolume":-1,"gameplaySfxVolume":2}})", 0.0f, 1.0f);
+  check(R"({"schemaVersion":8,"audio":{"menuSfxVolume":"invalid","gameplaySfxVolume":null}})", 1.0f, 1.0f);
+}
+
 void testMonoAudioRoundTrip() {
   TempDirectory temp;
   const auto path = temp.path() / "mono-audio.json";
@@ -3122,6 +3141,7 @@ int main() {
   testAudioDeviceTimingProfiles();
   testAudioTimingProfileValidation();
   testMonoAudioRoundTrip();
+  testSfxVolumeRoundTrip();
   testKeybombSettingsPersist();
   testKeybombModeResolution();
   testScratchlessPolicyDefaultsPersist();

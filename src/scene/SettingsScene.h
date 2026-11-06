@@ -298,6 +298,8 @@ private:
   TextInputBox *masterVolumeInput = nullptr;
   TextInputBox *bgmVolumeInput = nullptr;
   TextInputBox *keysoundVolumeInput = nullptr;
+  TextInputBox *menuSfxVolumeInput = nullptr;
+  TextInputBox *gameplaySfxVolumeInput = nullptr;
   TextView *audioEffectiveText = nullptr;
   std::optional<audio::RuntimeState> displayedAudioState;
   TextView *audioStatusText = nullptr;

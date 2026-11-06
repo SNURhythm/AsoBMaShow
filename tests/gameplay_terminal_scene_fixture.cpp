@@ -1,3 +1,5 @@
+#include "audio/AudioMix.h"
+#include "scene/play/PracticeMenuTouchInput.h"
 #include "i18n/Localization.h"
 #include "GameplayKeyMode.h"
 #include "RAII.h"
@@ -14,6 +16,8 @@
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/JudgementTimingSample.h"
 #include "scene/play/PlayfieldVisualState.h"
+#include "scene/play/GameplaySkinPracticeSongInformation.h"
+#include "scene/play/CompletionCelebrationSound.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
 #include "scene/play/QuickRetry.h"
 #include "scene/play/RhythmLaneInputController.h"
@@ -131,14 +135,15 @@ struct FixtureWorker {
   bool suspend() { return native ? native->suspend() : true; }
   bool requestSuspend() { return native ? native->requestSuspend() : true; }
   bool resume() { return native ? native->resume() : true; }
+  bool completeChartWhileSuspended(std::int64_t time) { return native->completeChartWhileSuspended(time); }
   void stop() {
     if (beforeStop) beforeStop();
     native->stop();
   }
-  auto copyGaugeHistoryAfterStop() const { return native->copyGaugeHistoryAfterStop(); }
-  auto copyGaugeHistoriesAfterStop() const { return native->copyGaugeHistoriesAfterStop(); }
-  auto copyAcceptedReplayInputAfterStop() const { return native->copyAcceptedReplayInputAfterStop(); }
-  auto copyReplayEventsAfterStop() const { return native->copyReplayEventsAfterStop(); }
+  auto copyGaugeHistoryWhileQuiescent() const { return native->copyGaugeHistoryWhileQuiescent(); }
+  auto copyGaugeHistoriesWhileQuiescent() const { return native->copyGaugeHistoriesWhileQuiescent(); }
+  auto copyAcceptedReplayInputWhileQuiescent() const { return native->copyAcceptedReplayInputWhileQuiescent(); }
+  auto copyReplayEventsWhileQuiescent() const { return native->copyReplayEventsWhileQuiescent(); }
 };
 
 struct FixtureRealtimeSession {
@@ -170,6 +175,7 @@ struct FixtureRealtimeSession {
   gameplay::BoundedMpscQueue<gameplay::StartSelectControlInput, 16> startSelectInputs;
   std::atomic_bool startSelectInputOverflow{false};
   std::vector<bms_parser::Note *> notes;
+  bool resultTransferred = false;
   std::uint64_t appliedSnapshotGeneration = 0;
   std::uint64_t appliedNoteRevision = 0;
   std::uint64_t appliedGraphJudgementRevision = 0;
@@ -185,8 +191,12 @@ struct FixturePresentation {
   void setNoteState(NotePresentationState state) {
     noteStates.insert_or_assign(state.id, state);
   }
-  void onLanePressed(int, JudgeResult, long long) {}
-  void onLaneReleased(int, long long) {}
+  void onLanePressed(int lane, JudgeResult judge, long long time) {
+    if (timingState) timingState->onLanePressed(lane, judge, time);
+  }
+  void onLaneReleased(int lane, long long time) {
+    if (timingState) timingState->onLaneReleased(lane, time);
+  }
   void onTimingSample(JudgeResult judge, PlayfieldJudgeEventClock clock) {
     if (timingState) timingState->onTimingSample(judge, clock);
   }
@@ -196,6 +206,12 @@ struct FixturePresentation {
       timingState->onLaneJudge(lane, judge, combo, score, clock, recordTimingSample);
   }
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &) {}
+  void setAuthoritativeCompletionCelebration(completion_celebration::State state) {
+    if (timingState) timingState->setAuthoritativeCompletionCelebration(state);
+  }
+  void observeCompletionProgress(int passedNotes, long long visualMicros) {
+    if (timingState) timingState->observeCompletionProgress(passedNotes, visualMicros);
+  }
   void clearLiveTouchPoints() {}
 };
 
@@ -233,7 +249,11 @@ public:
       int plays = 0;
       float gain = -1.0F;
       void stopSkinSound(int) {}
-      void playSkinSound(int, float value, bool) { ++plays; gain = value; }
+      int lastSound = 0;
+      audio::Bus bus = audio::Bus::System;
+      void playSkinSound(int sound, float value, bool, audio::Bus category) {
+        ++plays; lastSound = sound; gain = value; bus = category;
+      }
     } systemSounds;
     auto &systemAudio() { return systemSounds; }
     struct {
@@ -251,6 +271,9 @@ public:
       bool ipadGestureReminderEnabled = false;
       int notesDisplayTimingMilliseconds = 0;
       bool notesDisplayTimingAutoAdjust = false;
+      int skinMusicSelectScrollDurationLow = 300;
+      int skinMusicSelectScrollDurationHigh = 50;
+      int skinMusicSelectAnalogTicksPerScroll = 3;
     } settings;
     ReminderSceneManager reminderSceneManager;
     ReminderSceneManager *sceneManager = &reminderSceneManager;
@@ -268,10 +291,24 @@ public:
   std::unique_ptr<FixtureRealtimeSession> realtimeGameplaySession;
   std::optional<gameplay::StartSelectControl> startSelectControl;
   bool practiceMenuActive = false;
-  long long practiceMenuStartPressedMicros = 0;
+  practice::SkinMenuInputController practiceMenuInput;
+  std::unique_ptr<gameplay::PracticeMenuTouchInput> practiceMenuTouchInput;
+  std::optional<gameplay::RealtimeTouchLayoutRefreshKey> practiceMenuTouchLayoutKey;
+  void clearPracticeMenuInput();
+  void updatePracticeMenuControls() {}
+  bool practiceMenuStartRequested = false;
+  long long practiceMenuStartBlockedUntilMicros = 0;
   bool touchVisualizerLoaded = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
+  bool resultDelaySkipRequested = false;
+  bool naturalResultDelay = false;
+  std::function<bool()> pendingResultTransition;
+  bool canSkipResultDelay() const;
+  void skipResultDelay();
+  bool runResultTransition();
+  void updatePauseButtonAction() {}
+
   bool startButtonPressed = false;
   bool selectButtonPressed = false;
   bool playfieldChangeLiftTarget = false;
@@ -318,6 +355,11 @@ public:
   int chimePlays = 0;
   int chimeStops = 0;
   int chimeReleases = 0;
+  bool isGamePaused = false;
+  std::array<std::optional<int>, 3> completionSounds{11, 22, 33};
+  void playCompletionSound(bool builtInPresented);
+  completion_celebration::SoundTrigger completionSoundTrigger;
+  void stopCompletionSounds() {}
   void playGuidedAccessChime() { ++chimePlays; }
   void stopGuidedAccessChime(bool release = false) {
     ++chimeStops;
@@ -352,6 +394,7 @@ public:
   long long offset = 0;
   long long clock = 0;
   std::optional<std::int64_t> sourcePlaytime;
+  PlayfieldChartVisualModel playfieldChartVisualModel;
   Judge judge{2};
   gameplay::GameplayPolicyBuildOutcome rulesetPolicyBuild;
   std::unordered_map<int, bool> lanePressed;
@@ -431,7 +474,15 @@ public:
   void setRealtimeGameplayIngressEnabledFromProduction(bool enabled);
   void drainRealtimeTouchSamples() { if (onTouchDrain) onTouchDrain(); }
   long long nowMicros() const { return clock; }
-  void startPracticeAttemptFromMenu() { require(false, "unexpected practice menu"); }
+  void startPracticeAttemptFromMenu();
+  void consumePracticeMenuLaneInput(int lane, bool pressed);
+  int practiceMenuPreparations = 0;
+  bool preparePracticeAttemptFromMenu(const practice::SkinMenuAttemptPlan &attempt,
+                                      std::string_view) {
+    ++practiceMenuPreparations;
+    applySkinMenuAttemptPlanToStartOptions(options, attempt);
+    return true;
+  }
   bool isReplayPlayback() const { return options.replayData != nullptr; }
   void applyStartSelectControlActions(
       const std::vector<gameplay::StartSelectControlAction> &actions) {
@@ -461,6 +512,14 @@ public:
   }
   void syncRealtimeGameplaySnapshotFromWorker();
   void stopRealtimeGameplayAuthorityFromWorker(bool transferReplay);
+  void transferRealtimeGameplayResult(bool transferReplay);
+  bool retainRealtimeCompletionFeedbackFromWorker(long long gameplayTimeMicros);
+  bool retainRealtimeCompletionFeedback(long long gameplayTimeMicros) {
+    if (realtimeGameplaySession && realtimeGameplaySession->worker->native)
+      return retainRealtimeCompletionFeedbackFromWorker(gameplayTimeMicros);
+    if (stoppedSnapshot) *state = *stoppedSnapshot;
+    return true;
+  }
   void refreshRealtimeTouchLayout() {}
   long long getVisualOffsetMicros() const { return 0; }
   void updateLaneStateText() {}
@@ -479,7 +538,7 @@ public:
   void processReplayLaneCoverEvents(long long) {}
   bool preparationIndicatorActive(long long) const { return false; }
   std::optional<std::int64_t> beatorajaPlaytimeMillis(
-      bms_parser::Chart *, const StartOptions &) const { return sourcePlaytime; }
+      bms_parser::Chart *, const StartOptions &, long long) const { return sourcePlaytime; }
   void stopRealtimeGameplayAuthority(bool transferReplay) {
     if (realtimeGameplaySession && realtimeGameplaySession->worker &&
         realtimeGameplaySession->worker->native) {
@@ -694,6 +753,148 @@ void testAbortExportAdmission(const ReplayData &replay) {
 }
 
 #include "gameplay_terminal_persistence_fixture.h"
+
+void testPracticeMenuPauseClearsStartHold() {
+  GamePlayScene scene;
+  scene.practiceMenuActive = true;
+  scene.state->isPlaying = false;
+  FixturePauseView pause;
+  scene.pauseLayout = &pause;
+  scene.clock = 100;
+  scene.consumePracticeMenuLaneInput(0, true);
+  scene.showPauseMenu(false);
+  scene.clock += 2'000'000;
+  scene.update(0);
+  require(!scene.practiceMenuStartRequested && !scene.lanePressed[0],
+          "pausing setup clears held-key feedback and the pending start");
+  scene.closePauseMenu();
+  scene.update(0);
+  require(scene.practiceMenuActive && scene.resets == 0,
+          "closing setup pause cannot start a held section");
+}
+
+void testPracticeFirstKeyWaitsOnlyForStartSelectCooldown() {
+  for (const auto kind : {replay::LogicalControlKind::Start,
+                           replay::LogicalControlKind::Select}) {
+    GamePlayScene scene;
+    scene.options.practiceSession = std::make_shared<practice::Session>(
+        practice::Configuration{.startMicros = 0, .endMicros = 10'000'000});
+    scene.options.practiceSession->configureSkinMenu(
+        {.lastTimelineMicros = 10'000'000, .keyMode = 7});
+    scene.practiceMenuActive = true;
+    scene.state->isPlaying = false;
+    scene.startSelectControl.emplace(gameplay::StartSelectControl::Configuration{.keyMode = 7});
+    scene.clock = 2'000'000;
+    scene.practiceMenuStartBlockedUntilMicros = 5'000'000;
+    scene.consumeStartSelectInput({.control = {.kind = kind}, .pressed = true,
+                                   .timestampMicros = scene.clock});
+    require(scene.practiceMenuStartBlockedUntilMicros == 5'000'000,
+            "Start/Select does not shorten a longer skin loading deadline");
+    scene.consumePracticeMenuLaneInput(0, true);
+    scene.consumePracticeMenuLaneInput(0, false);
+    scene.clock += 2'000'000;
+    scene.update(0);
+    require(scene.practiceMenuActive && scene.resets == 0,
+            "holding Start or Select blocks first-key startup without queuing an old tap");
+    scene.consumeStartSelectInput({.control = {.kind = kind}, .pressed = false,
+                                   .timestampMicros = scene.clock});
+    scene.consumePracticeMenuLaneInput(0, true);
+    scene.clock += 999'999;
+    scene.update(0);
+    require(scene.practiceMenuActive, "first key respects the Start/Select release cooldown");
+    scene.clock += 2;
+    scene.update(0);
+    require(!scene.practiceMenuActive && scene.resets == 1,
+            "a held first key starts as soon as the control cooldown expires");
+  }
+}
+
+void testRestartStartsPracticeMenuAttempt() {
+  for (const int startMethod : {0, 1, 2}) {
+    GamePlayScene scene;
+    practice::Configuration configuration{
+        .startMicros = 0, .endMicros = 10'000'000};
+    scene.options.practiceSession = std::make_shared<practice::Session>(configuration);
+    scene.options.practiceSession->configureSkinMenu(
+        {.lastTimelineMicros = 10'000'000, .keyMode = 7});
+    scene.practiceMenuActive = true;
+    scene.state->isPlaying = false;
+    scene.startSelectControl.emplace(gameplay::StartSelectControl::Configuration{.keyMode = 7});
+    scene.consumeStartSelectInput({.control = {.kind = replay::LogicalControlKind::ScratchClockwise},
+                                   .pressed = true, .analogScratch = true});
+    require(scene.options.practiceSession->skinMenuState().cursorPosition == 0,
+            "analog scratch direction alone does not duplicate a menu tick");
+    scene.consumeStartSelectInput({.control = {.kind = replay::LogicalControlKind::ScratchClockwise},
+                                   .analogScratchTicks = 6});
+    scene.update(0);
+    require(scene.options.practiceSession->skinMenuState().cursorPosition == 2,
+            "spin scratch advances the menu at the configured coarse tick threshold");
+    scene.clock = 100;
+    scene.consumePracticeMenuLaneInput(7, true);
+    require(!scene.practiceMenuStartRequested,
+            "scratch navigation never starts a practice attempt");
+    scene.consumePracticeMenuLaneInput(7, false);
+    scene.consumePracticeMenuLaneInput(1, true);
+    require(scene.lanePressed[1] && scene.state->stagePassedNotes == 0 &&
+                scene.options.practiceSession->skinMenuState().horizontalInputMode,
+            "practice setup publishes held keys and menu modifiers without judging notes");
+    scene.consumePracticeMenuLaneInput(1, false);
+    require(!scene.lanePressed[1] &&
+                !scene.options.practiceSession->skinMenuState().horizontalInputMode,
+            "practice setup releases held key feedback and menu modifiers");
+    if (startMethod == 0) {
+      scene.restartCurrentPattern();
+    } else {
+      scene.clock = 1'000'000;
+      if (startMethod == 1) {
+        scene.consumePracticeMenuLaneInput(
+            scene.chart->Meta.GetKeyLaneIndices().front(), true);
+        scene.consumePracticeMenuLaneInput(
+            scene.chart->Meta.GetKeyLaneIndices().front(), false);
+      } else {
+        scene.practiceMenuTouchInput = std::make_unique<gameplay::PracticeMenuTouchInput>(
+            gameplay::RealtimeTouchInputSink{
+                .context = &scene,
+                .emit = [](void *context, const gameplay::RealtimeGameplayInput &input) {
+                  static_cast<GamePlayScene *>(context)->consumePracticeMenuLaneInput(
+                      input.lane, input.type == gameplay::RealtimeGameplayInputType::Press);
+                  return true;
+                }}, gameplay::RealtimeTouchPresentationSink{});
+        gameplay::RealtimeTouchLayout layout;
+        layout.revision = 1;
+        layout.keyMode = 7;
+        layout.laneRegions.push_back({.bottomLeft = {0, 1}, .bottomRight = {1, 1},
+                                      .topLeft = {0, 0}, .topRight = {1, 0}, .lane = 0});
+        scene.practiceMenuTouchInput->publish(layout,
+            {.layoutRevision = 1,
+             .uiTransform = {.renderWidth = 100, .renderHeight = 100,
+                             .uiScaleX = 1, .uiScaleY = 1,
+                             .uiWidth = 100, .uiHeight = 100}}, scene.clock);
+        scene.practiceMenuTouchInput->consume(1, gameplay::RealtimeTouchPhase::Down,
+                                              0.5F, 0.5F, scene.clock);
+        scene.practiceMenuTouchInput->consume(1, gameplay::RealtimeTouchPhase::Up,
+                                              0.5F, 0.5F, scene.clock + 1);
+      }
+      scene.clock += 2;
+      scene.update(0.0F);
+    }
+    require(!scene.practiceMenuTouchInput, "attempt retires the setup touch router");
+    require(!scene.practiceMenuActive && !scene.practiceMenuStartRequested,
+            "starting practice must leave the menu before gameplay updates");
+    require(scene.resets == 1 && scene.practiceMenuPreparations == 1 &&
+                scene.options.practiceSession->hasActivatedSkinMenuAttempt(),
+            "restart and quick first-key taps use the same prepared practice attempt");
+    scene.update(0.0F);
+    require(!scene.state->isEnding && scene.transitions == 0,
+            "the started practice attempt remains in gameplay");
+    scene.useProductionJudging = true;
+    scene.context.jukebox.time = 2'500'000;
+    scene.update(0.0F);
+    require(scene.state->judgeCount[Poor] == 1 &&
+                scene.state->stagePassedNotes == 1 && !scene.state->isEnding,
+            "the started practice attempt advances real timeline judgements");
+  }
+}
 
 void testPausePenaltyAndFreshAttemptBoundary() {
   for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
@@ -1514,6 +1715,35 @@ void testPmsReplayNonvanishingBadKeepsLongHeadScorePotential() {
   }
 }
 
+void testReplaySuppressedFinalMissFinishes() {
+  GamePlayScene scene;
+  scene.options.replayData = std::make_shared<ReplayData>();
+  scene.buildReplayNoteLookup();
+  scene.state->stagePassedNotes = scene.chart->Meta.TotalNotes - 1;
+  scene.state->judgeCount[Bad] = 1;
+  scene.playfieldVisualStateStore->timingState =
+      std::make_unique<PlayfieldVisualStateStore>(
+          buildPlayfieldChartVisualModel(*scene.chart, 0));
+  auto &store = *scene.playfieldVisualStateStore->timingState;
+  PlayfieldAuthorityUpdate authority;
+  authority.gameplayMode = PlayfieldGameplayMode::Replay;
+  authority.completionFinishEligible = true;
+  store.applyAuthorityUpdate(authority);
+  auto *note = scene.chart->Measures.front()->TimeLines.back()->Notes[0];
+  const ReplayEvent event{.action = ReplayEventAction::Miss, .lane = 0,
+      .noteTimeMicros = note->Timeline->Timing,
+      .songTimeMicros = 3'200'000, .judgeTimeMicros = 3'200'000,
+      .judgement = None};
+  scene.applyReplayEvent(event, 3'180'000);
+  require(scene.state->stagePassedNotes == scene.chart->Meta.TotalNotes &&
+              note->IsPlayed && note->IsDead && scene.state->judgeCount[Bad] == 1 &&
+              scene.state->judgeCount[Poor] == 0,
+          "suppressed replay miss resolves the note without another judgement");
+  require(store.capture({}).completionCelebration == completion_celebration::State{
+              completion_celebration::Achievement::Finish, 3'180'000},
+          "suppressed final replay miss starts Finish on its visual clock");
+}
+
 void testStoppedRealtimeRetryProjectionRemainsAuthoritative() {
   GamePlayScene scene;
   scene.quickRetryRemainingHellChargeTicks = 100; // Untouched legacy startup budget.
@@ -1592,6 +1822,140 @@ void testRealtimeTimingSamplesFollowInputEvents() {
                                     JudgeResult(PGreat, 0), false, 2'100'000);
   require(replayState.judgementIndicatorSampleCount == 1,
           "recorded autoplay does not inject synthetic timing during replay");
+}
+
+void testGameplayEndPreservesHeldLaneBeams() {
+  for (const bool realtime : {false, true}) {
+    GamePlayScene scene;
+    scene.sourcePlaytime = 4'000;
+    scene.state->commitJudge({PGreat, 0});
+    scene.state->commitJudge({PGreat, 0});
+    scene.lanePressed[0] = true;
+    auto model = buildPlayfieldChartVisualModel(*scene.chart, 0);
+    const auto laneIndex = std::find(model.laneOrder.begin(), model.laneOrder.end(), 0) -
+                          model.laneOrder.begin();
+    scene.presentationEventFanout->timingState =
+        std::make_unique<PlayfieldVisualStateStore>(model);
+    auto &store = *scene.presentationEventFanout->timingState;
+    store.onLanePressed(0, {None, 0}, 999'000);
+    scene.context.jukebox.time = 1'000'000;
+    scene.update(0.016F);
+    require(!scene.state->isEnding && scene.lanePressed[0] &&
+                store.capture({}).lanes.at(laneIndex).pressed,
+            "held beam stays active until the gameplay timer ends");
+    if (realtime) {
+      scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+      scene.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+      scene.realtimeGameplaySession->worker->snapshot.terminalReason =
+          gameplay::GameplayTerminalReason::ChartComplete;
+      scene.stoppedSnapshot = std::make_unique<RhythmState>(*scene.state);
+      scene.context.jukebox.time = 4'000'999;
+      scene.updateWhileBackgrounded();
+      require(!scene.context.jukebox.isPaused(),
+              "a completed worker must not pause the background clock before the playtime margin");
+      scene.update(0.016F);
+      require(!scene.state->isEnding && scene.transitions == 0 && scene.lanePressed[0],
+              "a completed worker must not open results before the strict playtime boundary");
+    }
+    scene.context.jukebox.time = 4'001'000;
+    scene.update(0.016F);
+    const auto lane = store.capture({}).lanes.at(laneIndex);
+    require(scene.state->isEnding && scene.lanePressed[0] && lane.pressed,
+            "entering the result fade preserves a held lane until the user releases it");
+    require(scene.state->getScore() == 4 && scene.state->judgeCount[Poor] == 0 &&
+                scene.recordedReplay.events.empty(),
+            "entering the result fade does not judge notes or append replay input");
+    scene.context.jukebox.time += 100'000;
+    scene.update(0.016F);
+    require(store.capture({}).lanes.at(laneIndex).releaseMicros == lane.releaseMicros,
+            "ending updates do not restart the release fade");
+  }
+}
+
+void testSkipResultDelay() {
+  for (const bool course : {false, true}) {
+    GamePlayScene scene;
+    scene.chart->Meta.PlayLength = 3'000'000;
+    scene.sourcePlaytime = 8'000;
+    scene.context.jukebox.time = 2'999'999;
+    scene.state->stagePassedNotes = scene.chart->Meta.TotalNotes;
+    if (course) {
+      scene.options.courseSession = std::make_shared<CoursePlaySession>();
+    }
+    require(!scene.canSkipResultDelay(), "early judgement cannot skip the final tail");
+    scene.skipResultDelay();
+    require(!scene.resultDelaySkipRequested, "premature Skip is ignored");
+    scene.context.jukebox.time = 3'100'000;
+    --scene.state->stagePassedNotes;
+    require(!scene.canSkipResultDelay(), "Skip waits for the final judgement");
+    ++scene.state->stagePassedNotes;
+    require(scene.canSkipResultDelay(), "Skip is available during the five-second margin");
+    scene.skipResultDelay();
+    scene.update(0.016F);
+    require(scene.state->isEnding && scene.transitions == 1 &&
+                scene.naturalResultDelay,
+            "Skip completes the attempt before the automatic deadline");
+    if (course) {
+      require(scene.options.courseSession->completedResults.size() == 1,
+              "Skip captures the completed course stage");
+    }
+    const int passed = scene.state->stagePassedNotes;
+    scene.update(0.016F);
+    require(scene.transitions == 1 && scene.state->stagePassedNotes == passed,
+            "Skip does not repeat completion or change scoring");
+  }
+  GamePlayScene delayed;
+  delayed.state->isEnding = true;
+  delayed.resultTransitionScheduled = true;
+  require(!delayed.canSkipResultDelay(), "failure/abort transitions are not natural post-delay");
+  delayed.naturalResultDelay = true;
+  int opened = 0;
+  delayed.pendingResultTransition = [&] { ++opened; return false; };
+  require(delayed.canSkipResultDelay(), "Skip remains available during the final delay");
+  delayed.queueDeferred = true;
+  delayed.skipResultDelay();
+  delayed.skipResultDelay();
+  require(opened == 0, "Skip waits until event dispatch has finished");
+  delayed.finishFrame();
+  delayed.finishFrame();
+  require(opened == 1, "repeated Skip taps execute the captured result only once");
+  require(delayed.runResultTransition() && opened == 1,
+          "the original delayed callback cannot open results twice");
+  GamePlayScene autoplay;
+  autoplay.chart->Meta.PlayLength = 3'000'000;
+  autoplay.playfieldChartVisualModel.staticMetadata.lastEventTimeMicros = 6'000'000;
+  autoplay.state->stagePassedNotes = autoplay.chart->Meta.TotalNotes;
+  autoplay.context.jukebox.time = 4'000'000;
+  autoplay.options.autoPlay = true;
+  require(!autoplay.canSkipResultDelay(), "autoplay waits for its last authored event");
+  autoplay.context.jukebox.time = 6'000'000;
+  require(autoplay.canSkipResultDelay(), "autoplay permits Skip in its post-delay");
+  autoplay.options.replayData = std::make_shared<ReplayData>();
+  autoplay.options.replayData->abortedAtSongTimeMicros = 8'000'000;
+  require(!autoplay.canSkipResultDelay(), "Skip cannot bypass a recorded replay abort");
+  autoplay.options.replayData.reset();
+  autoplay.options.practiceMode = true;
+  require(!autoplay.canSkipResultDelay(), "practice retains its own completion flow");
+  GamePlayScene realtime;
+  realtime.chart->Meta.PlayLength = 3'000'000;
+  realtime.context.jukebox.time = 3'100'000;
+  realtime.sourcePlaytime = 8'000;
+  realtime.state->stagePassedNotes = realtime.chart->Meta.TotalNotes;
+  realtime.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  realtime.realtimeGameplaySession->worker = std::make_unique<FixtureWorker>();
+  auto &snapshot = realtime.realtimeGameplaySession->worker->snapshot;
+  require(!realtime.canSkipResultDelay(), "the UI count cannot override unresolved worker judgements");
+  snapshot.attempt.stagePassedNotes = realtime.chart->Meta.TotalNotes;
+  require(realtime.canSkipResultDelay(), "completed worker scoring permits Skip before trailing rows");
+  snapshot.terminalReason = gameplay::GameplayTerminalReason::SurvivalGaugeFailed;
+  require(!realtime.canSkipResultDelay(), "worker failure takes priority over Skip");
+  snapshot.terminalReason = gameplay::GameplayTerminalReason::None;
+  realtime.stoppedSnapshot = std::make_unique<RhythmState>(*realtime.state);
+  realtime.skipResultDelay();
+  realtime.update(0.016F);
+  require(realtime.state->isEnding && realtime.transitions == 1 &&
+              !realtime.realtimeGameplaySession,
+          "Skip uses the regular worker handoff before capturing results");
 }
 
 void testRealtimeTerminalRouting() {
@@ -1727,6 +2091,78 @@ template <typename Predicate> void requireWorkerState(Predicate predicate) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   require(predicate(), "bounded real worker reaches the requested state");
+}
+
+void testResultFadeKeepsNativeInputAndCapturedResult() {
+  for (const bool trailingTimeline : {false, true}) {
+    TerminalWorkerClock clock;
+    GamePlayScene scene;
+    if (trailingTimeline) {
+      auto *background = new bms_parser::TimeLine(8, false);
+      background->Timing = 20'000'000;
+      scene.chart->Measures.front()->TimeLines.push_back(background);
+    }
+    scene.sourcePlaytime = 8'000;
+    configureAbortCapture(scene);
+    const auto policy = buildGameplayRulesetPolicyAtPlayStart(
+        scene.options, scene.chart->Meta, AppSettings::NotePriorityMode::Lowest);
+    require(policy.built(), policy.diagnostic);
+    scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+    auto &session = *scene.realtimeGameplaySession;
+    session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+    session.worker = std::make_unique<FixtureWorker>();
+    session.worker->native = std::make_unique<gameplay::RealtimeGameplayWorker>(
+        gameplay::buildGameplayDefinition(*scene.chart, 0),
+        gameplay::RealtimeGameplayWorkerConfig{
+            .epoch = 17,
+            .simulation = {.judge = policy.policy->judge, .gaugeRules = policy.policy->gauge},
+            .clock = {.context = &clock, .mapSteadyToSong = &TerminalWorkerClock::map,
+                      .currentSongTime = &TerminalWorkerClock::now},
+            .inputTriggeredKeysounds = false});
+    auto &worker = *session.worker->native;
+    const auto input = [&](bool pressed, long long time) {
+      require(worker.enqueueInput({.epoch = 17,
+          .type = pressed ? gameplay::RealtimeGameplayInputType::Press
+                          : gameplay::RealtimeGameplayInputType::Release,
+          .lane = 0, .compensateLane = 0, .steadyTimestampMicros = time,
+          .hasReplayControl = true,
+          .replayControl = {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 0}}),
+          "result fade input accepted");
+    };
+    input(true, 2'000'000);
+    input(false, 2'050'000);
+    input(true, 3'000'000);
+    require(worker.start(), "result fade worker starts");
+    requireWorkerState([&] { return worker.acquireLatestSnapshot()->attempt.stagePassedNotes == 2; });
+    clock.songTimeMicros.store(3'500'000);
+    if (!trailingTimeline) requireWorkerState([&] {
+      return worker.acquireLatestSnapshot()->terminalReason == gameplay::GameplayTerminalReason::ChartComplete;
+    });
+    scene.context.jukebox.time = 8'001'000;
+    scene.update(0.016F);
+    require(scene.state->isEnding && scene.naturalResultDelay && scene.transitions == 1 &&
+                scene.lanePressed[0] && session.resultTransferred && worker.running() &&
+                worker.acquireLatestSnapshot()->terminalReason == gameplay::GameplayTerminalReason::ChartComplete,
+            "result capture preserves held input and the worker through the final fade");
+    const auto replaySize = scene.recordedReplay.events.size();
+    require(replaySize == 3 && scene.completedModernReplayInput &&
+                scene.completedModernReplayInput->size() == 3,
+            "suspended capture retains the final note and raw input before resuming feedback");
+    for (const auto [pressed, time] : {std::pair{false, 8'100'000LL},
+                                     std::pair{true, 8'200'000LL},
+                                     std::pair{false, 8'300'000LL}}) {
+      input(pressed, time);
+      requireWorkerState([&] { return worker.acquireLatestSnapshot()->lanePressed[0] == pressed; });
+      scene.context.jukebox.time = time;
+      scene.update(0.016F);
+      require(scene.lanePressed[0] == pressed && scene.state->getScore() == 4 &&
+                  scene.recordedReplay.events.size() == replaySize && scene.transitions == 1,
+              "final fade publishes new beam edges without changing captured results");
+    }
+    scene.stopRealtimeGameplayAuthority(true);
+    require(scene.recordedReplay.events.size() == replaySize,
+            "later teardown cannot duplicate the captured replay");
+  }
 }
 
 void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
@@ -2742,6 +3178,26 @@ void testLegacyMineKeysoundOnlyOnDetonation() {
   }
 }
 
+void testCompletionCuesUseGameplaySfx() {
+  using completion_celebration::Achievement;
+  int index = 0;
+  for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect, Achievement::Max}) {
+    GamePlayScene scene;
+    scene.context.settings.audioVideo.audio.masterVolume = 0.25F;
+    scene.capturedPlayfieldVisualState.completionCelebration = {achievement, 1000};
+    scene.capturedPlayfieldVisualState.clock.visualTimeMicros = 1000;
+    scene.playCompletionSound(true);
+    require(scene.context.systemSounds.plays == 1 &&
+                scene.context.systemSounds.lastSound == *scene.completionSounds[index++] &&
+                scene.context.systemSounds.gain == 1.0F &&
+                scene.context.systemSounds.bus == audio::Bus::GameplaySfx,
+            "each completion cue routes to gameplay SFX with master applied only by mixer");
+    scene.playCompletionSound(true);
+    require(scene.context.systemSounds.plays == 1,
+            "routing preserves one cue per completion");
+  }
+}
+
 void testAutomaticRetryCue() {
   for (const bool reshuffle : {false, true}) {
     GamePlayScene scene;
@@ -2766,8 +3222,9 @@ void testAutomaticRetryCue() {
     scene.clock = 1234;
     scene.context.settings.audioVideo.audio.masterVolume = volume;
     scene.playQuickRetryFeedback();
-    require(scene.context.systemSounds.gain == volume,
-            "retry cue passes master attenuation and mute to the system voice");
+    require(scene.context.systemSounds.gain == 1.0F &&
+                scene.context.systemSounds.bus == audio::Bus::GameplaySfx,
+            "retry cue uses gameplay SFX so the mixer applies master exactly once");
     require(scene.context.quickRetryFeedback.startedMicros == 1234,
             "visual cue still starts when audio is muted");
   }
@@ -2777,12 +3234,16 @@ void testAutomaticRetryCue() {
 }
 
 int main(int argc, char **argv) {
+  testGameplayEndPreservesHeldLaneBeams();
+  testResultFadeKeepsNativeInputAndCapturedResult();
+  testCompletionCuesUseGameplaySfx();
   testAutomaticRetryCue();
   testLegacyMissedHcnPreview();
   testLegacyMineKeysoundOnlyOnDetonation();
   testLegacyLongNoteTimingSamples();
   testReplayDeferredLongHeadScoreProjection();
   testPmsReplayNonvanishingBadKeepsLongHeadScorePotential();
+  testReplaySuppressedFinalMissFinishes();
   testStoppedRealtimeRetryProjectionRemainsAuthoritative();
   testRealtimeTimingSamplesFollowInputEvents();
   for (const bool ios : {false, true}) {
@@ -2918,6 +3379,9 @@ int main(int argc, char **argv) {
     }
   }
   std::cout << "COR01 actual scene practice tests passed\n";
+  testPracticeMenuPauseClearsStartHold();
+  testPracticeFirstKeyWaitsOnlyForStartSelectCooldown();
+  testRestartStartsPracticeMenuAttempt();
   testQueuedAbortLifetime();
   testPausePenaltyAndFreshAttemptBoundary();
   testPauseOnlyPenalizesUnfinishedNotePlay();
@@ -2945,6 +3409,7 @@ int main(int argc, char **argv) {
   testCourseAbort();
   testPracticeTerminalExceptions();
   testLongNoteAbortAccounting();
+  testSkipResultDelay();
   testRealtimeTerminalRouting();
   testStoppedWorkerAbortWatch();
   testStoppedWorkerAbortWatch(true);

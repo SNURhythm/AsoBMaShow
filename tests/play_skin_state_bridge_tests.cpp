@@ -1,5 +1,6 @@
 #include "skin/beatoraja/PlaySkinStateBridge.h"
 #include "scene/SettingsScenePreviewAuthority.h"
+#include "scene/play/GameplaySkinPracticeClock.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
@@ -21,6 +22,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <string_view>
 #include <vector>
 
@@ -1278,6 +1280,184 @@ void testExistingGameplayStatePropertyWiring() {
              bgaIndex.supported && bgaIndex.value == 2,
          "BGA resource selectors and the global BGA mode use their separate "
          "pinned sources");
+  bridge.discardFrame();
+}
+
+void testPracticeBpmUsesScaledModelOutsideMenu() {
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.minimumBpm = 120;
+  chart.staticMetadata.maximumBpm = 180;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.practiceMenu = practice::SkinMenuState{};
+  state.authority.practiceMenu->frequencyPercent = 150;
+  state.authority.currentBpm = 120;
+  state.authority.practiceMenuActive = true;
+  bridge.beginFrame(state, projectionAt(1));
+  expect(bridge.integerProperty({160}).value == 120,
+         "practice menu reloads the original model BPM");
+  bridge.discardFrame();
+
+  state.clock.serial = 2;
+  state.authority.practiceMenuActive = false;
+  bridge.beginFrame(state, projectionAt(2));
+  expect(bridge.integerProperty({160}).value == 180,
+         "practice attempt nowbpm reflects source frequency-scaled model");
+  expect(bridge.integerProperty({90}).value == 180 &&
+             bridge.integerProperty({91}).value == 120,
+         "practice static BPM selectors retain original SongData metadata");
+  bridge.discardFrame();
+}
+
+void testPracticeStaticNotesRetainOriginalSongData() {
+  PlayfieldChartVisualModel chart;
+  chart.staticMetadata.totalNotes = 20;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.originalPracticeTotalNotes = 100;
+  state.score = 20;
+  bridge.beginFrame(state, projectionAt(1));
+  expect(bridge.integerProperty({74}).value == 100 &&
+             bridge.integerProperty({106}).value == 100,
+         "practice totalnotes selectors retain original SongData notes");
+  expect(bridge.integerProperty({115}).value == 50 &&
+             bridge.floatProperty({110}).value == 0.5,
+         "practice current score rate uses the modified JudgeManager note count");
+  bridge.discardFrame();
+}
+
+void testPracticeHasNoRivalScoreData() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.rivalScore = PlayfieldRivalScoreState{
+      .score = 150, .totalNotes = 100, .judgementCounts = {70, 10, 0, 0, 0}};
+  bridge.beginFrame(state, projectionAt(1));
+  expect(bridge.integerProperty({271}).value == 0 &&
+             bridge.integerProperty({280}).value ==
+                 std::numeric_limits<int>::min() &&
+             bridge.integerProperty({285}).value ==
+                 std::numeric_limits<int>::min() &&
+             bridge.floatProperty({285}).value ==
+                 std::numeric_limits<float>::min(),
+         "practice does not expose a retained selection rival as ScoreDataProperty");
+  bridge.discardFrame();
+}
+
+void testPracticeMenuRestoresNeutralMotionTimers() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.practiceMenuActive = true;
+  state.clock.skinTimeMicros = 100'000;
+  state.clock.playTimer.active = false;
+  bridge.beginFrame(state, projectionAt(1));
+  expect(bridge.timerProperty({900}) == 100'000 &&
+             bridge.timerProperty({905}) == 100'000 &&
+             bridge.timerProperty({909}) == kPlayfieldTimestampOff,
+         "practice menu starts both neutral motions before the play timer");
+  bridge.discardFrame();
+
+  state.clock.serial = 2;
+  state.clock.skinTimeMicros = 200'000;
+  bridge.beginFrame(state, projectionAt(2));
+  expect(bridge.timerProperty({900}) == 100'000 &&
+             bridge.timerProperty({905}) == 100'000,
+         "practice menu retains neutral motion origins across frames");
+  bridge.discardFrame();
+
+  state.clock.serial = 3;
+  state.authority.practiceMenuActive = false;
+  state.clock.skinTimeMicros = 300'000;
+  state.authority.stagePassedNotes = 1;
+  state.lastJudge = JudgeResult(PGreat, 0);
+  state.clock.playTimer = {.active = true,
+                           .startMicros = 0,
+                           .elapsedMillisExact = true};
+  bridge.beginFrame(state, projectionAt(3));
+  expect(bridge.timerProperty({140}) != kPlayfieldTimestampOff &&
+             bridge.timerProperty({909}) == 300'000,
+         "practice attempt starts rhythm and dance timers");
+  bridge.discardFrame();
+
+  state.clock.serial = 4;
+  state.clock.skinTimeMicros = 302'000;
+  bridge.beginFrame(state, projectionAt(4));
+  expect(bridge.timerProperty({900}) == 302'000,
+         "completed practice motion remembers its processed-note count");
+  bridge.discardFrame();
+
+  state.clock.serial = 5;
+  state.authority.practiceMenuActive = true;
+  state.clock.skinTimeMicros = 400'000;
+  state.clock.playTimer.active = false;
+  bridge.beginFrame(state, projectionAt(5));
+  expect(bridge.timerProperty({140}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({909}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({900}) == 400'000 &&
+             bridge.timerProperty({905}) == 400'000,
+         "returning to practice clears attempt motion and restarts menu neutral");
+  bridge.discardFrame();
+
+  state.clock.serial = 6;
+  state.authority.practiceMenuActive = false;
+  state.clock.skinTimeMicros = 500'000;
+  state.clock.playTimer.active = true;
+  bridge.beginFrame(state, projectionAt(6));
+  expect(bridge.timerProperty({902}) == 500'000,
+         "a new practice attempt reacts even when its note count matches the prior attempt");
+  bridge.discardFrame();
+}
+
+void testPracticeMenuLoadingBooleansUsePlayerState() {
+  PlayfieldChartVisualModel chart;
+  chart.popnFiveKeys = true;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.practiceMenuActive = true;
+  state.authority.practiceMenu = practice::SkinMenuState{};
+  state.authority.loadingState = PlayfieldLoadingState::Loading;
+  bridge.beginFrame(state, projectionAt(1));
+  expect(!bridge.booleanProperty({80}).value &&
+             bridge.booleanProperty({81}).value,
+         "STATE_PRACTICE is outside STATE_PRELOAD even before media finishes");
+  expect(bridge.practiceState().popnFiveKeys,
+         "practice view preserves POPN 5K identity for source help and colors");
+  expect(bridge.booleanProperty({1080}).value &&
+             !bridge.practiceState().mediaReady &&
+             bridge.floatProperty({102}).value == 0.0,
+         "practice menu readiness and load progress still wait for media");
   bridge.discardFrame();
 }
 
@@ -2558,6 +2738,47 @@ void testFailureTimerUsesCapturedSurvivalFailureEvent() {
   bridge.discardFrame();
 }
 
+void testPracticeRhythmTimerUsesSourceFrequencyFactor() {
+  PlayfieldChartVisualModel chart;
+  chart.timelines = {
+      {.timeMicros = 1'000'000, .bpm = 60.0, .sectionLine = true},
+      {.timeMicros = 2'000'000, .bpm = 60.0, .sectionLine = true},
+  };
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  for (const auto [frequency, elapsed, expected] : std::array{
+           std::tuple{50, 1'500'000LL, 750'000LL},
+           std::tuple{75, 1'500'000LL, 1'500'000LL},
+           std::tuple{150, 500'000LL, 500'000LL}}) {
+    PlaySkinStateBridge bridge({.chartModel = chart,
+                                .configuration = configuration,
+                                .mutationTable = mutations});
+    auto state = stateAt(1);
+    state.sceneStartMicros = 0;
+    state.clock.visualTimeMicros = 0;
+    state.clock.gameplayTimeMicros = 0;
+    state.clock.playTimer = {.active = true,
+                             .startMicros = 0,
+                             .elapsedMillisExact = true};
+    state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+    state.authority.practiceMenu = practice::SkinMenuState{};
+    state.authority.practiceMenu->frequencyPercent = frequency;
+    state.authority.currentBpm = 60.0;
+    bridge.beginFrame(state, projectionAt(1));
+    bridge.discardFrame();
+
+    state.clock.serial = 2;
+    state.clock.visualTimeMicros = elapsed * frequency / 100;
+    state.clock.gameplayTimeMicros = state.clock.visualTimeMicros;
+    state.clock.playTimer = practiceSkinPlayTimer(
+        state.clock.gameplayTimeMicros, 0, 30'000'000, false, frequency);
+    bridge.beginFrame(state, projectionAt(2));
+    expect(bridge.timerProperty({140}) == expected,
+           "practice rhythm preserves Java's integer 100/frequency section factor");
+    bridge.discardFrame();
+  }
+}
+
 void testRhythmTimerUsesPinnedSectionAndBpmAccumulator() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3088,6 +3309,171 @@ void testScoreAndComboTimersUseCapturedGameplayState() {
          "rank timers turn off when BMSPlayer's score condition no longer "
          "qualifies");
   bridge.discardFrame();
+}
+
+void testPracticeSuppliesGameplayTimeProperties() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  std::uint64_t serial = 0;
+  // Skin TIMER_PLAY is absolute, frequency-adjusted chart position; native
+  // practice ranges remain in the original chart-time domain.
+  for (const int frequency : {50, 100, 150, 200}) {
+    for (const auto [time, menuActive] : std::array{
+             std::pair{30'000'000LL, true}, std::pair{28'000'000LL, false},
+             std::pair{29'000'000LL, false}, std::pair{45'000'000LL, false}}) {
+      auto state = stateAt(++serial);
+      state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+      state.authority.practiceMenu = practice::SkinMenuState{};
+      state.authority.practiceMenu->frequencyPercent = frequency;
+      state.clock.gameplayTimeMicros = time;
+      state.clock.visualTimeMicros = time + 2'000'000;
+      state.sceneStartMicros = 2'000'000;
+      state.clock.playTimer = practiceSkinPlayTimer(
+          time, 30'000'000, 60'000'000, menuActive, frequency);
+      bridge.beginFrame(state, projectionAt(serial));
+      const bool playing = !menuActive && time >= 29'000'000;
+      const long long elapsed = playing ? time / 1000 * 100 / frequency : 0;
+      const long long duration = 61'000LL * 100 / frequency + 5'000;
+      expect(bridge.integerProperty({162}).value == elapsed / 1000 % 60,
+             "practice elapsed uses absolute frequency-adjusted chart time");
+      expect(bridge.integerProperty({164}).value ==
+                 (duration + 1000 - elapsed) / 1000 % 60,
+             "practice remaining time includes source tail and end margin");
+      const auto progress = bridge.floatProperty({6});
+      expect(progress.supported &&
+                 std::abs(progress.value - static_cast<float>(elapsed) /
+                                              static_cast<float>(duration)) < 0.000001,
+             "practice progress uses the same source clock as its duration");
+      expect((bridge.timerProperty({41}) != kPlayfieldTimestampOff) == playing,
+             "practice play timer starts at preroll, not at the selected note");
+      if (playing) {
+        expect((skinStateClockMicros(state) - bridge.timerProperty({41})) /
+                       1000 == elapsed,
+               "practice graph and timer animations use the same elapsed domain");
+      }
+      bridge.discardFrame();
+    }
+  }
+}
+
+void testPracticePlaybackUsesWallTimeForSkinAnimations() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  auto state = stateAt(1);
+  state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+  state.authority.practiceMenu = practice::SkinMenuState{};
+  state.authority.practiceMenu->frequencyPercent = 200;
+  state.authority.currentBpm = 120.0;
+  state.sceneStartMicros = 6'000'000;
+  state.clock.gameplayTimeMicros = 6'000'000;
+  state.clock.visualTimeMicros = 6'000'000;
+  state.clock.playTimer = practiceSkinPlayTimer(
+      6'000'000, 6'000'000, 30'000'000, false, 200);
+  bridge.beginFrame(state, projectionAt(1));
+  expect(bridge.timerProperty({41}) == -3'000'000 &&
+             bridge.timerProperty({140}) == -3'000'000,
+         "practice play and initial rhythm timers retain the absolute source "
+         "elapsed time without a second frequency division");
+  bridge.discardFrame();
+
+  for (std::uint64_t serial = 2; serial <= 3; ++serial) {
+    state.clock.serial = serial;
+    const long long wallElapsed = static_cast<long long>(serial - 1) * 1'000'000;
+    state.clock.gameplayTimeMicros = 6'000'000 + wallElapsed * 2;
+    state.clock.visualTimeMicros = state.clock.gameplayTimeMicros;
+    state.clock.playTimer = practiceSkinPlayTimer(
+        state.clock.gameplayTimeMicros, 6'000'000, 30'000'000, false, 200);
+    state.lanes.front().pressMicros = 7'000'000;
+    state.lanes.front().bombMicros = 7'000'000;
+    state.lastJudgeVisualMicros = 7'000'000;
+    bridge.beginFrame(state, projectionAt(serial));
+    expect(skinStateClockMicros(state) == wallElapsed &&
+               bridge.timerProperty({41}) == -3'000'000 &&
+               bridge.timerProperty({100}) == 500'000 &&
+               bridge.timerProperty({50}) == 500'000 &&
+               bridge.timerProperty({46}) == 500'000,
+           "at double frequency two chart seconds advance skin animations by "
+           "one wall second, with lane and judgement events in that clock");
+    expect(bridge.timerProperty({140}) == -3 * wallElapsed,
+           "practice rhythm integrates scaled BPM against wall-time deltas");
+    bridge.discardFrame();
+  }
+}
+
+void testPracticeMenuUsesItsOwnAnimationClock() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  std::uint64_t serial = 0;
+  for (const auto elapsed : {0LL, 250'000LL, 2'000'000LL, 60'000'000LL}) {
+    auto state = stateAt(++serial);
+    state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+    state.authority.practiceMenuActive = true;
+    state.sceneStartMicros = 0;
+    // The old song's stopped clock must not fast-forward or freeze the menu.
+    state.clock.visualTimeMicros = 180'000'000;
+    state.clock.gameplayTimeMicros = 180'000'000;
+    state.clock.skinTimeMicros = elapsed;
+    state.clock.playTimer = practiceSkinPlayTimer(
+        state.clock.gameplayTimeMicros, 0, 30'000'000, true);
+    bridge.beginFrame(state, projectionAt(serial));
+    expect(skinStateClockMicros(state) == elapsed,
+           "practice menu animation follows its own elapsed clock");
+    for (const int timer : {40, 41, 143, 908, 2}) {
+      expect(bridge.timerProperty({timer}) == kPlayfieldTimestampOff,
+             "setup never starts ready, play, or ending animations");
+    }
+    bridge.discardFrame();
+  }
+}
+
+void testPracticeClockNeverSynthesizesResultFadeout() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  // A presentation clock can cross the range while an attempt is being
+  // prepared or retired. It must not drive the ordinary result state machine.
+  // Litone12's full-screen black overlay is controlled by TIMER_FADEOUT (2).
+  std::uint64_t serial = 0;
+  for (const bool menuActive : {false, false, true}) {
+    auto state = stateAt(++serial);
+    state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+    state.authority.practiceMenuActive = menuActive;
+    state.clock.gameplayTimeMicros = 40'000'000 + serial * 1'000'000;
+    state.clock.visualTimeMicros = state.clock.gameplayTimeMicros;
+    state.clock.playTimer = practiceSkinPlayTimer(
+        state.clock.gameplayTimeMicros, 0, 30'000'000, menuActive);
+    bridge.beginFrame(state, projectionAt(serial));
+    expect(bridge.integerProperty({164}).supported &&
+               bridge.floatProperty({6}).supported,
+           "practice time displays remain available beyond the range");
+    for (const int timer : {143, 908, 2}) {
+      expect(bridge.timerProperty({timer}) == kPlayfieldTimestampOff,
+             "practice clocks never synthesize normal-play end or fadeout timers");
+    }
+    bridge.discardFrame();
+  }
 }
 
 void testSettingsPreviewSuppliesGameplayTimeProperties() {
@@ -4461,6 +4847,11 @@ int main() {
   testFramePropertiesUseAuthoritativeGaugeAndTimerRules();
   testGameplayModeAndLoadingBooleanProperties();
   testExistingGameplayStatePropertyWiring();
+  testPracticeBpmUsesScaledModelOutsideMenu();
+  testPracticeStaticNotesRetainOriginalSongData();
+  testPracticeHasNoRivalScoreData();
+  testPracticeMenuRestoresNeutralMotionTimers();
+  testPracticeMenuLoadingBooleansUsePlayerState();
   testPracticeMenuSelectorsAndEventsRequireCapturedMenuState();
   testLiftHiddenOffsetsFollowPinnedLaneRenderer();
   testRemainingDirectGameplayStatePropertyWiring();
@@ -4485,6 +4876,7 @@ int main() {
   testRuntimeFpsAndUptimePropertiesUseCapturedApplicationAuthority();
   testStartInputTimerUsesPinnedSkinTiming();
   testFailureTimerUsesCapturedSurvivalFailureEvent();
+  testPracticeRhythmTimerUsesSourceFrequencyFactor();
   testRhythmTimerUsesPinnedSectionAndBpmAccumulator();
   testFavoriteChartImageIndexUsesCapturedRepositoryState();
   testSongReviewImageIndexesUsePinnedBitmaskStates();
@@ -4495,6 +4887,10 @@ int main() {
   testIrTargetsUseCompleteRankingAndPinnedSelection();
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
+  testPracticeSuppliesGameplayTimeProperties();
+  testPracticePlaybackUsesWallTimeForSkinAnimations();
+  testPracticeMenuUsesItsOwnAnimationClock();
+  testPracticeClockNeverSynthesizesResultFadeout();
   testSettingsPreviewSuppliesGameplayTimeProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();

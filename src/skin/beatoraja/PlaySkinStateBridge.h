@@ -270,6 +270,7 @@ private:
   std::int64_t musicEndTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t fadeoutTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t fullComboTimerStartMicros_ = kPlayfieldTimestampOff;
+  bool practicePlayTimerWasActive_ = false;
   std::int64_t rhythmTimerStartMicros_ = kPlayfieldTimestampOff;
   std::int64_t rhythmAccumulatorMicros_ = 0;
   std::optional<std::int64_t> rhythmPreviousClockMicros_;

@@ -83,6 +83,7 @@ RealtimeGameplayWorker::RealtimeGameplayWorker(
         simulationConfig.trackQuickRetry = config_.publishQuickRetryProjection;
         return simulationConfig;
       }()) {
+  completionTracker_.reset(definition_.metadata().totalNotes);
   std::size_t laneStorageSize = 0;
   for (const auto &lane : definition_.lanes()) {
     if (lane.lane >= 0) {
@@ -226,9 +227,19 @@ bool RealtimeGameplayWorker::running() const noexcept {
          !stopRequested_.load(std::memory_order_acquire);
 }
 
+bool RealtimeGameplayWorker::completeChartWhileSuspended(std::int64_t songTimeMicros) {
+  if (!suspended_.load(std::memory_order_acquire) || !running() ||
+      fault() != RealtimeGameplayFault::None ||
+      (simulation_.terminal() && simulation_.terminalReason() !=
+                                   GameplayTerminalReason::ChartComplete)) return false;
+  simulation_.completeChart(songTimeMicros);
+  publishSnapshot();
+  return true;
+}
+
 std::vector<GameplayReplayEvent>
-RealtimeGameplayWorker::copyReplayEventsAfterStop() const {
-  if (running()) {
+RealtimeGameplayWorker::copyReplayEventsWhileQuiescent() const {
+  if (running() && !suspended_.load(std::memory_order_acquire)) {
     return {};
   }
   const auto events = simulation_.replayEvents();
@@ -236,24 +247,24 @@ RealtimeGameplayWorker::copyReplayEventsAfterStop() const {
 }
 
 std::optional<std::vector<replay::InputTransition>>
-RealtimeGameplayWorker::copyAcceptedReplayInputAfterStop() const {
-  if (running() || !replayCaptureValid_) {
+RealtimeGameplayWorker::copyAcceptedReplayInputWhileQuiescent() const {
+  if ((running() && !suspended_.load(std::memory_order_acquire)) || !replayCaptureValid_) {
     return std::nullopt;
   }
   return acceptedReplayInput_;
 }
 
 std::vector<float>
-RealtimeGameplayWorker::copyGaugeHistoryAfterStop() const {
-  if (running()) {
+RealtimeGameplayWorker::copyGaugeHistoryWhileQuiescent() const {
+  if (running() && !suspended_.load(std::memory_order_acquire)) {
     return {};
   }
   return simulation_.scoreState().gaugeHistory;
 }
 
 GaugeHistoryCollection
-RealtimeGameplayWorker::copyGaugeHistoriesAfterStop() const {
-  if (running()) {
+RealtimeGameplayWorker::copyGaugeHistoriesWhileQuiescent() const {
+  if (running() && !suspended_.load(std::memory_order_acquire)) {
     return {};
   }
   return simulation_.scoreState().gaugeHistories;
@@ -373,6 +384,7 @@ bool RealtimeGameplayWorker::processQueuedInputs() {
 }
 
 void RealtimeGameplayWorker::processInputBatch(std::span<const QueuedInput> inputs) {
+  const bool completed = simulation_.terminalReason() == GameplayTerminalReason::ChartComplete;
   gameplayInputWork_.clear();
   replayInputWork_.clear();
   inputAdmissions_.clear();
@@ -488,7 +500,8 @@ void RealtimeGameplayWorker::processInputBatch(std::span<const QueuedInput> inpu
     if (!preparation) {
       accepted = commitAutomaticTransactions(
           simulation_.beginInputUpdate(sampledInputStates_, context).transactions) &&
-          !simulation_.terminal();
+          (!simulation_.terminal() || simulation_.terminalReason() ==
+              GameplayTerminalReason::ChartComplete);
     }
     for (const auto &work : gameplayInputWork_) {
       if (!accepted || fault() != RealtimeGameplayFault::None) break;
@@ -504,7 +517,7 @@ void RealtimeGameplayWorker::processInputBatch(std::span<const QueuedInput> inpu
   }
   for (const auto &work : replayInputWork_) {
     const auto &admission = inputAdmissions_[work.owner];
-    if (admission.accepted && admission.remaining == 0) {
+    if (!completed && admission.accepted && admission.remaining == 0) {
       recordAcceptedReplayInput(work.input, work.songTimeMicros);
     }
   }
@@ -512,6 +525,10 @@ void RealtimeGameplayWorker::processInputBatch(std::span<const QueuedInput> inpu
 
 void RealtimeGameplayWorker::processInput(
     const RealtimeGameplayInput &input) {
+  const bool completed = simulation_.terminalReason() == GameplayTerminalReason::ChartComplete;
+  const auto recordInput = [&](const RealtimeGameplayInput &accepted, std::int64_t time) {
+    if (!completed) recordAcceptedReplayInput(accepted, time);
+  };
   if (input.epoch != config_.epoch || config_.clock.mapSteadyToSong == nullptr) {
     return;
   }
@@ -532,15 +549,15 @@ void RealtimeGameplayWorker::processInput(
     command.lane = -1;
     command.compensateLane = -1;
     command.replayOnly = false;
-    recordAcceptedReplayInput(command, *songTime);
+    recordInput(command, *songTime);
     return;
   }
 
   if (input.source == RealtimeGameplayInputSource::Independent) {
     if (input.replayOnly) {
-      recordAcceptedReplayInput(input, *songTime);
+      recordInput(input, *songTime);
     } else if (processGameplayInput(input, *songTime)) {
-      recordAcceptedReplayInput(input, *songTime);
+      recordInput(input, *songTime);
     }
     return;
   }
@@ -558,7 +575,7 @@ void RealtimeGameplayWorker::processInput(
     return;
   }
   for (std::size_t index = 0; index < decision.replayCount; ++index) {
-    recordAcceptedReplayInput(decision.replay[index], *songTime);
+    recordInput(decision.replay[index], *songTime);
   }
 }
 
@@ -708,7 +725,8 @@ bool RealtimeGameplayWorker::processGameplayInput(
     if (!commitAutomaticTransactions(advanced.transactions)) {
       return false;
     }
-    if (simulation_.terminal()) {
+    if (simulation_.terminal() && simulation_.terminalReason() !=
+                                      GameplayTerminalReason::ChartComplete) {
       return false;
     }
   }
@@ -953,6 +971,21 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
 
 void RealtimeGameplayWorker::recordTransaction(
     const GameplayInputResult &result) noexcept {
+  if (result.hasJudge && result.hasReplayEvent) {
+    completionTracker_.observe(result.judge.judgement, result.replayEvent.combo,
+        result.replayEvent.songTimeMicros,
+        simulation_.scoreState().gaugeRules().ruleset == GameplayRuleset::Beatoraja);
+  }
+  if (result.hasReplayEvent) {
+    const auto &event = result.replayEvent;
+    const bool pms = simulation_.scoreState().gaugeRules().ruleset == GameplayRuleset::Beatoraja &&
+        (definition_.metadata().keyMode == 9 || definition_.metadata().keyMode == 18);
+    const bool resolves = result.hasJudge && result.judge.isNotePlayed() &&
+        !(pms && event.judgement == Bad && event.action == GameplayReplayAction::Press);
+    if (resolves || (event.judgement == None && event.action == GameplayReplayAction::Miss))
+      ++completionPassedNotes_;
+    completionTracker_.observeResolvedNotes(completionPassedNotes_, event.songTimeMicros);
+  }
   latestTransaction_ = result;
   ++transactionSequence_;
   transactionHistory_[(transactionSequence_ - 1) %
@@ -1000,6 +1033,7 @@ void RealtimeGameplayWorker::publishSnapshot() {
       snapshot.longNoteHoldingByLane[lane] = holdingCounts[lane] != 0;
     }
     snapshot.attempt = simulation_.snapshot();
+    snapshot.completionCelebration = completionTracker_.state();
     if (config_.publishQuickRetryProjection)
       snapshot.quickRetryProjection = simulation_.quickRetryProjection();
     const auto &graph = simulation_.skinGameplayGraphState();

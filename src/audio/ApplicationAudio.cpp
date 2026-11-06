@@ -42,8 +42,8 @@ bool ApplicationAudio::restore(const RuntimeState &previous, std::string &error)
 }
 void ApplicationAudio::setVolumes(const Volumes &volumes) {
   gameplay_.setVolumes(volumes);
-  // System sounds retain their per-source gain contract (including Lua's
-  // system-volume multiplier), so master must not be multiplied twice here.
+  // Legacy System voices retain their complete source gain (including Lua's
+  // multiplier). SFX buses apply master and category volume in the mixer.
   system_.setVolumes(volumes);
 }
 void ApplicationAudio::setMonoAudio(bool enabled) {

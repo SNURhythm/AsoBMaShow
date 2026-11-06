@@ -2825,6 +2825,105 @@ void verifyKeybombPreview(const RenderTarget &target) {
   }
 }
 
+void verifyCompletionCelebration(const RenderTarget &target) {
+  using completion_celebration::Achievement;
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  const auto model = buildPlayfieldChartVisualModel(*fixture.chart, 0);
+  PlayfieldVisualStateStore store(model);
+  store.setConfiguration(presentationConfig(0));
+  store.applyAuthorityUpdate(authorityFor(*fixture.chart, 0));
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 2500, true);
+  PlayfieldProjection projector;
+  rendering::UiBatchRenderer batch;
+  std::uint64_t serial = 0;
+  constexpr long long completionFrameMicros = 9'000'000;
+  const auto render = [&](Achievement achievement, long long age) {
+    bgfx::touch(rendering::clear_view);
+    auto state = store.capture({.serial = ++serial, .visualTimeMicros = completionFrameMicros});
+    state.completionCelebration = {achievement, completionFrameMicros - age};
+    // Keep the background fixed to compare the actual native celebration only.
+    renderer.configure(state.configuration);
+    const auto projection = projector.project(model, state,
+        {.latePoorTimingMicros = renderer.projectionLatePoorTimingMicros(),
+         .builtInTraversal = renderer.builtInProjectionTraversal()});
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, state, projection);
+    }
+    return readPixels(target);
+  };
+  const auto baseline = render(Achievement::None, 0);
+  const auto fullCombo = render(Achievement::FullCombo, 250'000);
+  const auto perfect = render(Achievement::Perfect, 250'000);
+  const auto finish = render(Achievement::Finish, 400'000);
+  const auto max = render(Achievement::Max, 400'000);
+  expect(max != baseline && max != perfect && max != fullCombo && max != finish,
+         "MAX Focus renders distinct lettering, star, rings, and shard geometry");
+  expect(render(Achievement::Max, 1'500'000) != max &&
+             render(Achievement::Max, -1) == baseline &&
+             render(Achievement::Max, 3'050'000) == baseline,
+         "MAX uses captured time and clears completely after its approved exit");
+  expect(finish != baseline && finish != fullCombo && finish != perfect,
+         "Finish renders its own calm lettering and backdrop");
+  expect(render(Achievement::Finish, 1'900'000) == baseline,
+         "Finish clears completely after its shorter hold and exit");
+  const auto waveStart = render(Achievement::Perfect, 50'000);
+  const auto waveEnd = render(Achievement::Perfect, 650'000);
+  const auto regionDiffers = [&](const auto &pixels, unsigned left, unsigned right) {
+    for (unsigned y = 520; y < 540; ++y)
+      for (unsigned x = left; x < right; ++x)
+        for (unsigned channel = 0; channel < 3; ++channel) {
+          const auto offset = (y * kDrawableWidth + x) * 4 + channel;
+          if (pixels[offset] != baseline[offset]) return true;
+        }
+    return false;
+  };
+  expect(regionDiffers(waveStart, 450, 850) && !regionDiffers(waveEnd, 450, 850),
+         "lane-space wave lights the lower field and clears at 650 ms while the title holds");
+  expect(!regionDiffers(waveStart, 20, 60),
+         "lane-space wave does not spill outside the projected playfield");
+  expect(fullCombo != baseline && perfect != fullCombo,
+         "native Rise renders distinct Full Combo and Perfect celebrations");
+  expect(render(Achievement::Perfect, 650'000) != perfect,
+         "native celebration advances with the captured visual clock");
+  expect(render(Achievement::Perfect, 3'000'000) == baseline &&
+             render(Achievement::FullCombo, -1) == baseline,
+         "native celebration is absent before its event and after its exit");
+  if (const char *directory = std::getenv("ASOBMASHOW_BUILTIN_ARTIFACT_DIR")) {
+    std::filesystem::create_directories(directory);
+    expect(lodepng::encode((std::filesystem::path(directory) / "completion-max.png").string(),
+                           max, kDrawableWidth, kDrawableHeight) == 0,
+           "native MAX inspection image encodes");
+    expect(lodepng::encode((std::filesystem::path(directory) / "completion-finish.png").string(),
+                           finish, kDrawableWidth, kDrawableHeight) == 0,
+           "native Finish inspection image encodes");
+    expect(lodepng::encode((std::filesystem::path(directory) / "completion-full-combo.png").string(),
+                           fullCombo, kDrawableWidth, kDrawableHeight) == 0 &&
+               lodepng::encode((std::filesystem::path(directory) / "completion-perfect.png").string(),
+                           perfect, kDrawableWidth, kDrawableHeight) == 0,
+           "native completion inspection images encode");
+  }
+  // Optional local motion capture; ordinary tests need only the boundary frames.
+  if (const char *directory = std::getenv("ASOBMASHOW_COMPLETION_ANIMATION_DIR")) {
+    for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect, Achievement::Finish, Achievement::Max}) {
+      const auto folder = std::filesystem::path(directory) /
+          (achievement == Achievement::Max ? "max" : achievement == Achievement::Finish ? "finish" : achievement == Achievement::Perfect ? "perfect" : "full-combo");
+      std::filesystem::create_directories(folder);
+      for (int frame = 0; frame < 102; ++frame) {
+        const auto pixels = render(achievement, frame * 1'000'000LL / 30 - 300'000);
+        char name[32];
+        std::snprintf(name, sizeof(name), "%03d.png", frame);
+        expect(lodepng::encode((folder / name).string(), pixels, kDrawableWidth, kDrawableHeight) == 0,
+               "native completion animation frame encodes");
+      }
+    }
+  }
+}
+
 void verifyKeybombRendering(const RenderTarget &target) {
   const auto render = [&](Judgement judgement, keybomb::Style style = {},
                            long long age = 80'000, bool captured = false,
@@ -5138,6 +5237,7 @@ int main() {
       verifyKeybombVertexReuse(target);
       verifyKeybombPreview(target);
       verifyKeybombRendering(target);
+      verifyCompletionCelebration(target);
       verifyJudgementIndicatorContinuousAverage(target);
       verifyCapturedFrameRetainsContinuousAverage(target);
       verifySelectedSkinTimingPointerStaysOnScreen(target);

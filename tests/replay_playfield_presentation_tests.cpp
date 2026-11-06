@@ -1102,7 +1102,7 @@ void testReplayGameplayTransitionIgnoresChartTailAfterLastLaneNote() {
   preparation::Plan plan;
 
   expect(replay_video_export::replayGameplayTransitionDurationMicros(
-             chart, replay, plan, 0) == 17'000'000,
+             chart, replay, plan, 0) == 16'000'000,
          "replay gameplay transition uses last-note state-play and transition "
          "windows rather than the chart tail");
 }
@@ -1745,6 +1745,7 @@ void testSelectedSkinRuntimeFailureDoesNotSubmitBuiltIn() {
 void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
   auto *measure = new bms_parser::Measure;
   chart.Measures.push_back(measure);
   auto *headTimeline = new bms_parser::TimeLine(8, false);
@@ -1772,6 +1773,7 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   if (!created.presentation) {
     return;
   }
+  created.presentation->applyAuthorityUpdate({.completionCelebrationEligible = true});
   const ReplayEvent event{.action = ReplayEventAction::Press,
                           .lane = 1,
                           .noteTimeMicros = 1'000,
@@ -1792,6 +1794,8 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   expect(beforeTail.notes.size() == 2 && beforeTail.notes[0].longActive &&
              beforeTail.notes[1].longActive && !beforeTail.notes[1].judged,
          "classic long-note tail stays held before its authored release time");
+  expect(beforeTail.completionCelebration.achievement == completion_celebration::Achievement::None,
+         "classic LN head does not fire the native completion effect");
   expect(beforeTail.judgementIndicatorSampleCount == 1 &&
              beforeTail.judgementIndicatorSamples[0].judge.Diff == 10 &&
              beforeTail.judgementIndicatorSamples[0].visualTimeMicros == 1'050 &&
@@ -1818,6 +1822,9 @@ void testClassicLongHeadSuppressesJudgeHudAndBgaMissClock() {
   expect(completed.judgementIndicatorSampleCount == 1 && completed.combo == 1 &&
              completed.score == 1,
          "classic LN completion does not duplicate its head timing sample");
+  expect(completed.completionCelebration.achievement == completion_celebration::Achievement::Perfect &&
+             completed.completionCelebration.startMicros == clock.visualTimeMicros,
+         "classic LN final judgement fires Perfect in the replay visual clock domain");
   RenderContext context;
   const auto frame = created.presentation->renderFrame(
       context, {.serial = 1, .visualTimeMicros = 1'050}, {});
@@ -2210,6 +2217,45 @@ void testMultiBadLeavesChargeTailForItsOwnMiss() {
   }
 }
 
+void testFinishReplayWaitsForLongNoteTail() {
+  for (const auto type : {bms_parser::LongNoteType::LongNote,
+                          bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    for (const auto action : {ReplayEventAction::Miss, ReplayEventAction::Release}) {
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = 7;
+      chart.Meta.TotalNotes = type == bms_parser::LongNoteType::LongNote ? 1 : 2;
+      addLongNotePair(chart, type, 1, 1'000, 2'000);
+      AppSettings settings;
+      PlayfieldPresentationConfig configuration;
+      TestBga bga;
+      const auto created = ReplayPlayfieldPresentation::create(
+          createInfo(chart, settings, configuration, bga));
+      if (!created.presentation) { expect(false, "Finish tail replay adapter created"); return; }
+      created.presentation->applyAuthorityUpdate({.completionCelebrationEligible = true});
+      (void)created.presentation->applyReplayEvent(
+          {.action = ReplayEventAction::Press, .lane = 1, .noteTimeMicros = 1'000,
+           .songTimeMicros = 1'000, .judgeTimeMicros = 1'000, .judgement = PGreat},
+          {1'000, 900, 1'000}, true);
+      (void)created.presentation->applyReplayEvent(
+          {.action = action, .lane = 1, .noteTimeMicros = 2'000,
+           .songTimeMicros = 1'500, .judgeTimeMicros = 1'500, .judgement = Bad},
+          {1'500, 1'400, 1'500}, true);
+      const auto before = created.presentation->captureVisualStateForTesting(
+          {.visualTimeMicros = 1'400, .gameplayTimeMicros = 1'500});
+      expect(before.completionCelebration == completion_celebration::State{
+                 completion_celebration::Achievement::Finish, 1'900} &&
+                 before.clock.visualTimeMicros < before.completionCelebration.startMicros,
+             "missed or early-released LN/CN/HCN schedules Finish at its authored tail");
+      const auto after = created.presentation->captureVisualStateForTesting(
+          {.visualTimeMicros = 1'900, .gameplayTimeMicros = 2'000});
+      expect(after.completionCelebration == before.completionCelebration &&
+                 after.score == before.score && after.combo == before.combo,
+             "Finish reaches age zero at the tail without another replay event or score change");
+    }
+  }
+}
+
 void testLongTailMissPreservesExporterEndpointSemantics() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2538,6 +2584,7 @@ void testReplayAdapterMatchesEmptyPoorAndPmsPassedNotes() {
       if (!created.presentation) { expect(false, "PMS replay adapter created"); return; }
       PlayfieldAuthorityUpdate authority;
       authority.gaugeRules.ruleset = ruleset;
+      authority.completionCelebrationEligible = true;
       created.presentation->applyAuthorityUpdate(authority);
       (void)created.presentation->applyReplayEvent(
           {.action = ReplayEventAction::Press, .lane = 2,
@@ -2560,13 +2607,18 @@ void testReplayAdapterMatchesEmptyPoorAndPmsPassedNotes() {
         state = created.presentation->captureVisualStateForTesting({});
         expect(state.authority.stagePassedNotes == 1 && !state.notes.front().judged,
                "PMS BAD preserves its unconsumed visual identity");
+        expect(state.completionCelebration.achievement == completion_celebration::Achievement::None,
+               "nonvanishing BAD must not trigger Finish before the note resolves");
         (void)created.presentation->applyReplayEvent(
             {.action = ReplayEventAction::Miss, .lane = 1,
-             .noteTimeMicros = 1'000, .judgement = None}, {}, true);
+             .noteTimeMicros = 1'000, .judgement = None}, {2'000, 1'950, 2'000}, true);
         created.presentation->applyAuthorityUpdate(authority);
         state = created.presentation->captureVisualStateForTesting({});
         expect(state.authority.stagePassedNotes == 2 && state.notes.front().judged,
                "suppressed PMS miss consumes its identity without another judgment");
+        expect(state.completionCelebration == completion_celebration::State{
+                   completion_celebration::Achievement::Finish, 1'950},
+               "suppressed final miss triggers Finish on the replay visual clock");
       }
     }
   }
@@ -2575,6 +2627,7 @@ void testReplayAdapterMatchesEmptyPoorAndPmsPassedNotes() {
 void testReplayAdapterCarriesStageFullComboAuthority() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
   auto *measure = new bms_parser::Measure;
   chart.Measures.push_back(measure);
   auto *first = new bms_parser::TimeLine(8, false);
@@ -2617,11 +2670,14 @@ void testReplayAdapterCarriesStageFullComboAuthority() {
        .visualTimeMicros = 2'000,
        .bgaTimeMicros = 2'000},
       true);
-  created.presentation->applyAuthorityUpdate({.comboBreak = 0});
+  created.presentation->applyAuthorityUpdate({.comboBreak = 0, .completionCelebrationEligible = true});
   const auto state = created.presentation->captureVisualStateForTesting({});
   expect(state.authority.stagePassedNotes == 2 &&
              state.authority.stageCombo == 2,
          "replay reducer retains stage-local full-combo authority instead of course combo");
+  expect(state.completionCelebration.achievement == completion_celebration::Achievement::Max &&
+             state.completionCelebration.startMicros == 2'000,
+         "stage celebration uses local judgements despite the carried course combo");
 }
 
 void testAutoplayReplayReducerMatchesEffectiveScorableTotal() {
@@ -2660,7 +2716,7 @@ void testAutoplayReplayReducerMatchesEffectiveScorableTotal() {
          .bgaTimeMicros = event.songTimeMicros},
         true);
   }
-  created.presentation->applyAuthorityUpdate({});
+  created.presentation->applyAuthorityUpdate({.completionCelebrationEligible = true});
   const auto state = created.presentation->captureVisualStateForTesting({});
   expect(expected == 5 && chart.Meta.TotalNotes == expected &&
              state.authority.stagePassedNotes == expected &&
@@ -2668,6 +2724,9 @@ void testAutoplayReplayReducerMatchesEffectiveScorableTotal() {
              state.score == expected * 2,
          "autoplay export reduces normal, CN, and HCN endpoints to the same "
          "Beatoraja scorable total as the selected skin");
+  expect(state.completionCelebration.achievement == completion_celebration::Achievement::Max &&
+             state.completionCelebration.startMicros == 5'000,
+         "autoplay CN/HCN completion waits for the last tail judgement");
 }
 
 void testReplayExportPreparesSavedLongNoteScoreMetadata() {
@@ -2820,6 +2879,7 @@ int main() {
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
   testMultiBadLeavesChargeTailForItsOwnMiss();
   testLongTailMissPreservesExporterEndpointSemantics();
+  testFinishReplayWaitsForLongNoteTail();
   testChargeLongReleaseClearsBothEndpointsWithoutReactivation();
   testHcnBodyInputReprojectsBothEndpointStates();
   testMissedHcnHeadRecoversFromRecordedLanePress();

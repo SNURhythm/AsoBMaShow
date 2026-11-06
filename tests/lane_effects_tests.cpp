@@ -1,6 +1,9 @@
 #include "../src/scene/play/LaneEffects.h"
 #include "graph_allocation_guard.h"
 #include "../src/scene/play/KeybombEffect.h"
+#include "../src/scene/play/CompletionWaveEffect.h"
+#include "../src/scene/play/CompletionCelebrationEffect.h"
+#include "../src/scene/play/CompletionCelebrationSound.h"
 #include <cmath>
 #undef NDEBUG
 #include <cassert>
@@ -126,7 +129,118 @@ void testHoldGeometry() {
   assert((burst.firstColor & 0xFFFFFFU) == 0xA03FE8);
 }
 
+void testMaxFocusGeometry() {
+  struct TitleGeometry {
+    int vertices = 0;
+    void point(float x, float y) {
+      assert(std::isfinite(x) && std::isfinite(y));
+      assert(std::abs(x) <= 500 && std::abs(y) <= 260);
+    }
+    void addTriangle(float x, float y, float a, float b, float c, float d, unsigned) {
+      vertices += 3; point(x, y); point(a, b); point(c, d);
+    }
+    void addTriangleColors(float x, float y, float a, float b, float c, float d,
+                           unsigned color, unsigned, unsigned) {
+      addTriangle(x, y, a, b, c, d, color);
+    }
+    void addLine(float x, float y, float a, float b, float width, unsigned) {
+      vertices += 4; point(x, y); point(a, b);
+      assert(std::isfinite(width) && width > 0);
+    }
+  };
+  using namespace completion_celebration;
+  graph_test::AllocationGuard guard;
+  graph_test::remainingAllocationBytes = 0;
+  for (const float age : {-.01F, .1F, .16F, .4F, .8F, 1.5F, 2.9F, 3.05F}) {
+    TitleGeometry geometry;
+    draw(geometry, age, Achievement::Max, 0, 0, 1);
+    assert(geometry.vertices <= 2192);
+    assert((geometry.vertices > 0) == (age >= 0 && age < 3.05F));
+    const auto glyph = letter(age, Achievement::Max, 1);
+    assert(glyph.alpha >= 0 && glyph.alpha <= 1 && glyph.scale >= 1 && glyph.scale <= 1.24F);
+  }
+  assert(word(Achievement::Max) == "MAX" && fontSize(Achievement::Max) == 140);
+  assert(letter(.13F, Achievement::Max, 0).alpha == 0);
+  assert(letter(.5F, Achievement::Max, 0).alpha == 1);
+  assert(letter(3.05F, Achievement::Max, 0).alpha == 0);
+}
+
+void testCompletionWave() {
+  struct WaveGeometry {
+    int count = 0;
+    unsigned maxAlpha = 0;
+    double weightedY = 0, weight = 0;
+    void addRectVerticalGradient(float x, float y, float width, float height,
+                                 unsigned low, unsigned high) {
+      assert(x == -4 && width == 8);
+      assert(std::isfinite(y) && std::isfinite(height));
+      assert(y >= 2 && y + height <= 12.00001F && height > 0);
+      ++count;
+      maxAlpha = std::max(maxAlpha, std::max(low >> 24, high >> 24));
+      const double mass = ((low >> 24) + (high >> 24)) * height;
+      weightedY += (y + height * .5F) * mass;
+      weight += mass;
+    }
+  };
+  using namespace completion_celebration;
+  graph_test::AllocationGuard guard;
+  graph_test::remainingAllocationBytes = 0;
+  WaveGeometry finishEarly, finishLate, finishExpired;
+  wave::draw(finishEarly, Achievement::Finish, .2F, -4, 8, 2, 12);
+  wave::draw(finishLate, Achievement::Finish, .5F, -4, 8, 2, 12);
+  wave::draw(finishExpired, Achievement::Finish, .8F, -4, 8, 2, 12);
+  assert(finishEarly.count == 1 && finishLate.count == 1 && finishExpired.count == 0);
+  assert(finishEarly.maxAlpha <= 41 && finishLate.maxAlpha < finishEarly.maxAlpha);
+  assert(std::abs(finishEarly.weightedY / finishEarly.weight -
+                  finishLate.weightedY / finishLate.weight) < .0001);
+  WaveGeometry maxBefore, maxEarly, maxLate, maxExpired;
+  wave::draw(maxBefore, Achievement::Max, .13F, -4, 8, 2, 12);
+  wave::draw(maxEarly, Achievement::Max, .22F, -4, 8, 2, 12);
+  wave::draw(maxLate, Achievement::Max, .45F, -4, 8, 2, 12);
+  wave::draw(maxExpired, Achievement::Max, .95F, -4, 8, 2, 12);
+  assert(maxBefore.count == 0 && maxExpired.count == 0);
+  assert(maxEarly.count > 0 && maxEarly.count <= 24 && maxLate.count <= 24);
+  assert(maxLate.weight > 0 && maxLate.weightedY / maxLate.weight > maxEarly.weightedY / maxEarly.weight);
+  for (const auto achievement : {Achievement::FullCombo, Achievement::Perfect}) {
+    WaveGeometry early, late, before, expired;
+    wave::draw(early, achievement, .08F, -4, 8, 2, 12);
+    wave::draw(late, achievement, .3F, -4, 8, 2, 12);
+    wave::draw(before, achievement, -.01F, -4, 8, 2, 12);
+    wave::draw(expired, achievement, achievement == Achievement::Perfect ? .65F : .55F,
+               -4, 8, 2, 12);
+    assert(early.count > 0 && early.count <= 24 && late.count <= 24);
+    assert(early.maxAlpha > 160 && late.weight > 0);
+    assert(late.weightedY / late.weight > early.weightedY / early.weight);
+    assert(before.count == 0 && expired.count == 0);
+  }
+}
+
+void testCompletionSoundTrigger() {
+  using namespace completion_celebration;
+  SoundTrigger trigger;
+  const State max{Achievement::Max, 1'000'000};
+  assert(!trigger.poll({}, 0, true));
+  assert(!trigger.poll(max, 999'999, true));
+  assert(trigger.poll(max, 1'000'000, true) == 2);
+  assert(!trigger.poll(max, 1'100'000, true));
+  trigger.reset();
+  assert(trigger.poll({Achievement::Perfect, 0}, 0, true) == 1);
+  trigger.reset();
+  assert(trigger.poll({Achievement::FullCombo, 0}, 0, true) == 0);
+  trigger.reset();
+  assert(!trigger.poll({Achievement::Finish, 0}, 0, true));
+  trigger.reset();
+  assert(!trigger.poll(max, 1'000'000, false));
+  assert(!trigger.poll(max, 1'100'000, true));
+  trigger.reset();
+  assert(!trigger.poll(max, 4'000'000, true));
+  assert(!trigger.poll(max, 1'000'000, true));
+}
+
 int main() {
+  testCompletionSoundTrigger();
+  testCompletionWave();
+  testMaxFocusGeometry();
   testInvisibleTailsSubmitNothing();
   testPoorHasNoKeybomb();
   testDefaultHitsStayClearlyVisible();

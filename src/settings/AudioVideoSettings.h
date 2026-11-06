@@ -17,6 +17,8 @@ struct AudioSettings {
   float masterVolume = 1.0f;
   float bgmVolume = 1.0f;
   float keysoundVolume = 1.0f;
+  float menuSfxVolume = 1.0f;
+  float gameplaySfxVolume = 1.0f;
   bool monoAudio = false;
   bool operator==(const AudioSettings &) const = default;
 };

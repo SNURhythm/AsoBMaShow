@@ -4,6 +4,7 @@
 
 #pragma once
 #include "QuickRetry.h"
+#include "CompletionCelebrationSound.h"
 #include "../../CoursePlaySession.h"
 #include "../../PreparationPlan.h"
 #include "../../ReplayData.h"
@@ -21,6 +22,7 @@
 #include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
 #include "VirtualControllerLayout.h"
+#include "PracticeMenuTouchInput.h"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "StartSelectControl.h"
 #include "GuidedAccessReminder.h"
@@ -33,6 +35,7 @@
 #include "../../input/InputTypes.h"
 #include "../../input/VirtualControllerConfig.h"
 #include "../../practice/PracticeResultFlow.h"
+#include "../../practice/PracticeConfiguration.h"
 #include "../../replay/ChartReplayCapture.h"
 #include "../../replay/ReplayInputRecorder.h"
 #include "../../skin/SkinPresentationTypes.h"
@@ -129,6 +132,11 @@ private:
   void playGuidedAccessChime();
   void stopGuidedAccessChime(bool release = false);
   std::optional<audio::SkinSoundHandle> guidedAccessChime;
+  void prepareCompletionSounds();
+  void stopCompletionSounds(bool release = false);
+  void playCompletionSound(bool builtInPresented);
+  std::array<std::optional<audio::SkinSoundHandle>, 3> completionSounds;
+  completion_celebration::SoundTrigger completionSoundTrigger;
   gameplay::GuidedAccessReminder guidedAccessReminder;
   bool guidedAccessReminderPending = false;
   bool guidedAccessReminderExiting = false;
@@ -146,6 +154,8 @@ private:
   TextView *guidedAccessButtonCheck = nullptr;
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
+  bool retainRealtimeCompletionFeedback(long long gameplayTimeMicros);
+  void transferRealtimeGameplayResult(bool transferReplay);
   void setRealtimeGameplayIngressEnabled(bool enabled);
   void drainRealtimeTouchSamples(
       std::optional<long long> cancelPresentationAtSteadyMicros =
@@ -155,6 +165,14 @@ private:
   void drainRealtimeStartSelectInputs();
   void refreshRealtimeTouchLayout();
   void refreshLegacyTouchLayout();
+  void refreshPracticeMenuInput();
+  void clearPracticeMenuInput();
+  bool handlePracticeMenuTouch(SDL_FingerID finger, ReplayTouchAction action,
+                                Vector3 normalizedLocation);
+  void createPracticeMenuControls();
+  void updatePracticeMenuControls();
+  gameplay::RealtimeTouchHitSnapshot makeGameplayTouchHitSnapshot(
+      const gameplay::RealtimeTouchLayoutRefreshKey &key);
   void refreshGameplayPresentationGeometry();
   void updateSkinResetLayoutVisibility();
   void acquireGameplaySkinForAttempt();
@@ -219,6 +237,10 @@ private:
   void completePracticeSection(bool realtimeRangeFinalized);
   void finalizePracticeRangeMisses();
   void scheduleResultTransition(std::uint64_t delayMillis);
+  [[nodiscard]] bool canSkipResultDelay() const;
+  void skipResultDelay();
+  void updatePauseButtonAction();
+  bool runResultTransition();
   [[nodiscard]] std::uint64_t
   selectedSkinResultTransitionDelayMillis(long long gameplayTimeMicros) const;
   void updatePracticeHud(long long chartTimeMicros);
@@ -286,6 +308,8 @@ private:
   View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;
   Button *practiceRestartButton = nullptr;
+  View *practiceMenuControls = nullptr;
+  TextView *practiceMenuSelectionText = nullptr;
   Button *skinResetLayoutButton = nullptr;
   TextView *practiceHudText = nullptr;
   bool coursePauseHoldActive = false;
@@ -415,10 +439,20 @@ private:
   size_t replayLaneCoverCursor = 0;
   bool playbackInitializationFailed = false;
   bool practiceMenuActive = false;
-  long long practiceMenuStartPressedMicros = 0;
+  std::optional<int> originalPracticeTotalNotes;
+  practice::SkinMenuInputController practiceMenuInput;
+  bool practiceMenuStartRequested = false;
+  long long practiceMenuStartBlockedUntilMicros = 0;
+  long long practiceMenuPresentationStartMicros = 0;
+  std::unique_ptr<gameplay::PracticeMenuTouchInput> practiceMenuTouchInput;
+  std::optional<gameplay::RealtimeTouchLayoutRefreshKey> practiceMenuTouchLayoutKey;
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
+  bool resultDelaySkipRequested = false;
+  bool naturalResultDelay = false;
+  bool pauseButtonShowsSkip = false;
+  std::function<bool()> pendingResultTransition;
   bool resultPersistenceAttemptCreationTried = false;
   std::optional<gameplay::StartSelectControl> startSelectControl;
   std::optional<gameplay_hispeed::State> playfieldHispeedState;

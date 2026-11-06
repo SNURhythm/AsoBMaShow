@@ -1,0 +1,28 @@
+{
+  "earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",
+  "source_revision": "earshot-max-high-finish",
+  "external_audio_inputs": [],
+  "sounds": {
+    "full-combo": {
+      "sha256": "58e63c16275b788ed67d245a402945b6e716156cc770f4461d754254681d7710",
+      "seconds": 1.35,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 24
+    },
+    "perfect": {
+      "sha256": "f721aeee0754b35d6b4bee1c39e5d918cd7d9c5e292a6d7d0b54198dcb9f9033",
+      "seconds": 1.65,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 24
+    },
+    "max": {
+      "sha256": "fe42df45a6ef054285630e2ce8ac0b81c78e3c9aa4ba20d378ad39dcd5821ea9",
+      "seconds": 1.95,
+      "sample_rate": 48000,
+      "channels": 2,
+      "bits": 24
+    }
+  }
+}

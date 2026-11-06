@@ -23,6 +23,7 @@ public:
   [[nodiscard]] std::size_t abandonedAttemptCount() const;
   [[nodiscard]] const Configuration &configuration() const;
   void configureSkinMenu(SkinMenuInputs);
+  void setSkinMenuInputModifiers(bool horizontal, bool turbo) noexcept;
   [[nodiscard]] std::optional<SkinMenuAttemptPlan>
   skinMenuAttemptPlan() const noexcept;
   [[nodiscard]] std::optional<SkinMenuAttemptPlan> beginSkinMenuAttempt();
@@ -32,6 +33,10 @@ public:
   void setSkinVisibleItemCount(int count) noexcept;
   [[nodiscard]] bool changeSkinMenuVisibleItem(std::size_t index,
                                                bool increment);
+  void moveSkinMenuSelection(bool forward);
+  [[nodiscard]] bool changeSkinMenuSelection(bool increment,
+                                             bool analog = false,
+                                             bool turbo = false);
   [[nodiscard]] SkinMenuState skinMenuState() const;
   [[nodiscard]] SkinMenuState
   skinMenuState(const SkinMenuInputs &inputs) const;

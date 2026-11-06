@@ -586,7 +586,9 @@ void mixAudio(Sample *pOutput, ma_uint32 frameCount, int outputChannels,
             : 1.0f;
     audio::playback::MixActiveSounds(
         state, std::span<float>(mixBuffer, requiredSamples), chunkFrames,
-        outputChannels, bgmGain, keysoundGain, playbackRatePercent, mixScope);
+        outputChannels, bgmGain, keysoundGain, playbackRatePercent, mixScope,
+        userData->menuSfxGain ? userData->menuSfxGain->load(std::memory_order_acquire) : 1.0F,
+        userData->gameplaySfxGain ? userData->gameplaySfxGain->load(std::memory_order_acquire) : 1.0F);
 
     // Apply Effects
     if (userData->bassFilter) {
@@ -715,6 +717,8 @@ void AudioWrapper::initializeUserData() {
   userData.playbackRatePercent = &playbackRatePercent;
   userData.bgmGain = &bgmGain;
   userData.keysoundGain = &keysoundGain;
+  userData.menuSfxGain = &menuSfxGain;
+  userData.gameplaySfxGain = &gameplaySfxGain;
   userData.monoAudio = &monoAudio;
   userData.stopwatch = stopwatch;
   userData.mixBuffer = &mixBuffer;
@@ -1487,7 +1491,7 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
 }
 
 bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
-                                 bool loop) noexcept {
+                                 bool loop, audio::Bus bus) noexcept {
   try {
     std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
     std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
@@ -1506,7 +1510,7 @@ bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
         callbackState,
         {.type = AudioCommandType::PlayNow,
          .soundData = found->second.soundData.get(),
-         .bus = audio::Bus::System,
+         .bus = bus,
          .gain = gain,
          .loop = loop},
         &submissionSequence);
@@ -2374,6 +2378,10 @@ void AudioWrapper::setVolumes(const audio::Volumes &volumes) {
                 std::memory_order_release);
   keysoundGain.store(audio::EffectiveGain(audio::Bus::Keysound, volumes),
                      std::memory_order_release);
+  menuSfxGain.store(audio::EffectiveGain(audio::Bus::MenuSfx, volumes),
+                    std::memory_order_release);
+  gameplaySfxGain.store(audio::EffectiveGain(audio::Bus::GameplaySfx, volumes),
+                        std::memory_order_release);
 }
 
 void AudioWrapper::setVolumes(const player_settings::AudioSettings &settings) {

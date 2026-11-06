@@ -17,6 +17,8 @@
 #include "GamePlayStartup.h"
 #include "GuidedAccessButtonCue.h"
 #include "GamePlayTiming.h"
+#include "GameplaySkinPracticeClock.h"
+#include "GameplaySkinPracticeSongInformation.h"
 #include "JudgementTimingSample.h"
 #include "PracticeNoteFinalizer.h"
 #include "../../ChartPlaybackDuration.h"
@@ -111,6 +113,7 @@ constexpr uint32_t kIconBack = 0xf060;
 constexpr uint32_t kIconLockOpen = 0xf3c1;
 constexpr uint32_t kIconLock = 0xf023;
 constexpr uint32_t kIconPause = 0xf04c;
+constexpr uint32_t kIconSkip = 0xf051;
 constexpr uint32_t kIconRestart = 0xf2f9;
 constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
 constexpr float kReplayTouchMoveMinDistance = 0.002f;
@@ -427,7 +430,8 @@ std::int32_t javaIntAdd(std::int32_t left, std::int32_t right) noexcept {
 
 std::optional<std::int32_t>
 beatorajaPlaytimeMillis(const bms_parser::Chart *chart,
-                        const StartOptions &options) noexcept {
+                        const StartOptions &options,
+                        long long lastEventMicros) noexcept {
   if (chart == nullptr) {
     return std::nullopt;
   }
@@ -443,7 +447,8 @@ beatorajaPlaytimeMillis(const bms_parser::Chart *chart,
   }
   const long long terminalMicros =
       gameplay::terminalMicrosForGameplayMode(chart->Meta.PlayLength,
-                                              chart->Meta.TotalLength);
+                                              lastEventMicros,
+                                              options.autoPlay && options.replayData == nullptr);
   return javaIntAdd(javaLongToInt(terminalMicros / 1'000),
                     kBeatorajaPlaytimeMarginMillis);
 }
@@ -472,16 +477,17 @@ std::string formatPracticeTime(long long micros) {
 }
 
 std::pair<bool, bool> practiceLegacyInputState(
-    const std::unordered_map<int, bool> &lanePressed, int keyMode) {
+    const std::unordered_map<int, bool> &lanePressed, int keyMode,
+    bool popnFiveKeys) {
   const auto pressed = [&lanePressed](int index) {
     const auto found = lanePressed.find(index);
     return found != lanePressed.end() && found->second;
   };
-  if (keyMode == 9) {
+  if (keyMode == 9 && !popnFiveKeys) {
     return {false, pressed(4)};
   }
   const bool baseTurbo = pressed(3);
-  const bool turbo = baseTurbo || (keyMode == 14 && pressed(12)) ||
+  const bool turbo = baseTurbo || (keyMode == 14 && pressed(11)) ||
                      ((keyMode == 24 || keyMode == 48) && pressed(8));
   return {pressed(1) || baseTurbo, turbo};
 }
@@ -522,7 +528,7 @@ bool isInsideButton(const Button &button, float uiX, float uiY) {
 }
 
 gameplay::RealtimeTouchNativeOverlayRegion
-realtimeTouchOverlayRegion(const Button *button) noexcept {
+realtimeTouchOverlayRegion(const View *button) noexcept {
   if (button == nullptr || !button->getVisible() || button->getWidth() <= 0 ||
       button->getHeight() <= 0) {
     return {};
@@ -1136,6 +1142,7 @@ struct GamePlayScene::RealtimeGameplaySession {
   gameplay::RealtimeTouchHitCaptureTracker rawHitCaptures;
   std::atomic<std::uint64_t> requestedHitCaptureReset{0};
   std::uint64_t appliedRawHitCaptureReset = 0;
+  bool resultTransferred = false;
   std::uint64_t appliedSnapshotGeneration = 0;
   std::uint64_t appliedNoteRevision = 0;
   std::uint64_t appliedGraphJudgementRevision = 0;
@@ -1994,10 +2001,10 @@ bool GamePlayScene::enterPracticeMenu() {
        .doublePlay = options.doublePlayFlip ? 1 : 0,
        .horizontalInputMode =
            practiceLegacyInputState(lanePressed,
-                                    playfieldChartVisualModel.keyCount)
+                                    playfieldChartVisualModel.keyCount, chart->Meta.IsPopnFiveKey())
                .first,
        .inputTurbo = practiceLegacyInputState(
-                         lanePressed, playfieldChartVisualModel.keyCount)
+                         lanePressed, playfieldChartVisualModel.keyCount, chart->Meta.IsPopnFiveKey())
                          .second});
   ownedState = std::make_unique<RhythmState>(chart, false,
                                              rulesetPolicyBuild.policy->gauge);
@@ -2005,12 +2012,17 @@ bool GamePlayScene::enterPracticeMenu() {
   state->configureGauge(options.gaugeType, options.gaugeAutoShift,
                         options.gaugeProfile, options.gaugeAutoShiftLowerBound);
   state->isPlaying = false;
+  practiceMenuActive = true;
+  practiceMenuStartRequested = false;
+  practiceMenuPresentationStartMicros = nowMicros();
+  practiceMenuStartBlockedUntilMicros = practiceMenuPresentationStartMicros + 1'000'000;
   capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
   acquireGameplaySkinForAttempt();
   if (presentation == nullptr) {
     return false;
   }
   if (presentation->activeMode() != PresentationMode::Skin) {
+    practiceMenuActive = false;
     if (retainedSkinMenuAttempt) {
       const auto attempt = options.practiceSession->beginSkinMenuAttempt();
       return attempt.has_value() &&
@@ -2045,7 +2057,14 @@ bool GamePlayScene::enterPracticeMenu() {
     return true;
   }
   practiceMenuActive = true;
-  practiceMenuStartPressedMicros = 0;
+  if (const auto timing = presentation->selectedSkinGameplayTiming()) {
+    const long long loadMillis = static_cast<long long>(timing->loadStartMillis) +
+                                 timing->loadEndMillis;
+    practiceMenuStartBlockedUntilMicros = std::max(
+        practiceMenuStartBlockedUntilMicros,
+        practiceMenuPresentationStartMicros + loadMillis * 1'000LL);
+  }
+  practiceMenuStartRequested = false;
   return true;
 }
 
@@ -2054,16 +2073,37 @@ void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
     return;
   }
   const auto lanes = chart->Meta.GetTotalLaneIndices();
-  if (lanes.empty() || lane != lanes.front()) {
+  if (std::ranges::find(lanes, lane) == lanes.end()) return;
+  if (pressed && ((pauseLayout && pauseLayout->getVisible()) ||
+                  context.appInBackground.load(std::memory_order_acquire))) return;
+  lanePressed[lane] = pressed;
+  practiceMenuInput.setLanePressed(chart->Meta.KeyMode, lane, pressed);
+  if (options.practiceSession) {
+    const auto [horizontal, turbo] = practiceLegacyInputState(lanePressed, chart->Meta.KeyMode, chart->Meta.IsPopnFiveKey());
+    options.practiceSession->setSkinMenuInputModifiers(horizontal, turbo);
+  }
+  const auto keys = chart->Meta.GetKeyLaneIndices();
+  if (keys.empty() || lane != keys.front()) {
     return;
   }
-  practiceMenuStartPressedMicros = pressed ? nowMicros() : 0;
+  // Retain a valid press until update() even if a quick touch Up is drained
+  // in the same batch. Beatoraja's one-second guard belongs to Start/Select,
+  // not to the duration of the first-key press.
+  if (pressed && !startButtonPressed && !selectButtonPressed &&
+      nowMicros() > practiceMenuStartBlockedUntilMicros) {
+    practiceMenuStartRequested = true;
+  }
 }
 
 bool GamePlayScene::preparePracticeAttemptFromMenu(
     const practice::SkinMenuAttemptPlan &attempt,
     std::string_view logContext) {
+  const GameplaySkinPracticeSongInformation originalInformation(
+      playfieldChartVisualModel);
   applySkinMenuAttemptPlanToStartOptions(options, attempt);
+  if (!originalPracticeTotalNotes.has_value()) {
+    originalPracticeTotalNotes = chart->Meta.TotalNotes;
+  }
   practice::applySkinMenuPracticeModifier(*chart, attempt);
   if (!applyPracticePlayOptions(*chart, options, logContext)) {
     showPlaybackInitializationFailure(
@@ -2113,6 +2153,7 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode,
                                      rulesetPolicyBuild.policy->gauge.effectiveTotal);
+  originalInformation.restore(playfieldChartVisualModel);
   initializePlayfieldVisualNoteSources();
   if (playfieldVisualStateStore != nullptr) {
     playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
@@ -2136,8 +2177,11 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
       !preparePracticeAttemptFromMenu(*attempt, "practice")) {
     return;
   }
+  clearPracticeMenuInput();
+  if (inputHandler != nullptr) inputHandler->cancelInputState();
   practiceMenuActive = false;
-  practiceMenuStartPressedMicros = 0;
+  practiceMenuStartRequested = false;
+  updatePracticeMenuControls();
   (void)reset();
 }
 
@@ -2229,6 +2273,164 @@ void GamePlayScene::refreshLegacyTouchLayout() {
           : std::nullopt);
 }
 
+void GamePlayScene::clearPracticeMenuInput() {
+  if (practiceMenuTouchInput) practiceMenuTouchInput->cancel(nowMicros());
+  practiceMenuTouchInput.reset();
+  practiceMenuTouchLayoutKey.reset();
+  practiceMenuInput = {};
+  practiceMenuStartRequested = false;
+  if (practiceMenuActive) {
+    for (auto &[lane, pressed] : lanePressed) pressed = false;
+    if (options.practiceSession) options.practiceSession->setSkinMenuInputModifiers(false, false);
+    startButtonPressed = false;
+    selectButtonPressed = false;
+    if (startSelectControl) startSelectControl->reset();
+  }
+}
+
+void GamePlayScene::refreshPracticeMenuInput() {
+  if (!practiceMenuActive || !options.practiceSession || inputHandler == nullptr ||
+      presentation == nullptr || chart == nullptr) return;
+  updatePracticeMenuControls();
+  if ((pauseLayout && pauseLayout->getVisible()) ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
+  const auto key = makeRealtimeTouchLayoutRefreshKey(
+      effectiveRealtimeTouchLayoutRevision(presentation->touchLayoutRevision(),
+                                          virtualControllerConfig, chart->Meta.KeyMode),
+      presentation->touchHitRegionsRevision(), pauseButton, practiceRestartButton,
+      skinResetLayoutButton);
+  if (practiceMenuTouchLayoutKey == key) return;
+  auto layout = buildRealtimeTouchLayout(
+      *presentation, virtualControllerLayoutCache,
+      assist_options::isDragMode(options.assistOption), chart->Meta,
+      virtualControllerConfig,
+      context.inputProfile.playfieldTouchForKeyMode(presentationKeyMode()),
+      key.uiTransform);
+  // Skin controls are usable even before the first lane geometry is published.
+  if (!layout) layout = gameplay::RealtimeTouchLayout{.revision = key.layoutRevision};
+  if (!practiceMenuTouchInput) {
+    practiceMenuTouchInput = std::make_unique<gameplay::PracticeMenuTouchInput>(
+        gameplay::RealtimeTouchInputSink{
+            .context = this,
+            .emit = [](void *context, const gameplay::RealtimeGameplayInput &input) {
+              auto &scene = *static_cast<GamePlayScene *>(context);
+              if (input.analogScratch && input.hasReplayControl &&
+                  replay::isDirectionalScratchControl(input.replayControl.kind)) {
+                const bool pressed = input.type == gameplay::RealtimeGameplayInputType::Press;
+                scene.consumePracticeMenuLaneInput(input.lane, pressed);
+                scene.consumeStartSelectInput({.control = input.replayControl,
+                    .pressed = pressed, .timestampMicros = input.steadyTimestampMicros,
+                    .analogScratch = true});
+              } else if (scene.inputHandler) {
+                scene.inputHandler->applyRoutedTouchInput(input);
+              }
+              return true;
+            },
+            .emitAnalogScratchTicks = [](void *context, replay::LogicalControl control,
+                                         int ticks, std::int64_t time) {
+              auto &scene = *static_cast<GamePlayScene *>(context);
+              scene.consumeStartSelectInput({.control = control,
+                  .timestampMicros = time, .analogScratchTicks = ticks});
+            }},
+        gameplay::RealtimeTouchPresentationSink{
+            .context = this,
+            .begin = [](void *context, const PresentationTouchEvent &event) {
+              return static_cast<GamePlayScene *>(context)->presentation->beginPresentationTouch(event);
+            },
+            .update = [](void *context, const PresentationTouchEvent &event) {
+              return static_cast<GamePlayScene *>(context)->presentation->updatePresentationTouch(event);
+            },
+            .end = [](void *context, const PresentationTouchEvent &event, bool cancelled) {
+              return static_cast<GamePlayScene *>(context)->presentation->endPresentationTouch(event, cancelled);
+            },
+            .cancelAll = [](void *context, long long time) {
+              auto *presentation = static_cast<GamePlayScene *>(context)->presentation;
+              if (presentation) presentation->cancelPresentationTouches(time);
+            }});
+  }
+  practiceMenuTouchInput->publish(std::move(*layout), makeGameplayTouchHitSnapshot(key),
+                                  nowMicros());
+  practiceMenuTouchLayoutKey = key;
+}
+
+bool GamePlayScene::handlePracticeMenuTouch(SDL_FingerID finger,
+                                           ReplayTouchAction action,
+                                           Vector3 normalizedLocation) {
+  const bool cancelled = action == ReplayTouchAction::Cancel;
+  if (cancelled) practiceMenuStartRequested = false;
+  if (!cancelled && ((pauseLayout && pauseLayout->getVisible()) ||
+                    context.appInBackground.load(std::memory_order_acquire))) return true;
+  if (!practiceMenuTouchInput && !cancelled) refreshPracticeMenuInput();
+  if (practiceMenuTouchInput) {
+    const auto phase = action == ReplayTouchAction::Down ? gameplay::RealtimeTouchPhase::Down
+                     : action == ReplayTouchAction::Up ? gameplay::RealtimeTouchPhase::Up
+                     : cancelled ? gameplay::RealtimeTouchPhase::Cancel
+                                 : gameplay::RealtimeTouchPhase::Move;
+    practiceMenuTouchInput->consume(finger, phase, normalizedLocation.x,
+                                    normalizedLocation.y, nowMicros());
+  }
+  return true;
+}
+
+void GamePlayScene::createPracticeMenuControls() {
+  practiceMenuControls = new View();
+  addView(practiceMenuControls);
+  practiceMenuControls->setSize(520, 116);
+  practiceMenuControls->setFlexDirection(FlexDirection::Column);
+  practiceMenuControls->setPadding(Edge::All, 8);
+  practiceMenuControls->setGap(8);
+  practiceMenuControls->setThemedBackgroundColor(app_theme::panelStrong);
+  practiceMenuControls->setCornerRadius(app_theme::panelRadius());
+  practiceMenuSelectionText = new TextView(app_theme::font, 20);
+  practiceMenuSelectionText->setSize(504, 28);
+  practiceMenuSelectionText->setColor(app_theme::sdl(app_theme::textPrimary()));
+  practiceMenuControls->addView(practiceMenuSelectionText);
+  auto row = new View();
+  row->setSize(504, 56);
+  row->setFlexDirection(FlexDirection::Row);
+  row->setGap(8);
+  practiceMenuControls->addView(row);
+  const auto addControl = [&](const std::string &label, int width, auto action) {
+    auto button = new Button();
+    button->setSize(width, 56);
+    auto text = new TextView(app_theme::font, 24);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(app_theme::sdl(app_theme::textPrimary()));
+    button->setContentView(text);
+    button->setCornerRadius(app_theme::controlRadius());
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setOnClickListener(action);
+    row->addView(button);
+  };
+  addControl("↑", 56, [this] { options.practiceSession->moveSkinMenuSelection(false); });
+  addControl("↓", 56, [this] { options.practiceSession->moveSkinMenuSelection(true); });
+  addControl("−", 56, [this] { (void)options.practiceSession->changeSkinMenuSelection(false); });
+  addControl("+", 56, [this] { (void)options.practiceSession->changeSkinMenuSelection(true); });
+  addControl(i18n::tr("gameplay.start_section.label"), 248,
+             [this] { if (practiceMenuActive) restartCurrentPattern(); });
+  updatePracticeMenuControls();
+}
+
+void GamePlayScene::updatePracticeMenuControls() {
+  if (practiceMenuControls == nullptr) return;
+  const bool visible = practiceMenuActive && options.practiceSession != nullptr &&
+                       !(pauseLayout && pauseLayout->getVisible());
+  if (practiceMenuControls->getVisible() != visible) practiceMenuTouchLayoutKey.reset();
+  practiceMenuControls->setVisible(visible);
+  if (practiceRestartButton) practiceRestartButton->setVisible(!practiceMenuActive);
+  if (practiceHudText) practiceHudText->setVisible(!practiceMenuActive);
+  if (!visible) return;
+  const auto safe = rendering::uiSafeAreaInsets();
+  practiceMenuControls->setPositionNoLayout(safe.left + 24, safe.top + 24);
+  const auto menu = options.practiceSession->skinMenuState();
+  if (menu.cursorPosition < menu.legacyItems.size()) {
+    practiceMenuSelectionText->setText(menu.legacyItems[menu.cursorPosition].text);
+  }
+}
+
 void GamePlayScene::updateSkinResetLayoutVisibility() {
   if (skinResetLayoutButton == nullptr) {
     return;
@@ -2244,7 +2446,7 @@ void GamePlayScene::updateSkinResetLayoutVisibility() {
 }
 
 bool GamePlayScene::startRealtimeGameplayAuthority() {
-  if (guidedAccessReminderPending || realtimeGameplayAuthorityActive() ||
+  if (practiceMenuActive || guidedAccessReminderPending || realtimeGameplayAuthorityActive() ||
       chart == nullptr || state == nullptr || presentation == nullptr) {
     return false;
   }
@@ -2646,18 +2848,12 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
 #endif
 }
 
-bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
-  if (!realtimeGameplayAuthorityActive() || presentation == nullptr) {
-    return false;
-  }
-  auto &session = *realtimeGameplaySession;
+gameplay::RealtimeTouchHitSnapshot GamePlayScene::makeGameplayTouchHitSnapshot(
+    const gameplay::RealtimeTouchLayoutRefreshKey &key) {
   gameplay::RealtimeTouchHitSnapshot snapshot{
-      .layoutRevision = session.layoutRefreshKey.layoutRevision,
-      .uiTransform = session.layoutRefreshKey.uiTransform};
-  const auto appendNativeOverlay = [&](const auto &overlay) {
-    if (!overlay.visible) {
-      return;
-    }
+      .layoutRevision = key.layoutRevision, .uiTransform = key.uiTransform};
+  const auto appendOverlay = [&](const auto &overlay) {
+    if (!overlay.visible) return;
     snapshot.regionsTopmostFirst.push_back(
         {.hit = {.kind = PresentationUiControlKind::NativeOverlay},
          .boundary = {{{overlay.left, overlay.top},
@@ -2665,25 +2861,33 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
                        {overlay.right, overlay.bottom},
                        {overlay.left, overlay.bottom}}}});
   };
+  if (pauseLayout != nullptr && pauseLayout->getVisible()) {
+    appendOverlay(realtimeTouchOverlayRegion(pauseLayout));
+  }
+  appendOverlay(realtimeTouchOverlayRegion(practiceMenuControls));
+  for (const auto &overlay : key.nativeOverlays) appendOverlay(overlay);
+  if (chart != nullptr) {
+    appendVirtualControllerHitRegions(
+        snapshot.regionsTopmostFirst,
+        currentVirtualControllerLayout(virtualControllerLayoutCache,
+                                       virtualControllerConfig,
+                                       chart->Meta.KeyMode, key.uiTransform),
+        key.layoutRevision);
+  }
+  auto presentationRegions = presentation->touchHitRegions();
+  snapshot.regionsTopmostFirst.insert(
+      snapshot.regionsTopmostFirst.end(),
+      std::make_move_iterator(presentationRegions.begin()),
+      std::make_move_iterator(presentationRegions.end()));
+  return snapshot;
+}
+
+bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
+  if (!realtimeGameplayAuthorityActive() || presentation == nullptr) return false;
+  auto &session = *realtimeGameplaySession;
   try {
-    for (const auto &overlay : session.layoutRefreshKey.nativeOverlays) {
-      appendNativeOverlay(overlay);
-    }
-    if (chart != nullptr) {
-      appendVirtualControllerHitRegions(
-          snapshot.regionsTopmostFirst,
-          currentVirtualControllerLayout(virtualControllerLayoutCache,
-                                         virtualControllerConfig,
-                                         chart->Meta.KeyMode,
-                                         session.layoutRefreshKey.uiTransform),
-          session.layoutRefreshKey.layoutRevision);
-    }
-    auto presentationRegions = presentation->touchHitRegions();
-    snapshot.regionsTopmostFirst.insert(
-        snapshot.regionsTopmostFirst.end(),
-        std::make_move_iterator(presentationRegions.begin()),
-        std::make_move_iterator(presentationRegions.end()));
-    if (session.touchHitSnapshots.publish(std::move(snapshot))) {
+    if (session.touchHitSnapshots.publish(
+            makeGameplayTouchHitSnapshot(session.layoutRefreshKey))) {
       session.touchHitSnapshotDirty = false;
       return true;
     }
@@ -2839,7 +3043,7 @@ bool GamePlayScene::drainRealtimeInputInterruption() {
     session.inputInterrupted.store(false, std::memory_order_release);
   }
   setRealtimeGameplayIngressEnabled(!context.appInBackground.load(std::memory_order_acquire) &&
-      state != nullptr && state->isPlaying && !state->isEnding &&
+      state != nullptr && state->isPlaying && (!state->isEnding || naturalResultDelay) &&
       !context.jukebox.isPaused() && (pauseLayout == nullptr || !pauseLayout->getVisible()));
   SDL_LogWarn(SDL_LOG_CATEGORY_INPUT, "Gameplay input recovered; playback state unchanged.");
   return true;
@@ -3137,6 +3341,13 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
     session.appliedTransactionSequence = transaction.sequence;
   }
 
+  auto completion = snapshot->completionCelebration;
+  if (completion.achievement != completion_celebration::Achievement::None) {
+    completion.startMicros = playfieldVisualEventTimeMicros(
+        completion.startMicros, getVisualOffsetMicros());
+  }
+  playfieldVisualStateStore->setAuthoritativeCompletionCelebration(completion);
+
   const auto lanes = chart->Meta.GetTotalLaneIndices();
   for (const int lane : lanes) {
     if (lane < 0 ||
@@ -3164,6 +3375,70 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
       session.appliedTransactionSequence, snapshot->transactionSequence);
   updatePacemakerStatus();
   updateLaneStateText();
+}
+
+bool GamePlayScene::retainRealtimeCompletionFeedback(long long gameplayTimeMicros) {
+  if (!realtimeGameplayAuthorityActive()) return true;
+  auto &worker = *realtimeGameplaySession->worker;
+  // Capture the final score/replay without tearing down physical/touch ownership.
+  // The completed simulation now accepts only beam feedback and keysounds.
+  if (!worker.suspend() || !worker.completeChartWhileSuspended(gameplayTimeMicros)) return false;
+  syncRealtimeGameplaySnapshot();
+  transferRealtimeGameplayResult(true);
+  return worker.resume();
+}
+
+void GamePlayScene::transferRealtimeGameplayResult(bool transferReplay) {
+  auto &session = *realtimeGameplaySession;
+  if (session.resultTransferred) return;
+  if (state != nullptr) {
+    state->gaugeHistory = session.worker->copyGaugeHistoryWhileQuiescent();
+    state->gaugeHistories = session.worker->copyGaugeHistoriesWhileQuiescent();
+  }
+
+  if (transferReplay) {
+    if (modernReplayInputRecorder != nullptr) {
+      completedModernReplayInput =
+          session.worker->copyAcceptedReplayInputWhileQuiescent();
+      if (!completedModernReplayInput.has_value()) {
+        modernReplayCaptureDiagnostic =
+            "Realtime raw replay input capture was unavailable.";
+      }
+      modernReplayInputRecorder.reset();
+    }
+    const auto capturePolicy = resultCapturePolicy();
+    const auto workerEvents = session.worker->copyReplayEventsWhileQuiescent();
+    for (const auto &source : workerEvents) {
+      ReplayEvent event{
+          .action = replayActionFromRealtime(source.action),
+          .lane = source.lane,
+          .noteTimeMicros = source.noteTimeMicros,
+          .songTimeMicros = source.songTimeMicros,
+          .judgeTimeMicros = source.judgeTimeMicros,
+          .judgement = source.judgement,
+          .diffMicros = source.diffMicros,
+          .gauge = source.gauge,
+          .gaugeType = source.gaugeType,
+          .combo = source.combo,
+          .score = source.score,
+          .releaseByBackspin = source.releaseByBackspin,
+          .releaseByHolding = source.releaseByHolding,
+          .audioLanePressed = source.audioLanePressed,
+      };
+      const bool representable = source.noteId == gameplay::kInvalidNoteId ||
+          (source.noteId < session.notes.size() &&
+           replay_note::hasActiveIdentity(session.notes[source.noteId]));
+      if (capturePolicy.captureAnalytics) {
+        analyticsReplay.consumerIdentityCompatible &= representable;
+        analyticsReplay.events.push_back(event);
+      }
+      if (capturePolicy.recordReplay) {
+        recordedReplay.consumerIdentityCompatible &= representable;
+        recordedReplay.events.push_back(event);
+      }
+    }
+  }
+  session.resultTransferred = transferReplay;
 }
 
 void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
@@ -3211,53 +3486,7 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
 #endif
   session.worker->stop();
   syncRealtimeGameplaySnapshot();
-  if (state != nullptr) {
-    state->gaugeHistory = session.worker->copyGaugeHistoryAfterStop();
-    state->gaugeHistories = session.worker->copyGaugeHistoriesAfterStop();
-  }
-
-  if (transferReplay) {
-    if (modernReplayInputRecorder != nullptr) {
-      completedModernReplayInput =
-          session.worker->copyAcceptedReplayInputAfterStop();
-      if (!completedModernReplayInput.has_value()) {
-        modernReplayCaptureDiagnostic =
-            "Realtime raw replay input capture was unavailable.";
-      }
-      modernReplayInputRecorder.reset();
-    }
-    const auto capturePolicy = resultCapturePolicy();
-    const auto workerEvents = session.worker->copyReplayEventsAfterStop();
-    for (const auto &source : workerEvents) {
-      ReplayEvent event{
-          .action = replayActionFromRealtime(source.action),
-          .lane = source.lane,
-          .noteTimeMicros = source.noteTimeMicros,
-          .songTimeMicros = source.songTimeMicros,
-          .judgeTimeMicros = source.judgeTimeMicros,
-          .judgement = source.judgement,
-          .diffMicros = source.diffMicros,
-          .gauge = source.gauge,
-          .gaugeType = source.gaugeType,
-          .combo = source.combo,
-          .score = source.score,
-          .releaseByBackspin = source.releaseByBackspin,
-          .releaseByHolding = source.releaseByHolding,
-          .audioLanePressed = source.audioLanePressed,
-      };
-      const bool representable = source.noteId == gameplay::kInvalidNoteId ||
-          (source.noteId < session.notes.size() &&
-           replay_note::hasActiveIdentity(session.notes[source.noteId]));
-      if (capturePolicy.captureAnalytics) {
-        analyticsReplay.consumerIdentityCompatible &= representable;
-        analyticsReplay.events.push_back(event);
-      }
-      if (capturePolicy.recordReplay) {
-        recordedReplay.consumerIdentityCompatible &= representable;
-        recordedReplay.events.push_back(event);
-      }
-    }
-  }
+  transferRealtimeGameplayResult(transferReplay);
   if (inputHandler != nullptr) {
     inputHandler->discardPendingTouchEvents();
   }
@@ -3320,6 +3549,8 @@ int GamePlayScene::presentationKeyMode() const {
 }
 
 GamePlayScene::~GamePlayScene() {
+  stopCompletionSounds(true);
+  clearPracticeMenuInput();
   if (skinIrRankingGeneration != 0 && context.irRankingService) {
     context.irRankingService->close(skinIrRankingGeneration);
   }
@@ -3667,7 +3898,10 @@ void GamePlayScene::init() {
     refreshGameplayPresentationGeometry();
     if (!guidedAccessReminderPending) {
       inputHandler->startListenSDL();
-#if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+      // The practice menu has no realtime worker/raw touch registration yet.
+      if (practiceMenuActive) inputHandler->startListenTouch();
+#else
       inputHandler->startListenTouch();
 #endif
     }
@@ -3854,6 +4088,10 @@ void GamePlayScene::init() {
                                      app_theme::accentBorderStrong);
   pauseButton->setStyledBorderWidth(1);
   pauseButton->setOnClickListener([this]() {
+    if (canSkipResultDelay()) {
+      skipResultDelay();
+      return;
+    }
     if (isCoursePlayback()) {
       return;
     }
@@ -3890,6 +4128,7 @@ void GamePlayScene::init() {
 #endif
 
   if (options.practiceSession != nullptr) {
+    createPracticeMenuControls();
     practiceRestartButton =
         new Button(rendering::window_width - 70, 110, 52, 52);
     addView(practiceRestartButton);
@@ -3923,6 +4162,9 @@ void GamePlayScene::init() {
 }
 
 bool GamePlayScene::reset() {
+  clearPracticeMenuInput();
+  stopCompletionSounds();
+  completionSoundTrigger.reset();
   stopGuidedAccessChime(true);
   guidedAccessReminderExiting = false;
   guidedAccessReminder.reset();
@@ -4153,12 +4395,47 @@ bool GamePlayScene::reset() {
   }
   updateSkinResetLayoutVisibility();
 #endif
+  prepareCompletionSounds();
   if (guidedAccessReminderPending) {
     prepareGuidedAccessChime();
     showGuidedAccessReminder();
     return true;
   }
   return startPreparedAttempt();
+}
+
+void GamePlayScene::prepareCompletionSounds() {
+  if (options.practiceMode || options.practiceSession) return;
+  std::atomic_bool cancelled{false};
+  for (std::size_t i = 0; i < completionSounds.size(); ++i) {
+    if (!completionSounds[i]) {
+      completionSounds[i] = context.systemAudio().loadSkinSound(
+          fspath_to_path_t(std::filesystem::path(completion_celebration::kSoundPaths[i])),
+          cancelled, 1024 * 1024, std::numeric_limits<std::size_t>::max()).handle;
+    }
+  }
+}
+
+void GamePlayScene::stopCompletionSounds(bool release) {
+  for (auto &sound : completionSounds) {
+    if (!sound) continue;
+    context.systemAudio().stopSkinSound(*sound);
+    if (release) {
+      context.systemAudio().disposeSkinSound(*sound);
+      sound.reset();
+    }
+  }
+}
+
+void GamePlayScene::playCompletionSound(bool builtInPresented) {
+  if (context.jukebox.isPaused() || isGamePaused) return;
+  const auto sound = completionSoundTrigger.poll(
+      capturedPlayfieldVisualState.completionCelebration,
+      capturedPlayfieldVisualState.clock.visualTimeMicros, builtInPresented);
+  if (sound && completionSounds[*sound]) {
+    context.systemAudio().playSkinSound(*completionSounds[*sound],
+        1.0F, false, audio::Bus::GameplaySfx);
+  }
 }
 
 void GamePlayScene::prepareGuidedAccessChime() {
@@ -4170,7 +4447,7 @@ void GamePlayScene::prepareGuidedAccessChime() {
 
 void GamePlayScene::playGuidedAccessChime() {
   if (guidedAccessChime) {
-    context.systemAudio().playSkinSound(*guidedAccessChime, 1.0F, false);
+    context.systemAudio().playSkinSound(*guidedAccessChime, 1.0F, false, audio::Bus::MenuSfx);
   }
 }
 
@@ -4212,7 +4489,8 @@ void GamePlayScene::updateWhileBackgrounded() {
     gameplayTimeMicros = timing.chartTimeMicros;
     practiceSectionComplete = timing.sectionComplete;
   }
-  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
+  const auto playtimeMillis = beatorajaPlaytimeMillis(
+      chart, options, playfieldChartVisualModel.staticMetadata.lastEventTimeMicros);
   const bool sourcePlaytimeElapsed = playtimeMillis.has_value() &&
       skin::beatorajaGameplayStateFinished(gameplayTimeMicros, *playtimeMillis);
   if (realtimeGameplayAuthorityActive()) {
@@ -4261,6 +4539,7 @@ void GamePlayScene::updateWhileBackgrounded() {
 
 void GamePlayScene::onInputQueueOverflow() {
   Scene::onInputQueueOverflow();
+  if (practiceMenuActive) clearPracticeMenuInput();
   if (realtimeGameplayAuthorityActive()) {
     const auto timestamp = static_cast<std::uint64_t>(nowMicros());
     realtimeGameplaySession->interruptInput({input::DeviceClass::Keyboard, timestamp, false});
@@ -4276,6 +4555,7 @@ void GamePlayScene::onInputQueueOverflow() {
 }
 
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
+  if (background && practiceMenuActive) clearPracticeMenuInput();
   if (background) persistFloatingLaneCoverSettings();
   if (inputHandler != nullptr) inputHandler->setApplicationBackground(background);
   if (realtimeGameplayAuthorityActive()) {
@@ -4303,7 +4583,7 @@ void GamePlayScene::onApplicationBackgroundChanged(bool background) {
     if (!background) session.cancelNativeUiTouches();
 #endif
     setRealtimeGameplayIngressEnabled(!background && state != nullptr &&
-        state->isPlaying && !state->isEnding && !context.jukebox.isPaused() &&
+        state->isPlaying && (!state->isEnding || naturalResultDelay) && !context.jukebox.isPaused() &&
         (pauseLayout == nullptr || !pauseLayout->getVisible()));
   }
   if (background) {
@@ -4695,6 +4975,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
 }
 
 void GamePlayScene::showPauseMenu(bool pausePlayback) {
+  if (practiceMenuActive) practiceMenuStartRequested = false;
   setRealtimeGameplayIngressEnabled(false);
   if (gameplay::shouldSuspendRealtimeGameplayForPause(pausePlayback) &&
       realtimeGameplayAuthorityActive() &&
@@ -4797,7 +5078,7 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
 }
 
 void GamePlayScene::closePauseMenu() {
-  if (!isCoursePlayback() && context.jukebox.isPaused()) {
+  if (!practiceMenuActive && !isCoursePlayback() && context.jukebox.isPaused()) {
     context.jukebox.resume();
   }
   if (realtimeGameplayAuthorityActive() &&
@@ -4825,7 +5106,7 @@ void GamePlayScene::closePauseMenu() {
 }
 
 void GamePlayScene::togglePauseMenuFromInput() {
-  if (isCoursePlayback()) {
+  if (practiceMenuActive || isCoursePlayback()) {
     if (pauseLayout != nullptr && pauseLayout->getVisible()) {
       closePauseMenu();
     } else {
@@ -4880,6 +5161,19 @@ void GamePlayScene::consumeStartSelectInput(
       options.autoPlay) {
     return;
   }
+  if (practiceMenuActive && options.practiceSession &&
+      replay::isDirectionalScratchControl(input.control.kind)) {
+    if ((pauseLayout && pauseLayout->getVisible()) ||
+        context.appInBackground.load(std::memory_order_acquire)) return;
+    const bool clockwise = input.control.kind == replay::LogicalControlKind::ScratchClockwise;
+    if (input.analogScratchTicks > 0) {
+      practiceMenuInput.addAnalogTicks(clockwise, input.analogScratchTicks);
+    } else if (!input.analogScratch) {
+      practiceMenuInput.setScratchPressed(chart->Meta.KeyMode,
+          input.control.player, clockwise, input.pressed);
+    }
+    return;
+  }
   const bool noteEnd = state != nullptr && state->isEnding;
   switch (input.control.kind) {
   case replay::LogicalControlKind::Start:
@@ -4890,6 +5184,13 @@ void GamePlayScene::consumeStartSelectInput(
     break;
   default:
     break;
+  }
+  if (practiceMenuActive &&
+      (input.control.kind == replay::LogicalControlKind::Start ||
+       input.control.kind == replay::LogicalControlKind::Select)) {
+    practiceMenuStartBlockedUntilMicros = std::max(
+        practiceMenuStartBlockedUntilMicros, nowMicros() + 1'000'000);
+    practiceMenuStartRequested = false;
   }
   applyStartSelectControlActions(
       input.analogScratchTicks > 0
@@ -5100,7 +5401,11 @@ void GamePlayScene::restartCurrentPattern() {
   context.jukebox.stop();
   defer(
       [this]() {
-        reset();
+        if (practiceMenuActive) {
+          startPracticeAttemptFromMenu();
+        } else {
+          reset();
+        }
         return true;
       },
       0, true);
@@ -5481,7 +5786,7 @@ void GamePlayScene::playQuickRetryFeedback() {
   if (feedback.sound) {
     auto &audio = context.systemAudio();
     audio.stopSkinSound(*feedback.sound);
-    audio.playSkinSound(*feedback.sound, context.settings.audioVideo.audio.masterVolume, false);
+    audio.playSkinSound(*feedback.sound, 1.0F, false, audio::Bus::GameplaySfx);
   }
 }
 
@@ -6646,6 +6951,11 @@ void GamePlayScene::capturePlayfieldVisualState(
       .autoPlayMarkVisible =
           options.autoPlay ||
           (options.replayData != nullptr && options.replayData->autoPlay),
+      .completionCelebrationEligible =
+          gameplayMode != PlayfieldGameplayMode::Practice &&
+          !state->assistClearMark && !state->lightAssistClearMark &&
+          !clear_policy::assistClearRequired(options.playback),
+      .completionFinishEligible = gameplayMode != PlayfieldGameplayMode::Practice,
       .gameplayMode = gameplayMode,
       .loadingState = PlayfieldLoadingState::Loaded,
       .courseMode = isCoursePlayback(),
@@ -6690,13 +7000,14 @@ void GamePlayScene::capturePlayfieldVisualState(
                  .doublePlay = options.doublePlayFlip ? 1 : 0,
                  .horizontalInputMode =
                      practiceLegacyInputState(
-                         lanePressed, playfieldChartVisualModel.keyCount)
+                         lanePressed, playfieldChartVisualModel.keyCount, chart->Meta.IsPopnFiveKey())
                          .first,
                  .inputTurbo = practiceLegacyInputState(
                                    lanePressed,
-                                   playfieldChartVisualModel.keyCount)
+                                   playfieldChartVisualModel.keyCount, chart->Meta.IsPopnFiveKey())
                                    .second})};
       }(),
+      .originalPracticeTotalNotes = originalPracticeTotalNotes,
   };
   authority.presentationMetadata = presentationMetadata;
   playfieldVisualStateStore->applyAuthorityUpdate(authority);
@@ -6745,7 +7056,7 @@ void GamePlayScene::capturePlayfieldVisualState(
     playfieldVisualStateStore->setNoteStates(std::move(noteStates));
   }
 
-  const PlayfieldFrameClock frameClock =
+  PlayfieldFrameClock frameClock =
       {
           .serial = ++playfieldFrameSerial,
           .visualTimeMicros = visualTimeMicros,
@@ -6758,9 +7069,28 @@ void GamePlayScene::capturePlayfieldVisualState(
                   .startMicros = getStartPositionMicros(),
                   .elapsedMillisExact = options.practiceSession == nullptr &&
                                         !options.practiceMode,
-                  .playtimeMillis = beatorajaPlaytimeMillis(chart, options),
+                  .playtimeMillis = beatorajaPlaytimeMillis(
+                      chart, options, playfieldChartVisualModel.staticMetadata.lastEventTimeMicros),
               },
       };
+  if (options.practiceSession != nullptr || options.practiceMode) {
+    const auto *configuration = options.practiceSession != nullptr
+                                    ? &options.practiceSession->configuration()
+                                    : nullptr;
+    frameClock.playTimer = practiceSkinPlayTimer(
+        gameplayTimeMicros,
+        configuration != nullptr ? configuration->startMicros
+                                 : getStartPositionMicros(),
+        configuration != nullptr ? configuration->endMicros
+                                 : chart->Meta.PlayLength,
+        practiceMenuActive, options.playback.percent);
+  }
+  if (practiceMenuActive) {
+    // The jukebox is stopped in setup and can still retain the previous song's
+    // position. Skin animations need their own advancing, scene-relative clock.
+    frameClock.skinTimeMicros =
+        std::max(0LL, nowMicros() - practiceMenuPresentationStartMicros);
+  }
   capturedPlayfieldVisualState =
       selectedSkinActive
           ? playfieldVisualStateStore->captureForPresentation(
@@ -6825,7 +7155,8 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
       chart == nullptr
           ? gameplayTimeMicros
           : gameplay::terminalMicrosForGameplayMode(chart->Meta.PlayLength,
-                                                    chart->Meta.TotalLength);
+                playfieldChartVisualModel.staticMetadata.lastEventTimeMicros,
+                options.autoPlay && !isReplayPlayback());
   const long long deadline = skin::gameplaySkinAnimationCompletionDeadlineMicros(
       terminalMicros, *timing);
   const long long remainingChartMicros =
@@ -6835,6 +7166,66 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
   // BMSPlayer transitions on strict greater-than checks. Retain one real
   // microsecond past the authored deadline before the deferred scene change.
   return static_cast<std::uint64_t>((remainingRealMicros + 1'000) / 1'000);
+}
+
+bool GamePlayScene::canSkipResultDelay() const {
+  if (resultTransitionScheduled) return naturalResultDelay;
+  if (chart == nullptr || state == nullptr || !state->isPlaying ||
+      state->isEnding || state->activeGaugeFailed() ||
+      context.jukebox.isPaused() || options.practiceMode ||
+      options.practiceSession != nullptr ||
+      (isReplayPlayback() && options.replayData->abortedAtSongTimeMicros)) {
+    return false;
+  }
+  const auto terminalMicros = gameplay::terminalMicrosForGameplayMode(
+      chart->Meta.PlayLength,
+      playfieldChartVisualModel.staticMetadata.lastEventTimeMicros,
+      options.autoPlay && !isReplayPlayback());
+  if (getGameplayTimeMicros(context.jukebox.getTimeMicros()) < terminalMicros) {
+    return false;
+  }
+  // An early judgement must not bypass an authored tail, and late misses
+  // must resolve before Skip can capture the completed score.
+  int handledNotes = state->stagePassedNotes;
+  if (realtimeGameplayAuthorityActive()) {
+    const auto snapshot = realtimeGameplaySession->worker->acquireLatestSnapshot();
+    if (!snapshot || realtimeGameplaySession->worker->fault() !=
+                         gameplay::RealtimeGameplayFault::None ||
+        (snapshot->terminalReason != gameplay::GameplayTerminalReason::None &&
+         snapshot->terminalReason != gameplay::GameplayTerminalReason::ChartComplete)) {
+      return false;
+    }
+    handledNotes = snapshot->attempt.stagePassedNotes;
+  }
+  return handledNotes >= chart->Meta.TotalNotes;
+}
+
+void GamePlayScene::skipResultDelay() {
+  if (!canSkipResultDelay()) return;
+  if (resultTransitionScheduled) {
+    // Reuse the captured result; the original timer becomes a harmless no-op.
+    defer([this]() { return runResultTransition(); }, 0, true);
+  } else {
+    // Let update perform the normal terminal routing, worker handoff and
+    // course bookkeeping before capturing the result exactly once.
+    resultDelaySkipRequested = true;
+  }
+}
+
+void GamePlayScene::updatePauseButtonAction() {
+  const bool skip = canSkipResultDelay();
+  if (pauseButton == nullptr || pauseButtonShowsSkip == skip) return;
+  pauseButtonShowsSkip = skip;
+  resetCoursePauseHold();
+  static_cast<TextView *>(pauseButton->getContentView())->setText(
+      ui_icons::textForCodepoint(skip ? kIconSkip : kIconPause));
+}
+
+bool GamePlayScene::runResultTransition() {
+  if (!pendingResultTransition) return true;
+  auto transition = std::move(pendingResultTransition);
+  pendingResultTransition = {};
+  return transition();
 }
 
 void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
@@ -6982,7 +7373,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
     }
   }
 
-  defer(
+  pendingResultTransition =
       [this, capturePolicy]() {
         const ReplayData *presentationReplay =
             shouldPersistRecordedReplay() ? &recordedReplay : nullptr;
@@ -7113,8 +7504,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                 skinIrPreviousUserRank),
             false);
         return false;
-      },
-      delayMillis, true);
+      };
+  defer([this]() { return runResultTransition(); }, delayMillis, true);
 }
 
 bool GamePlayScene::finishIfGaugeFailed() {
@@ -7173,7 +7564,7 @@ bool GamePlayScene::needsContinuousPresentation() const {
   if (guidedAccessReminderPending) return true;
   if (presentation && presentation->activeMode() == PresentationMode::Skin)
     return true;
-  if (practiceMenuActive) return practiceMenuStartPressedMicros != 0;
+  if (practiceMenuActive) return practiceMenuStartRequested;
   if (coursePauseHoldActive || coursePauseHoldRewinding) return true;
   // Course menus do not pause playback. Built-in ordinary pauses use the
   // frozen song clock, but a video may still need to promote a decoded frame.
@@ -7226,8 +7617,48 @@ void GamePlayScene::update(float dt) {
     }
   }
   if (practiceMenuActive) {
-    if (practiceMenuStartPressedMicros != 0 &&
-        nowMicros() - practiceMenuStartPressedMicros > 1'000'000) {
+    if ((pauseLayout && pauseLayout->getVisible()) ||
+        context.appInBackground.load(std::memory_order_acquire)) {
+      // A menu command can pause from inside the touch router's callback.
+      // Retire that router here, after the callback has returned.
+      clearPracticeMenuInput();
+      if (inputHandler != nullptr) inputHandler->cancelInputState();
+      return;
+    }
+    if (practiceMenuTouchInput) practiceMenuTouchInput->advance(nowMicros());
+    if (options.practiceSession) {
+      const auto input = practiceMenuInput.read(chart->Meta.KeyMode,
+          nowMicros() / 1'000, context.settings.skinMusicSelectScrollDurationLow,
+          context.settings.skinMusicSelectScrollDurationHigh,
+          context.settings.skinMusicSelectAnalogTicksPerScroll,
+          chart->Meta.IsPopnFiveKey());
+      options.practiceSession->setSkinMenuInputModifiers(input.horizontal, input.turbo);
+      for (int tick = 0; tick < std::abs(input.selection); ++tick) {
+        options.practiceSession->moveSkinMenuSelection(input.selection > 0);
+      }
+      if (input.value != 0) {
+        (void)options.practiceSession->changeSkinMenuSelection(input.value > 0, false, input.turbo);
+      }
+      const int analog = practiceMenuInput.extractAnalogValueTicks(
+          options.practiceSession->skinMenuState().cursorPosition,
+          context.settings.skinMusicSelectAnalogTicksPerScroll);
+      for (int tick = 0; tick < std::abs(analog); ++tick) {
+        (void)options.practiceSession->changeSkinMenuSelection(analog > 0, true, input.turbo);
+      }
+    }
+    if (startSelectControl) {
+      applyStartSelectControlActions(startSelectControl->tick(nowMicros()));
+      if (resultTransitionScheduled) return;
+    }
+    if (startButtonPressed || selectButtonPressed) {
+      practiceMenuStartBlockedUntilMicros = std::max(
+          practiceMenuStartBlockedUntilMicros, nowMicros() + 1'000'000);
+      practiceMenuStartRequested = false;
+    }
+    const auto keys = chart->Meta.GetKeyLaneIndices();
+    const bool firstKeyHeld = !keys.empty() && laneIsPressed(lanePressed, keys.front());
+    if (nowMicros() > practiceMenuStartBlockedUntilMicros &&
+        (practiceMenuStartRequested || firstKeyHeld)) {
       startPracticeAttemptFromMenu();
     }
     return;
@@ -7237,8 +7668,10 @@ void GamePlayScene::update(float dt) {
     applyStartSelectControlActions(startSelectControl->tick(
         nowMicros(), {.noteEnd = state != nullptr && state->isEnding}));
   }
+  updatePauseButtonAction();
   updateCoursePauseHoldProgress(nowMicros());
   if (state == nullptr || !state->isPlaying || state->isEnding) {
+    if (naturalResultDelay && realtimeAtFrameStart) syncRealtimeGameplaySnapshot();
     return;
   }
 
@@ -7267,11 +7700,13 @@ void GamePlayScene::update(float dt) {
   if (preparationIndicatorActive(rawSongTimeMicros)) {
     return;
   }
-  const auto playtimeMillis = beatorajaPlaytimeMillis(chart, options);
+  const auto playtimeMillis = beatorajaPlaytimeMillis(
+      chart, options, playfieldChartVisualModel.staticMetadata.lastEventTimeMicros);
   const bool sourcePlaytimeElapsed =
-      playtimeMillis.has_value() &&
-      skin::beatorajaGameplayStateFinished(gameplayTimeMicros,
-                                           *playtimeMillis);
+      (resultDelaySkipRequested && canSkipResultDelay()) ||
+      (playtimeMillis.has_value() &&
+       skin::beatorajaGameplayStateFinished(gameplayTimeMicros,
+                                            *playtimeMillis));
   if (realtimeAtFrameStart) {
     const auto fault = realtimeGameplaySession->worker->fault();
     const auto terminalReason = [this] {
@@ -7331,7 +7766,14 @@ void GamePlayScene::update(float dt) {
           i18n::tr("gameplay.input.integrity_failure_notice"));
       return;
     }
-    stopRealtimeGameplayAuthority(true);
+    if (resultDelaySkipRequested) {
+      stopRealtimeGameplayAuthority(true);
+    } else if (!retainRealtimeCompletionFeedback(gameplayTimeMicros)) {
+      stopRealtimeGameplayAuthority(false);
+      state->isEnding = true;
+      showPlaybackInitializationFailure(i18n::tr("gameplay.input.integrity_failure_notice"));
+      return;
+    }
     state->passedMeasureCount = chart->Measures.size();
     state->passedTimelineCount = 0;
   } else if (finishIfGaugeFailed()) {
@@ -7371,7 +7813,7 @@ void GamePlayScene::update(float dt) {
     return;
   }
 
-  SDL_Log("Pinned Beatoraja gameplay playtime elapsed");
+  SDL_Log("Gameplay complete%s", resultDelaySkipRequested ? " (delay skipped)" : "");
   state->isEnding = true;
   finishReplayRecording();
   recordedAttemptCompleted = options.practiceMode;
@@ -7392,8 +7834,10 @@ void GamePlayScene::update(float dt) {
       options.courseSession->recordReplayStage(recordedReplay);
     }
   }
-  scheduleResultTransition(
+  naturalResultDelay = true;
+  scheduleResultTransition(resultDelaySkipRequested ? 0 :
       selectedSkinResultTransitionDelayMillis(gameplayTimeMicros));
+  updatePauseButtonAction();
 }
 
 void GamePlayScene::renderScene() {
@@ -7421,7 +7865,9 @@ void GamePlayScene::renderScene() {
   }
 #endif
   refreshGameplayPresentationGeometry();
-  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long rawSongTimeMicros = practiceMenuActive && options.practiceSession
+      ? options.practiceSession->configuration().startMicros + getAudioOffsetMicros()
+      : context.jukebox.getTimeMicros();
   const bool startLaneIndicatorsVisible =
       preparationIndicatorActive(rawSongTimeMicros);
   const bool practiceCountIn = practiceCountInActive(rawSongTimeMicros);
@@ -7451,9 +7897,12 @@ void GamePlayScene::renderScene() {
                                    capturedPlayfieldProjection);
   const PresentationFrameResult presentationFrame =
       presentation->render(renderContext);
+  playCompletionSound(presentationFrame.outcome == PresentationFrameOutcome::Ready &&
+                      presentationFrame.submittedMode == PresentationMode::BuiltIn);
   // Skin lane quads are published by rendering, including after viewport or
   // presentation changes. SDL input must see that newly published geometry.
   refreshLegacyTouchLayout();
+  refreshPracticeMenuInput();
   // The gameplay presentation can queue ordinary UI text before subsequent
   // direct overlay submissions.
   renderContext.flushUiBatch();
@@ -7461,6 +7910,12 @@ void GamePlayScene::renderScene() {
     float spinScratchRotationDegrees = 0.0F;
     bool commandScratchPressed = false;
     bool virtualControllerReady = false;
+    if (practiceMenuTouchInput && practiceMenuTouchInput->router()) {
+      const auto &router = *practiceMenuTouchInput->router();
+      spinScratchRotationDegrees = router.spinScratchRotationDegrees();
+      commandScratchPressed = router.commandScratchPressed();
+      virtualControllerReady = true;
+    }
     if (realtimeGameplaySession != nullptr) {
       std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);
       if (realtimeGameplaySession->touchRouter != nullptr) {
@@ -7530,7 +7985,7 @@ void GamePlayScene::renderScene() {
 bool GamePlayScene::renderViewBeforeScene(const View *view) const {
   return view != pauseLayout && view != pauseButton &&
          view != practiceRestartButton && view != skinResetLayoutButton &&
-         view != practiceHudText && view != playbackFailureLayout &&
+         view != practiceHudText && view != practiceMenuControls && view != playbackFailureLayout &&
          view != guidedAccessReminderLayout;
 }
 
@@ -7636,7 +8091,7 @@ bool GamePlayScene::handleCoursePauseButtonEvent(SDL_Event &event) {
     resetCoursePauseHold();
     return true;
   }
-  if (!isCoursePlayback() || pauseButton == nullptr ||
+  if (!isCoursePlayback() || canSkipResultDelay() || pauseButton == nullptr ||
       !pauseButton->getVisible()) {
     return false;
   }
@@ -7798,7 +8253,7 @@ void GamePlayScene::updateCoursePauseHoldProgress(long long currentMicros) {
 }
 
 void GamePlayScene::renderCoursePauseHoldRing() {
-  if (!isCoursePlayback() || pauseButton == nullptr ||
+  if (!isCoursePlayback() || canSkipResultDelay() || pauseButton == nullptr ||
       !pauseButton->getVisible()) {
     return;
   }
@@ -7834,6 +8289,7 @@ void GamePlayScene::renderCoursePauseHoldRing() {
 }
 
 void GamePlayScene::cleanupScene() {
+  stopCompletionSounds(true);
   stopGuidedAccessChime(true);
   SDL_Log("Cleaning up GamePlayScene");
   cancelGameplaySkinPreparation();
@@ -7910,7 +8366,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     return nullptr;
   }
   if (isGamePaused || state == nullptr || !state->isPlaying ||
-      state->isEnding) {
+      (state->isEnding && !naturalResultDelay)) {
     return nullptr;
   }
   if (realtimeGameplayAuthorityActive()) {
@@ -7936,7 +8392,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
-  const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
+  const bool preparationInput = naturalResultDelay || gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
       options.practiceSession != nullptr);
   if (preparationInput) {
@@ -7949,7 +8405,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
       context.jukebox.playKeySound(result.keySoundNote->Wav,
           reinterpret_cast<std::uintptr_t>(result.keySoundNote));
     }
-    if (result.hasReplayEvent) {
+    if (result.hasReplayEvent && !naturalResultDelay) {
       const auto &event = result.replayEvent;
       recordPreparationLaneEvent(event.action, event.lane,
                                  event.songTimeMicros);
@@ -8010,7 +8466,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
 bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
                                              bool isBackSpin) {
   if (isGamePaused || state == nullptr || !state->isPlaying ||
-      state->isEnding) {
+      (state->isEnding && !naturalResultDelay)) {
     return nullptr;
   }
   if (realtimeGameplayAuthorityActive()) {
@@ -8035,14 +8491,14 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
       .inputDelay = inputDelay,
       .notePriorityMode = context.settings.notePriorityMode,
   };
-  const bool preparationInput = gameplay::preparationInputUsesVisualOnlyPath(
+  const bool preparationInput = naturalResultDelay || gameplay::preparationInputUsesVisualOnlyPath(
       preparationIndicatorActive(rawSongTimeMicros),
       options.practiceSession != nullptr);
   if (preparationInput) {
     const auto result =
         laneInputController->releaseLaneForPreparation(lane, inputContext);
     updateLaneStateText();
-    if (result.hasReplayEvent) {
+    if (result.hasReplayEvent && !naturalResultDelay) {
       const auto &event = result.replayEvent;
       recordPreparationLaneEvent(event.action, event.lane,
                                  event.songTimeMicros);
@@ -8503,14 +8959,20 @@ void GamePlayScene::applyReplayEvent(const ReplayEvent &event,
     }
     break;
   }
-  case ReplayEventAction::Miss:
+  case ReplayEventAction::Miss: {
+    auto *note = findReplayNote(event);
+    markReplayMissedNote(note, event.judgeTimeMicros);
     if (event.judgement != None) {
-      auto *note = findReplayNote(event);
-      markReplayMissedNote(note, event.judgeTimeMicros);
       onJudge(recordedJudge, eventClock, false, note, event.lane);
       applyReplayGauge(event);
+    } else {
+      // PMS can resolve an earlier nonvanishing BAD without scoring again.
+      ++state->stagePassedNotes;
+      playfieldVisualStateStore->observeCompletionProgress(state->stagePassedNotes,
+                                                           visualTimeMicros);
     }
     break;
+  }
   case ReplayEventAction::Mine:
     if (auto *note = findReplayNote(event); note != nullptr) {
       note->IsPlayed = true;
@@ -8789,6 +9251,8 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
       state->getScore(), clock, recordTimingSample &&
           shouldRecordInputTiming(options) &&
           !isClassicLongNoteTail(graphNote, chart, options.longNoteMode));
+  playfieldVisualStateStore->observeCompletionProgress(state->stagePassedNotes,
+                                                       clock.visualTimeMicros);
   const int adjustedNotesDisplayTimingMilliseconds =
       gameplay_timing::nextNotesDisplayTimingMilliseconds(
           context.settings.notesDisplayTimingMilliseconds,
@@ -8908,6 +9372,7 @@ bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
                                      ReplayTouchAction action,
                                      Vector3 normalizedLocation,
                                      std::uint64_t timestampMicros) {
+  if (practiceMenuActive) return handlePracticeMenuTouch(fingerIndex, action, normalizedLocation);
   const auto songTimeMicros = timestampMicros != 0
       ? context.jukebox.audioRuntime().songTimeMicrosAtSteadyMicros(
             timestampMicros).value_or(context.jukebox.getTimeMicros())
@@ -9298,6 +9763,22 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
   }
   if (handleCoursePauseButtonEvent(event)) {
     return {};
+  }
+
+  if (practiceMenuActive && !(pauseLayout && pauseLayout->getVisible()) &&
+      (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP)) {
+    std::optional<practice::SkinMenuDirection> direction;
+    switch (event.key.key) {
+    case SDLK_UP: direction = practice::SkinMenuDirection::Up; break;
+    case SDLK_DOWN: direction = practice::SkinMenuDirection::Down; break;
+    case SDLK_LEFT: direction = practice::SkinMenuDirection::Left; break;
+    case SDLK_RIGHT: direction = practice::SkinMenuDirection::Right; break;
+    default: break;
+    }
+    if (direction) {
+      practiceMenuInput.setDirectionPressed(*direction, event.type == SDL_EVENT_KEY_DOWN);
+      return {};
+    }
   }
 
   Scene::handleEvents(event);

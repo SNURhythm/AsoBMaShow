@@ -121,7 +121,7 @@ public:
     if (!audio_) return;
     const auto key = fspath_to_path_t(path);
     if (const auto found = handles_.find(key); found != handles_.end()) {
-      audio_->playSkinSound(audio::SkinSoundHandle{found->second}, 1.0F, false);
+      audio_->playSkinSound(audio::SkinSoundHandle{found->second}, 1.0F, false, audio::Bus::MenuSfx);
       return;
     }
     std::atomic<bool> cancelled{false};
@@ -129,7 +129,7 @@ public:
         key, cancelled, std::numeric_limits<std::size_t>::max(),
         std::numeric_limits<std::size_t>::max());
     if (!loaded.handle) return;
-    if (!audio_->playSkinSound(*loaded.handle, 1.0F, false)) {
+    if (!audio_->playSkinSound(*loaded.handle, 1.0F, false, audio::Bus::MenuSfx)) {
       audio_->disposeSkinSound(*loaded.handle);
       return;
     }

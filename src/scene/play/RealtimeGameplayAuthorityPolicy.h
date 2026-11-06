@@ -99,13 +99,12 @@ classifyRealtimeGameplayTerminal(GameplayTerminalReason reason,
                                  bool sessionBackedPractice,
                                  bool sourcePlaytimeElapsed = false) noexcept;
 
-// This app leaves normal play, autoplay, and replay at the final playable
-// note. Trailing BGA, background, and empty chart rows never hold gameplay
-// open; practice retains its separate range-timeline rule below.
+// BMSPlayer PLAY/REPLAY use getLastNoteTime(); separately launched AUTOPLAY
+// uses getLastTime(), including BGM, BGA and hidden notes but not empty rows.
 [[nodiscard]] constexpr std::int64_t terminalMicrosForGameplayMode(
     std::int64_t lastPlayableNoteMicros,
-    std::int64_t /* lastTimelineMicros */) noexcept {
-  return lastPlayableNoteMicros;
+    std::int64_t lastEventMicros, bool autoPlay) noexcept {
+  return autoPlay ? lastEventMicros : lastPlayableNoteMicros;
 }
 
 // BMSPlayer's PLAY and REPLAY modes leave STATE_PLAY on their play timer;

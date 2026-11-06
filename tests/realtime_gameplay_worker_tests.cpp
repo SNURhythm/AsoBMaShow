@@ -554,7 +554,7 @@ void testAndroidSpinScratchExpiresWithoutRenderDrain() {
             "the same captured finger can turn again after worker expiry");
     source.setRawEventCallback({});
     worker.stop();
-    const auto replay = worker.copyAcceptedReplayInputAfterStop();
+    const auto replay = worker.copyAcceptedReplayInputWhileQuiescent();
     require(replay && replay->size() == 3 && (*replay)[0].pressed &&
                 !(*replay)[1].pressed && (*replay)[2].pressed,
             "worker expiry records the matching release and renewed press");
@@ -586,7 +586,7 @@ void testCommandOnlyTouchScratchBypassesGameplayAndReplay() {
     require(waitUntil([&] { return worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 1; }),
             "worker processes the real key after scratch commands");
     worker.stop();
-    const auto recorded = worker.copyAcceptedReplayInputAfterStop();
+    const auto recorded = worker.copyAcceptedReplayInputWhileQuiescent();
     require(recorded && recorded->size() == 1 &&
                 recorded->front().control.kind == replay::LogicalControlKind::Lane &&
                 session.startSelectInputs.size() == 3,
@@ -679,7 +679,7 @@ void testAndroidCancellationReleasesBeforeRenderAndAllowsFingerReuse() {
             "the uncancelled finger releases normally");
     source.setRawEventCallback({});
     worker.stop();
-    const auto replay = worker.copyAcceptedReplayInputAfterStop();
+    const auto replay = worker.copyAcceptedReplayInputWhileQuiescent();
     require(replay && replay->size() == 6 &&
                 (*replay)[0].pressed && (*replay)[1].pressed &&
                 !(*replay)[2].pressed && (*replay)[3].pressed &&
@@ -1161,7 +1161,7 @@ void testLr2SameKeyBatchUsesLatestEdgeAndRetainsReplayHistory() {
                   snapshot->lanePressed[lane] == endPressed,
               "one physical key judges only its latest same-time state");
       worker.stop();
-      const auto raw = worker.copyAcceptedReplayInputAfterStop();
+      const auto raw = worker.copyAcceptedReplayInputWhileQuiescent();
       require(raw && raw->size() == static_cast<std::size_t>(count),
               "same-key snapshot coalescing preserves every raw replay edge");
     }
@@ -1201,7 +1201,7 @@ void testLr2ScratchBatchKeepsLatestKeyAndProcessingDirection() {
               snapshot->attempt.score == 4 && !snapshot->lanePressed[7],
           "scratch latest states judge only CCW head then CW charge tail");
   worker.stop();
-  const auto raw = worker.copyAcceptedReplayInputAfterStop();
+  const auto raw = worker.copyAcceptedReplayInputWhileQuiescent();
   require(raw && raw->size() == 6,
           "scratch snapshot judgement retains the entire raw key history");
 }
@@ -1241,7 +1241,7 @@ void testLr2SimultaneousInputsUseLaneOrderAndOneUpdate() {
                 snapshot->attempt.judgeCounts[PGreat] == 1 && snapshot->attempt.combo == 1,
             "simultaneous LR2 keys judge BAD on lower lane before PGREAT on higher lane");
     worker.stop();
-    const auto raw = worker.copyAcceptedReplayInputAfterStop();
+    const auto raw = worker.copyAcceptedReplayInputWhileQuiescent();
     require(raw && raw->size() == 2 && raw->front().control.lane == 2 &&
                 raw->back().control.lane == 1,
             "lane normalization retains every original replay ingress transition");
@@ -1280,7 +1280,7 @@ void testWorkerTransfersAcceptedRawReplayInputInOrder() {
           "raw replay input is accepted by gameplay");
   worker.stop();
 
-  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  const auto replayInput = worker.copyAcceptedReplayInputWhileQuiescent();
   require(replayInput.has_value() &&
               *replayInput ==
                   std::vector<replay::InputTransition>{
@@ -1324,7 +1324,7 @@ void testWorkerRetainsAcceptedReplayInputWithInterleavedTimestamps() {
           "interleaved replay inputs are processed");
   worker.stop();
 
-  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  const auto replayInput = worker.copyAcceptedReplayInputWhileQuiescent();
   require(replayInput.has_value() && replayInput->size() == 2,
           "the worker leaves timestamp ordering to capture normalization");
 }
@@ -1384,7 +1384,7 @@ void requireOwnedRealtimeOverlapCoalesced(
           "the effective lane releases only with the final owner");
   worker.stop();
 
-  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  const auto replayInput = worker.copyAcceptedReplayInputWhileQuiescent();
   require(replayInput.has_value() &&
               *replayInput ==
                   std::vector<replay::InputTransition>{
@@ -1493,7 +1493,7 @@ void testRealtimeIngressHandsOffOppositeScratchDirectionsWithoutLaneEdges() {
           "scratch lane releases after its final owner");
   worker.stop();
 
-  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  const auto replayInput = worker.copyAcceptedReplayInputWhileQuiescent();
   require(replayInput.has_value() && replayInput->size() == 6 &&
               (*replayInput)[0] == replay::InputTransition{
                                        .songTimeMicros = 1'000'000,
@@ -1639,7 +1639,7 @@ void testLegacyBridgeCapturesScratchlessModesAsBrdControls() {
             }),
             "scratchless legacy input judges through the realtime worker");
     worker.stop();
-    const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+    const auto replayInput = worker.copyAcceptedReplayInputWhileQuiescent();
     const replay::LogicalControl laneControl{
         .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 0};
     require(replayInput.has_value() &&
@@ -1716,7 +1716,7 @@ void testLegacyAdapterScratchHandoffsValidateAsOneReplayTransaction() {
           "legacy adapter input drains through the realtime worker");
   worker.stop();
 
-  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  const auto replayInput = worker.copyAcceptedReplayInputWhileQuiescent();
   require(replayInput.has_value() && replayInput->size() == 6,
           "legacy adapter produces a balanced directional scratch stream");
   replay::ReplayPlaybackData playback;
@@ -1794,7 +1794,7 @@ void testLegacyStartSelectCommandsRemainStockReplayInput() {
           "legacy commands drain through the realtime worker");
   worker.stop();
 
-  const auto replayInput = worker.copyAcceptedReplayInputAfterStop();
+  const auto replayInput = worker.copyAcceptedReplayInputWhileQuiescent();
   require(replayInput.has_value() && replayInput->size() == 4,
           "Start and Select press and release survive live replay capture");
   replay::ReplayPlaybackData playback;
@@ -1844,7 +1844,7 @@ void testReplayCaptureOverflowDoesNotInvalidateGameplay() {
           "gameplay still accepts edges after replay capture overflow");
   worker.stop();
   require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
-              !worker.copyAcceptedReplayInputAfterStop().has_value(),
+              !worker.copyAcceptedReplayInputWhileQuiescent().has_value(),
           "replay overflow drops only the attachment, not the result");
 }
 
@@ -2428,6 +2428,38 @@ void testAutoplayCommitsGameplayAndKeysoundWithoutFramePump() {
   worker.stop();
 }
 
+void testCompletionSurvivesPresentationHistoryOverflow() {
+  constexpr int notes = 300;
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = notes;
+  chart.Meta.KeyMode = 7;
+  auto *measure = new bms_parser::Measure;
+  chart.Measures.push_back(measure);
+  for (int i = 0; i < notes; ++i)
+    addTimeline(*measure, 1'000'000 + i * 1'000)->SetNote(1, new bms_parser::Note(11));
+  for (const bool autoPlay : {true, false}) {
+    FakeClock clock;
+    FakeAudio audio;
+    auto config = makeConfig(clock, audio);
+    config.simulation.attempt.autoPlay = autoPlay;
+    gameplay::RealtimeGameplayWorker worker(gameplay::buildGameplayDefinition(chart, 0), std::move(config));
+    require(worker.start(), "completion overflow worker starts");
+    clock.nowMicros.store(autoPlay ? 1'300'000 : 2'000'000, std::memory_order_release);
+    require(waitUntil([&] {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      return snapshot && snapshot->attempt.stagePassedNotes == notes;
+    }), "dense chart resolves without consuming presentation transactions");
+    worker.stop();
+    const auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot->transactionCount == gameplay::kRealtimeGameplayTransactionHistorySize &&
+                snapshot->transactions.front().sequence > 1,
+            "fixture really overwrites older visual transactions");
+    require(snapshot->completionCelebration.achievement == (autoPlay ? completion_celebration::Achievement::Max : completion_celebration::Achievement::Finish) &&
+                (!autoPlay || snapshot->completionCelebration.startMicros == 1'299'000),
+            "worker retains exact final-judgement completion independently of visual history");
+  }
+}
+
 void testStoppedWorkerTransfersCompleteGaugeHistory() {
   FakeClock clock;
   FakeAudio audio;
@@ -2447,13 +2479,72 @@ void testStoppedWorkerTransfersCompleteGaugeHistory() {
           "gauge-history transaction commits");
   worker.stop();
 
-  const auto history = worker.copyGaugeHistoryAfterStop();
+  const auto history = worker.copyGaugeHistoryWhileQuiescent();
   require(history.size() == 1,
           "stopped authority exposes every committed gauge sample");
-  const auto histories = worker.copyGaugeHistoriesAfterStop();
+  const auto histories = worker.copyGaugeHistoriesWhileQuiescent();
   for (const auto &gaugeHistory : histories) {
     require(gaugeHistory.size() == 1,
             "stopped authority transfers every GAS candidate series");
+  }
+}
+
+void testCompletedChartKeepsLaneFeedbackLive() {
+  for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2})
+  for (const bool missed : {false, true}) {
+    FakeClock clock;
+    FakeAudio audio;
+    auto config = makeConfig(clock, audio);
+    config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(ruleset, 2));
+    gameplay::RealtimeGameplayWorker worker(makeScratchlessDefinition(7), std::move(config));
+    const auto input = [&](bool pressed, long long time) {
+      require(worker.enqueueInput({.epoch = 7,
+          .type = pressed ? gameplay::RealtimeGameplayInputType::Press
+                          : gameplay::RealtimeGameplayInputType::Release,
+          .source = gameplay::RealtimeGameplayInputSource::Physical,
+          .lane = 0, .compensateLane = 0, .steadyTimestampMicros = time,
+          .hasReplayControl = true,
+          .replayControl = {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 0}}),
+          "finish feedback input queues");
+    };
+    input(true, missed ? 100'000 : 1'000'000);
+    require(worker.start(), "finish feedback worker starts");
+    require(waitUntil([&] {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      return snapshot && snapshot->lanePressed[0] &&
+          (missed || snapshot->attempt.judgeCounts[PGreat] == 1);
+    }), "last note is judged while the lane stays held");
+    clock.nowMicros.store(1'500'000);
+    require(waitUntil([&] {
+      return worker.acquireLatestSnapshot()->terminalReason ==
+          gameplay::GameplayTerminalReason::ChartComplete;
+    }), "chart reaches completion before the result hold");
+    require(worker.acquireLatestSnapshot()->lanePressed[0],
+            "completion must not automatically release a held lane");
+    const auto final = worker.acquireLatestSnapshot()->attempt;
+    for (const auto [pressed, time] : {std::pair{false, 1'600'000LL},
+                                     std::pair{true, 6'500'000LL},
+                                     std::pair{false, 6'700'000LL}}) {
+      const auto previousSequence = worker.acquireLatestSnapshot()->transactionSequence;
+      input(pressed, time);
+      require(waitUntil([&] {
+        const auto snapshot = worker.acquireLatestSnapshot();
+        return snapshot->lanePressed[0] == pressed &&
+            snapshot->latestTransaction.hasLaneVisual &&
+            !snapshot->latestTransaction.hasJudge &&
+            snapshot->latestTransaction.laneVisual.songTimeMicros == time;
+      }), "release and new press must animate throughout the finish hold and fade");
+      require(worker.acquireLatestSnapshot()->transactionSequence == previousSequence + 1,
+              "completion input must not republish the final automatic miss");
+      require(sameAttemptSnapshot(worker.acquireLatestSnapshot()->attempt, final),
+              "completion feedback cannot change the score or gauge");
+    }
+    worker.stop();
+    const auto raw = worker.copyAcceptedReplayInputWhileQuiescent();
+    require(raw && raw->size() == 1 && raw->front().pressed &&
+                worker.copyReplayEventsWhileQuiescent().size() == (missed ? 2 : 1) && audio.commitCount == 2,
+            "post-completion keysounds play without changing replay judgements or raw input");
   }
 }
 
@@ -2570,7 +2661,7 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
     require(audio.commitCount.load() == (initiallyPressed ? 0 : 1) &&
                 (initiallyPressed || audio.lastCommitted.load() == 0),
             "detonated bmson mine commits its authored keysound exactly once; released mine is silent");
-    const auto replay = worker.copyReplayEventsAfterStop();
+    const auto replay = worker.copyReplayEventsWhileQuiescent();
     require(std::ranges::count_if(replay, [](const auto &event) {
               return event.action == gameplay::GameplayReplayAction::Mine;
             }) == (initiallyPressed ? 0 : 1),
@@ -2679,7 +2770,7 @@ void testWorkerLateClassicReplayAudio() {
     require(worker.fault() == gameplay::RealtimeGameplayFault::None && audio.starts == (handoff ? 3 : 2),
             "late classic empty press retriggers the fallback voice in the worker");
     std::vector<ReplayEvent> events;
-    for (const auto &event : worker.copyReplayEventsAfterStop())
+    for (const auto &event : worker.copyReplayEventsWhileQuiescent())
       events.push_back({.action = static_cast<ReplayEventAction>(event.action), .lane = event.lane,
           .noteTimeMicros = event.noteTimeMicros, .songTimeMicros = event.songTimeMicros,
           .judgement = event.judgement, .releaseByBackspin = event.releaseByBackspin,
@@ -2795,7 +2886,7 @@ void testWorkerClassicScratchCompletionAudio() {
         require(std::abs(live.back() * 32768 - expected) < 1,
                 "worker PCM preserves head position and authored tail layering");
         std::vector<ReplayEvent> events;
-        for (const auto &event : worker.copyReplayEventsAfterStop())
+        for (const auto &event : worker.copyReplayEventsWhileQuiescent())
           events.push_back({.action = static_cast<ReplayEventAction>(event.action), .lane = event.lane,
               .noteTimeMicros = event.noteTimeMicros, .songTimeMicros = event.songTimeMicros,
               .judgeTimeMicros = event.judgeTimeMicros, .judgement = event.judgement,
@@ -2964,12 +3055,12 @@ void testWorkerAdjacentHcnReplayAudio() {
         const auto liveReleased = mix(2);
         worker.stop();
         require(worker.fault() == gameplay::RealtimeGameplayFault::None, "adjacent HCN worker has no fault");
-        const auto raw = worker.copyAcceptedReplayInputAfterStop();
+        const auto raw = worker.copyAcceptedReplayInputWhileQuiescent();
         require(raw && raw->size() == (preHeadRetrigger ? 7 : 4) &&
                     raw->at(raw->size() - 2).songTimeMicros == pressTime &&
                     raw->back().songTimeMicros == releaseTime, "worker retains all physical replay edges");
         std::vector<ReplayEvent> events;
-        for (const auto &event : worker.copyReplayEventsAfterStop())
+        for (const auto &event : worker.copyReplayEventsWhileQuiescent())
           events.push_back({.action = static_cast<ReplayEventAction>(event.action), .lane = event.lane,
               .noteTimeMicros = event.noteTimeMicros, .songTimeMicros = event.songTimeMicros,
               .judgement = event.judgement, .releaseByBackspin = event.releaseByBackspin,
@@ -3080,7 +3171,7 @@ void testWorkerBackspinCompanionAudio() {
         worker.stop();
         require(worker.fault() == gameplay::RealtimeGameplayFault::None, "companion worker has no fault");
         std::vector<ReplayEvent> events;
-        for (const auto &event : worker.copyReplayEventsAfterStop())
+        for (const auto &event : worker.copyReplayEventsWhileQuiescent())
           events.push_back({.action = static_cast<ReplayEventAction>(event.action), .lane = event.lane,
               .noteTimeMicros = event.noteTimeMicros, .songTimeMicros = event.songTimeMicros,
               .judgement = event.judgement, .releaseByBackspin = event.releaseByBackspin,
@@ -3169,7 +3260,7 @@ void testWorkerScratchHcnRetainsAudioUntilFinalLift() {
               audio.controls.load() == (failedHeldLift ? 3 : 1),
           "scratch held failure preserves transaction mute before recovery on a later update");
   std::vector<ReplayEvent> replay;
-  for (const auto &event : worker.copyReplayEventsAfterStop())
+  for (const auto &event : worker.copyReplayEventsWhileQuiescent())
     replay.push_back({.action = static_cast<ReplayEventAction>(event.action),
         .lane = event.lane, .noteTimeMicros = event.noteTimeMicros,
         .songTimeMicros = event.songTimeMicros, .judgeTimeMicros = event.judgeTimeMicros,
@@ -3327,7 +3418,7 @@ void testWorkerMissedHcnControlsPreviewVoice() {
                 audio.controls.load() == (preview ? 3 : 0),
             "missed HCN controls only a previewed head and never restarts it");
     std::vector<ReplayEvent> replay;
-    for (const auto &event : worker.copyReplayEventsAfterStop())
+    for (const auto &event : worker.copyReplayEventsWhileQuiescent())
       replay.push_back({.action = static_cast<ReplayEventAction>(event.action),
           .lane = event.lane, .noteTimeMicros = event.noteTimeMicros,
           .songTimeMicros = event.songTimeMicros, .judgeTimeMicros = event.judgeTimeMicros,
@@ -3446,7 +3537,7 @@ void testWorkerLongHeadVoiceControl() {
             "voice controls are deduplicated and auto keysounds never receive input audio controls");
     if (inputAudio) {
       std::vector<ReplayEvent> replay;
-      for (const auto &event : worker.copyReplayEventsAfterStop()) {
+      for (const auto &event : worker.copyReplayEventsWhileQuiescent()) {
         if (event.action != gameplay::GameplayReplayAction::Press &&
             event.action != gameplay::GameplayReplayAction::Release) continue;
         replay.push_back({.action = event.action == gameplay::GameplayReplayAction::Press
@@ -3508,7 +3599,7 @@ void testWorkerBmsonReleaseAudio() {
                   audio.reserveCount.load() == audio.commitCount.load() &&
                   (!inputAudio || audio.lastCommitted.load() == (tailSound ? 1 : 0)),
               "manual/classic automatic release commits tail once, respects auto keysounds and skips NoWav");
-      const auto replay = worker.copyReplayEventsAfterStop();
+      const auto replay = worker.copyReplayEventsWhileQuiescent();
       require(std::ranges::count_if(replay, [](const auto &event) {
                 return event.action == gameplay::GameplayReplayAction::Release &&
                        event.noteTimeMicros == 2'000'000 && event.judgement != None;
@@ -3545,6 +3636,7 @@ void testWorkerBmsonReleaseAudio() {
 } // namespace
 
 int main() {
+  testCompletedChartKeepsLaneFeedbackLive();
   testWorkerAdjacentHcnReplayAudio();
   testWorkerBackspinCompanionAudio();
   testWorkerLateClassicReplayAudio();
@@ -3602,6 +3694,7 @@ int main() {
   testPracticeAutoplayCompletesWithoutFramePump();
   testAutoplayCommitsGameplayAndKeysoundWithoutFramePump();
   testStoppedWorkerTransfersCompleteGaugeHistory();
+  testCompletionSurvivesPresentationHistoryOverflow();
   testLr2MultiBadPublishesEveryTransactionWithOneKeysound();
   return 0;
 }

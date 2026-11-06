@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameplaySimulation.h"
+#include "CompletionCelebration.h"
 #include "../../replay/ReplayPlayback.h"
 
 #include <array>
@@ -111,6 +112,9 @@ struct RealtimeGameplaySnapshot {
   std::vector<bool> lanePressed;
   std::vector<bool> longNoteHoldingByLane;
   GameplayAttemptSnapshot attempt;
+  // Retained independently of the bounded presentation transaction history.
+  // The timestamp is song time here; the scene applies its visual offset.
+  completion_celebration::State completionCelebration;
   quick_retry::Projection quickRetryProjection;
   SkinGameplayDynamicGraphState skinGameplayGraph;
   GaugeStateSnapshot gaugeState;
@@ -233,16 +237,18 @@ public:
   bool requestSuspend() noexcept;
   bool suspend();
   bool resume();
+  bool completeChartWhileSuspended(std::int64_t songTimeMicros);
   bool enqueueInput(const RealtimeGameplayInput &input) noexcept;
   [[nodiscard]] SnapshotLease acquireLatestSnapshot() const noexcept;
   [[nodiscard]] RealtimeGameplayFault fault() const noexcept;
   [[nodiscard]] bool running() const noexcept;
+  // Owner-thread reads require stop() or an acknowledged suspend().
   [[nodiscard]] std::vector<GameplayReplayEvent>
-  copyReplayEventsAfterStop() const;
+  copyReplayEventsWhileQuiescent() const;
   [[nodiscard]] std::optional<std::vector<replay::InputTransition>>
-  copyAcceptedReplayInputAfterStop() const;
-  [[nodiscard]] std::vector<float> copyGaugeHistoryAfterStop() const;
-  [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesAfterStop() const;
+  copyAcceptedReplayInputWhileQuiescent() const;
+  [[nodiscard]] std::vector<float> copyGaugeHistoryWhileQuiescent() const;
+  [[nodiscard]] GaugeHistoryCollection copyGaugeHistoriesWhileQuiescent() const;
 
 private:
   static constexpr std::size_t kOwnedInputSourceCount = 3;
@@ -312,6 +318,8 @@ private:
   GameplayDefinition definition_;
   RealtimeGameplayWorkerConfig config_;
   GameplaySimulation simulation_;
+  completion_celebration::Tracker completionTracker_;
+  int completionPassedNotes_ = 0;
   std::vector<OwnedLaneState> ownedInputLanes_;
   std::uint64_t ownedInputClaimSequence_ = 0;
   std::vector<QueuedInput> queuedInputs_;

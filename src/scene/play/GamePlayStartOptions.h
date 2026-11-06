@@ -136,7 +136,8 @@ inline void applySkinMenuAttemptPlanToStartOptions(
       static_cast<unsigned long long>(std::max(0LL, attempt.startMicros));
   options.gaugeType = attempt.gaugeType;
   options.gaugeProfile = attempt.gaugeProfile;
-  options.gaugeAutoShift = GaugeAutoShiftMode::None;
+  // The skin menu selects a gauge, but has no auto-shift controls. Preserve
+  // the mode and lower bound selected in the native practice configuration.
   options.startingGaugePercent = attempt.startingGaugePercent;
   options.playback = attempt.playback;
   options.doublePlayFlip = attempt.doublePlayFlip;

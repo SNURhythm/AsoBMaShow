@@ -25,6 +25,10 @@
 #include "GameplayGeometry.h"
 #include "Judge.h"
 #include "KeybombEffect.h"
+#include "CompletionCelebrationEffect.h"
+#include "CompletionWaveEffect.h"
+#include "../../rendering/UniformCache.h"
+#include "../../rendering/ShaderManager.h"
 #include "LaneBeamClip.h"
 #include "../../RAII.h"
 #include "bgfx/bgfx.h"
@@ -753,6 +757,24 @@ BMSRenderer::BMSRenderer(
   titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
 
   // Changing HUD values share glyph textures; unsupported text stays deferred.
+  if (renderHud) {
+    for (const auto achievement : {completion_celebration::Achievement::FullCombo,
+                                   completion_celebration::Achievement::Perfect,
+                                   completion_celebration::Achievement::Finish,
+                                   completion_celebration::Achievement::Max}) {
+      const auto label = completion_celebration::word(achievement);
+      for (std::size_t i = 0; i < label.size(); ++i) {
+        if (label[i] == ' ') continue;
+        auto &glyph = completionGlyphs[completion_celebration::glyphOffset(achievement) + i];
+        glyph = std::make_unique<TextView>(kHudFontPath, completion_celebration::fontSize(achievement),
+                                          TextView::FontWeight::Bold);
+        glyph->setColor(achievement == completion_celebration::Achievement::Finish
+            ? SDL_Color{220, 227, 232, 255} : SDL_Color{248, 253, 255, 255});
+        glyph->setDeferredTextureMaterialization(false);
+        glyph->setText(std::string(1, label[i]));
+      }
+    }
+  }
   judgeText = std::make_unique<TextView>(kHudFontPath, 38);
   judgeText->setGlyphAtlasEnabled(true);
   judgeText->setAlign(TextView::CENTER);
@@ -915,6 +937,68 @@ void BMSRenderer::drawJudgement(RenderContext context) const {
   }
   judgeText->render(context);
   judgementComboText->render(context);
+}
+
+void BMSRenderer::drawCompletionCelebration(
+    RenderContext &context, const PlayfieldVisualState &frame) {
+  using namespace completion_celebration;
+  const auto &completion = frame.completionCelebration;
+  if (!renderHud || completion.achievement == Achievement::None ||
+      frame.clock.visualTimeMicros < completion.startMicros) return;
+  const float age = static_cast<float>(
+      (static_cast<double>(frame.clock.visualTimeMicros) - completion.startMicros) / 1'000'000.0);
+  if (!visible(completion.achievement, age)) return;
+
+  // The lane-space wash stays below notes and opaque lane covers. Its lane
+  // coordinates follow the current camera, width, and judgement-line position.
+  simpleBatchRenderer.setSubmitView(rendering::main_view);
+  simpleBatchRenderer.setSubmitDepth(gameplay_note_submission_order::kLaneBeamDepth);
+  simpleBatchRenderer.begin();
+  wave::draw(simpleBatchRenderer, completion.achievement, age,
+             playAreaLeftX, playAreaWidth, judgeY, upperBound);
+  simpleBatchRenderer.flush();
+
+  const auto insets = rendering::uiSafeAreaInsets();
+  const float width = static_cast<float>(rendering::window_width - insets.left - insets.right);
+  const float height = static_cast<float>(rendering::window_height - insets.top - insets.bottom);
+  const float scale = std::min(width / 1280, height / 720);
+  if (scale <= 0) return;
+  const float x = insets.left + width * .5F;
+  const float y = insets.top + height * (285.0F / 720);
+  context.flushUiBatch();
+  simpleBatchRenderer.setSubmitView(rendering::ui_view);
+  simpleBatchRenderer.setSubmitDepth(0);
+  simpleBatchRenderer.begin();
+  completion_celebration::draw(simpleBatchRenderer, age, completion.achievement, x, y, scale);
+  simpleBatchRenderer.flush();
+  simpleBatchRenderer.setSubmitView(rendering::main_view);
+
+  const auto label = word(completion.achievement);
+  const auto program = rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
+  const auto sampler = rendering::UniformCache::getInstance().getSampler("s_texColor");
+  constexpr std::array<std::uint16_t, 6> indices{0, 1, 2, 0, 2, 3};
+  for (std::size_t i = 0; i < label.size(); ++i) {
+    const auto &glyph = completionGlyphs[glyphOffset(completion.achievement) + i];
+    const auto motion = letter(age, completion.achievement, i);
+    if (!glyph || motion.alpha <= 0 || !bgfx::isValid(glyph->textureHandle())) continue;
+    const float w = glyph->textureWidth() * scale * motion.scale;
+    const float h = glyph->textureHeight() * scale * motion.scale;
+    const float left = x + motion.x * scale - w * .5F;
+    // Noto's uppercase ink sits below the middle of its line box. Align the
+    // visible letters (rather than that padding) with the pulse origin.
+    const float top = y + (motion.y - fontSize(completion.achievement) * .07F) * scale - h * .5F;
+    const std::array vertices{
+        rendering::PosTexCoord0Vertex{left, top, 0, 0, 0},
+        rendering::PosTexCoord0Vertex{left + w, top, 0, 1, 0},
+        rendering::PosTexCoord0Vertex{left + w, top + h, 0, 1, 1},
+        rendering::PosTexCoord0Vertex{left, top + h, 0, 0, 1}};
+    auto state = context.makeUiBatchState(program, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+    state.texture = glyph->textureHandle();
+    state.sampler = sampler;
+    state.samplerFlags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    RenderContext::OpacityScope opacity(context, motion.alpha);
+    context.appendUiTextured(vertices, indices, state);
+  }
 }
 void BMSRenderer::drawScore(RenderContext &context) const {
   scoreText->render(context);
@@ -2846,6 +2930,7 @@ PresentationFrameResult BMSRenderer::render(RenderContext &context) {
                   ? nullptr
                   : &*prepared->projection,
               &prepared->state->touches);
+  drawCompletionCelebration(context, *prepared->state);
 
   presentationFailure.reset();
   return {.frameSerial = frameSerial,

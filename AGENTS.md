@@ -17,6 +17,7 @@
 ## iOS Build Setup
 
 - `scripts/ios_init.sh` configures the generated bgfx Xcode project and caches only Bundler gems and CocoaPods. It intentionally does not cache `bgfx/build`.
+- If an Xcode CMake probe reports `Subprocess killed`, initialization retries once with fresh CMake metadata. Failure diagnostics are retained in `bgfx/build/ios-configure-failure-1.log` (and `-2.log` if the retry fails); ordinary compiler/configuration failures are not retried.
 - TestFlight clean builds are intentional. Do not remove the TestFlight clean behavior without the user asking.
 - Firebase PR builds should keep checkout-specific DerivedData and the stable Firebase archive object root beneath it. Xcode does not preserve its default archive object location across separate `archive` invocations. `IOS_DERIVED_DATA_PATH` remains available as an explicit override.
 - The iOS app target uses an Xcode file-system-synchronized group and automatically discovers supported files under `src`. Keep platform-only and build-metadata exclusions in the synchronized group's small `membershipExceptions` list; do not add normal new source files there.
@@ -270,6 +271,23 @@ contains examples and timing context if needed.
   Preserve labels, ordering, saved meaning, and clear current/checked states
   across layouts. Apply this guidance when revising controls; existing
   inconsistencies are not precedents.
+
+## Visual Design and Animation
+
+- Before substantial visual or motion work, read
+  [Visual implementation guide](docs/design/visual-implementation-guide.md).
+  It records the reusable skill/tool choices, prototype
+  workflow, and native-renderer handoff criteria.
+- Use `motion-design` for choreography and art direction and
+  `remotion-best-practices` when authoring Remotion prototypes. Discover/read the
+  installed skills; the guide includes restoration commands if unavailable.
+- For a new visual direction, make reviewable moving alternatives in gameplay
+  context before committing to native implementation, unless the user already
+  chose a direction or explicitly asks for direct implementation. Routine fixes
+  and small refinements do not need another exploration phase.
+- Keep authoring tools out of the shipped C++/bgfx runtime. Do not add a web
+  view, Lottie/Rive runtime, or particle engine just to play a celebration without
+  first establishing the need and integration cost.
 
 ## Formatting
 

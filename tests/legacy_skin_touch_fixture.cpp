@@ -133,6 +133,12 @@ class GamePlayScene {
 public:
   RhythmInputHandler *inputHandler = nullptr;
   FixturePresentation *presentation = nullptr;
+  bool practiceMenuActive = false;
+  int practiceTouches = 0;
+  bool handlePracticeMenuTouch(SDL_FingerID, ReplayTouchAction, Vector3) {
+    ++practiceTouches;
+    return true;
+  }
   bool realtimeAuthority = false;
   bool realtimeGameplayAuthorityActive() const { return realtimeAuthority; }
   void refreshLegacyTouchLayout();

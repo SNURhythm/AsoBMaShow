@@ -176,6 +176,7 @@ struct SkinPracticeStateView {
   bool horizontalInputMode = false;
   bool inputTurbo = false;
   int keyMode = 0;
+  bool popnFiveKeys = false;
   std::array<SkinPracticeMenuItemView, 12> items;
   std::size_t cursorPosition = 0;
   int graphType = 0;

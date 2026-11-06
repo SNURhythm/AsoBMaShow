@@ -6,7 +6,7 @@
 namespace kombo {
 enum class Sound { Progress, Complete, Freeze, RoundAdvance, GoalAchieved };
 
-// Short bundled cues use the existing system bus (and therefore master volume).
+// Short bundled cues follow the non-gameplay SFX and master volumes.
 // Scene ownership releases handles safely; rendering never triggers playback.
 class Sounds {
 public:
@@ -33,7 +33,7 @@ public:
       if (!loaded.handle) return;
       handles_[index] = loaded.handle;
     }
-    audio.playSkinSound(*handles_[index], 1.0F, false);
+    audio.playSkinSound(*handles_[index], 1.0F, false, audio::Bus::MenuSfx);
   }
 private:
   AudioWrapper *audio_ = nullptr;

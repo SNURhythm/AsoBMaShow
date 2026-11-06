@@ -195,6 +195,8 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   model.masterVolume.value = intent.masterVolume;
   model.bgmVolume.value = intent.bgmVolume;
   model.keysoundVolume.value = intent.keysoundVolume;
+  model.menuSfxVolume.value = intent.menuSfxVolume;
+  model.gameplaySfxVolume.value = intent.gameplaySfxVolume;
   model.effectiveDeviceLabel =
       deviceLabel(capabilities, effective.request.deviceId);
   model.effectiveSampleRate = effective.effectiveSampleRate;
@@ -379,17 +381,23 @@ SettingsAudioVideoSession::SettingsAudioVideoSession(
 
 audio::ApplyResult SettingsAudioVideoSession::applyVolumes(float master,
                                                            float bgm,
-                                                           float keysound) {
+                                                           float keysound,
+                                                           float menuSfx,
+                                                           float gameplaySfx) {
   auto candidate = audioManager_.lastWorkingSettings();
   candidate.masterVolume = sanitizeVolume(master);
   candidate.bgmVolume = sanitizeVolume(bgm);
   candidate.keysoundVolume = sanitizeVolume(keysound);
+  candidate.menuSfxVolume = sanitizeVolume(menuSfx);
+  candidate.gameplaySfxVolume = sanitizeVolume(gameplaySfx);
   audio::ApplyResult result = audioManager_.apply(candidate);
 
   auto &persisted = settings_.audioVideo.audio;
   persisted.masterVolume = candidate.masterVolume;
   persisted.bgmVolume = candidate.bgmVolume;
   persisted.keysoundVolume = candidate.keysoundVolume;
+  persisted.menuSfxVolume = candidate.menuSfxVolume;
+  persisted.gameplaySfxVolume = candidate.gameplaySfxVolume;
   persist();
   return result;
 }

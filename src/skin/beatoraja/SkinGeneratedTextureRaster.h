@@ -455,6 +455,7 @@ struct SkinGeneratedTextureRasterRequest {
   SkinGeneratedTextureCache *cache = nullptr;
   std::uint64_t contentRevision = 0;
   int minimumUpdateIntervalMillis = 0;
+  std::uint8_t variant = 0;
 };
 
 struct SkinGeneratedTextureRasterResult {
@@ -480,7 +481,8 @@ public:
       const auto acquired = request.cache->acquire(
           {.sourceObject = request.sourceObject,
            .authoredOrdinal = request.authoredOrdinal,
-           .layer = request.layer},
+           .layer = request.layer,
+           .variant = request.variant},
           textureWidth_, textureHeight_, request.contentRevision,
           request.elapsedMillis, request.minimumUpdateIntervalMillis);
       pixmap_ = acquired.pixmap;
@@ -598,7 +600,8 @@ public:
     SkinGeneratedTexturedQuadCommand command;
     command.key = {.sourceObject = request_.sourceObject,
                    .authoredOrdinal = request_.authoredOrdinal,
-                   .layer = request_.layer};
+                   .layer = request_.layer,
+                   .variant = request_.variant};
     command.texture = {.width = textureWidth_,
                        .height = textureHeight_,
                        .rgba = pixmap_->pixels(),

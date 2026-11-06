@@ -739,6 +739,54 @@ int main() { return 0; }
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("command-buffer ownership changed", result.stderr)
 
+    def test_bgfx_configuration_retries_only_a_killed_probe_once(self):
+        script = IOS_INIT.read_text(encoding="utf-8")
+        configure = script[
+            script.index("prepare_bgfx_project() {") : script.index("install_gems() {")
+        ]
+        for failure, repeats, expected_calls, expected_status in (
+            ("Subprocess killed", 1, 2, 0),
+            ("Subprocess killed", 2, 2, 43),
+            ("error: compiler configuration is invalid", 1, 1, 43),
+        ):
+            with self.subTest(failure=failure, repeats=repeats), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                fake_bin = root / "bin"
+                fake_bin.mkdir()
+                build = root / "bgfx/build"
+                build.mkdir(parents=True)
+                (build / "existing-product").write_text("preserved")
+                fake_cmake = fake_bin / "cmake"
+                fake_cmake.write_text(
+                    '#!/bin/bash\nset -eu\n'
+                    'while [ "$1" != "-B" ]; do shift; done\n'
+                    'build="$2"\n'
+                    'count=0\n'
+                    '[ ! -f "$build/calls" ] || count=$(cat "$build/calls")\n'
+                    'count=$((count + 1))\n'
+                    'printf "%s\\n" "$count" > "$build/calls"\n'
+                    'if [ -f "$build/CMakeFiles/stale-probe" ]; then exit 99; fi\n'
+                    'mkdir -p "$build/CMakeFiles"\n'
+                    'touch "$build/CMakeFiles/stale-probe" "$build/CMakeCache.txt"\n'
+                    'if [ "$count" -le "$FAILURE_COUNT" ]; then\n'
+                    '  printf "%s\\n" "$FAILURE_TEXT" > "$build/CMakeFiles/CMakeConfigureLog.yaml"\n'
+                    '  exit 43\n'
+                    'fi\n',
+                    encoding="utf-8",
+                )
+                fake_cmake.chmod(0o755)
+                result = subprocess.run(
+                    ["bash", "-euc", configure + '\nROOT_DIR="$1"\nprepare_bgfx_project',
+                     "bgfx-killed-probe-test", str(root)],
+                    capture_output=True, text=True,
+                    env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                         "FAILURE_TEXT": failure, "FAILURE_COUNT": str(repeats)},
+                )
+                self.assertEqual(expected_status, result.returncode, result.stdout + result.stderr)
+                self.assertEqual(str(expected_calls), (build / "calls").read_text().strip())
+                self.assertEqual("preserved", (build / "existing-product").read_text())
+                self.assertEqual(failure + "\n", (build / "ios-configure-failure-1.log").read_text())
+
     def test_bgfx_configuration_recovers_after_xcode_is_replaced(self):
         script = IOS_INIT.read_text(encoding="utf-8")
         configure = script[

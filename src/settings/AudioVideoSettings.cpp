@@ -38,6 +38,8 @@ void AudioVideoSettings::sanitize() {
   audio.masterVolume = sanitizeVolume(audio.masterVolume);
   audio.bgmVolume = sanitizeVolume(audio.bgmVolume);
   audio.keysoundVolume = sanitizeVolume(audio.keysoundVolume);
+  audio.menuSfxVolume = sanitizeVolume(audio.menuSfxVolume);
+  audio.gameplaySfxVolume = sanitizeVolume(audio.gameplaySfxVolume);
 
   switch (video.mode) {
   case DisplayMode::Windowed:

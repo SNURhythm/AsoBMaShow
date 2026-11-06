@@ -216,6 +216,10 @@ throughput. Buffer count is not a user setting.
   to Lane in both the skin editor and live preview.
   Background groups BGA playback, aspect, brightness, and blur. Skin package
   installation and diagnostics follow selection and appearance controls.
+- Audio includes independent 0–100% Non-gameplay SFX (KOMBO, menu cues and
+  device reminders) and Gameplay SFX (Full Combo/Perfect/Max and Quick Retry)
+  controls. Both default to 100%, apply immediately, and also follow Master.
+  They do not change chart BGM/keysounds, previews, or skin-authored music.
 - Audio starts with volumes and input sounds/count-in, followed by device,
   sample rate/buffer settings, and test sound/status. Mono audio in Audio Output
   defaults to Off; turning it On immediately averages the left and right channels

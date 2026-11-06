@@ -146,6 +146,44 @@ struct SkinMenuAttemptPlan {
   bool doublePlayFlip = false;
 };
 
+enum class SkinMenuDirection : std::uint8_t { Up, Down, Left, Right };
+
+struct SkinMenuInputTicks {
+  int selection = 0;
+  int value = 0;
+  bool horizontal = false;
+  bool turbo = false;
+};
+
+// Source key indices differ from native chart lanes on double-play charts.
+// Keep all input accumulation here so touch, keyboard and controllers share
+// the same direction, hold-repeat and coarse/fine analog behavior.
+class SkinMenuInputController {
+public:
+  void setLanePressed(int keyMode, int lane, bool pressed) noexcept;
+  void setScratchPressed(int keyMode, int player, bool clockwise,
+                         bool pressed) noexcept;
+  void setDirectionPressed(SkinMenuDirection, bool pressed) noexcept;
+  void addAnalogTicks(bool clockwise, int ticks) noexcept;
+  [[nodiscard]] SkinMenuInputTicks read(int keyMode, long long nowMillis,
+                                       int initialDelayMillis,
+                                       int repeatDelayMillis,
+                                       int analogTicksPerScroll,
+                                       bool popnFiveKeys = false) noexcept;
+  [[nodiscard]] int extractAnalogValueTicks(std::size_t selectedElement,
+                                            int analogTicksPerScroll) noexcept;
+
+private:
+  std::array<bool, 52> keys_{};
+  std::array<bool, 4> directions_{};
+  std::array<bool, 4> previousDirections_{};
+  long long nextHoldTick_ = 0;
+  int pendingAnalog_ = 0;
+  int analogX_ = 0;
+  int analogY_ = 0;
+  bool horizontal_ = false;
+};
+
 [[nodiscard]] SkinMenuAttemptPlan
 skinMenuAttemptPlan(const SkinMenuProperty &) noexcept;
 void applySkinMenuPracticeModifier(bms_parser::Chart &, const SkinMenuAttemptPlan &);
@@ -156,6 +194,7 @@ public:
   SkinMenuController(Configuration, SkinMenuInputs);
 
   void refreshInputs(SkinMenuInputs) noexcept;
+  void setInputModifiers(bool horizontal, bool turbo) noexcept;
   void setVisibleItemCount(int) noexcept;
   void setItemScrollPosition(float) noexcept;
   [[nodiscard]] float itemScrollPosition() const noexcept;
@@ -163,6 +202,9 @@ public:
   [[nodiscard]] bool changeVisibleItem(std::size_t index, bool increment,
                                        bool analog = false,
                                        bool turbo = false);
+  void moveSelection(bool forward) noexcept;
+  [[nodiscard]] bool changeSelection(bool increment, bool analog = false,
+                                     bool turbo = false);
   [[nodiscard]] const Configuration &configuration() const noexcept;
   [[nodiscard]] const SkinMenuProperty &property() const noexcept;
 

@@ -1280,6 +1280,46 @@ void testSchedulerWaitConvertsChartDeltaToWallTime() {
           "past scheduler targets remain immediately eligible");
 }
 
+void testSfxBusesMixIndependentlyWhileChartClockIsStopped() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = std::vector<short>(64, 16384);
+  sound.outputFrameCount = 64;
+  AudioCallbackState state;
+  for (auto bus : {audio::Bus::MenuSfx, audio::Bus::GameplaySfx}) {
+    require(audio::playback::AppendActiveSound(state, &sound, bus, 0),
+            "SFX voices start");
+    require(audio::playback::InsertScheduledSound(state,
+                {.soundData = &sound, .bus = bus, .startMicros = 1000}),
+            "SFX schedule accepts system-owned voices");
+  }
+  require(state.activeNonSystemVoices.load() == 0 &&
+              state.scheduledNonSystemSounds.load() == 0,
+          "SFX never count as chart audio that keeps playback alive");
+  audio::playback::ClearCallbackSounds(state, true);
+  require(state.playingSoundCount == 2 && state.scheduledSoundCount == 2,
+          "chart reset preserves both SFX groups");
+  const auto mix = [&](float menu, float gameplay) {
+    const player_settings::AudioSettings settings{
+        .masterVolume = 0.5F, .menuSfxVolume = menu, .gameplaySfxVolume = gameplay};
+    const auto volumes = audio::VolumesFromSettings(settings);
+    std::vector<float> output(1, 0.0F);
+    audio::playback::MixActiveSounds(state, output, 1, 1, 0, 0, 100,
+        audio::playback::MixScope::SystemOnly,
+        audio::EffectiveGain(audio::Bus::MenuSfx, volumes),
+        audio::EffectiveGain(audio::Bus::GameplaySfx, volumes));
+    return output[0];
+  };
+  requireNear(mix(0.25F, 0.0F), 0.05625F,
+              "menu SFX follows its volume and master while gameplay SFX is muted");
+  requireNear(mix(0.0F, 0.75F), 0.16875F,
+              "active gameplay SFX responds to gain changes independently");
+  requireNear(mix(0.0F, 0.0F), 0.0F, "both SFX groups can be muted");
+  audio::playback::ClearCallbackSounds(state);
+  require(state.playingSoundCount == 0 && state.scheduledSoundCount == 0,
+          "full teardown clears SFX");
+}
+
 void testSystemOnlyMixPlaysSystemWhileSkippingBgmKeysoundAndScheduled() {
   // A stopped gameplay clock must still let Bus::System sounds (select SEs,
   // looping BGM, previews) reach the output, while keeping chart-timed Bgm and
@@ -1838,6 +1878,7 @@ int main() {
     testRealtimeCommandDeterministicallyAdmitsAtVoiceLimit();
     testJukeboxSourceClassificationAndSeekOverlap();
     testSchedulerWaitConvertsChartDeltaToWallTime();
+    testSfxBusesMixIndependentlyWhileChartClockIsStopped();
     testSystemOnlyMixPlaysSystemWhileSkippingBgmKeysoundAndScheduled();
     testSystemVoiceActivityCountersTrackNonSystemOwnership();
     testClearCallbackSoundsPreservesSystemVoicesAndSchedules();

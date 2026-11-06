@@ -394,7 +394,8 @@ void testAudioModelShowsFixedControlsDisabledWithExplanations() {
               !model.bufferFrames.explanation.empty(),
           "every disabled stream field explains the platform limitation");
   require(model.masterVolume.enabled && model.bgmVolume.enabled &&
-              model.keysoundVolume.enabled,
+              model.keysoundVolume.enabled && model.menuSfxVolume.enabled &&
+              model.gameplaySfxVolume.enabled,
           "app-owned volume controls remain enabled on fixed mobile audio");
   require(findOption(model.devices, "desktop:imported") != nullptr,
           "disabled imported stream intent remains visible");
@@ -450,7 +451,7 @@ void testMonoAudioAppliesAndPersistsWithoutRestartingImportedStream() {
   require(fixture.audioRuntime.monoAudio && fixture.settings.audioVideo.audio.monoAudio &&
               fixture.saves == 1,
           "mono applies and saves immediately even with unavailable imported device intent");
-  fixture.session.applyVolumes(0.4F, 0.5F, 0.6F);
+  fixture.session.applyVolumes(0.4F, 0.5F, 0.6F, 0.2F, 0.8F);
   require(fixture.audioRuntime.monoAudio, "changing volume retains mono output");
   fixture.session.applyMonoAudio(false);
   require(!fixture.audioRuntime.monoAudio && !fixture.settings.audioVideo.audio.monoAudio &&
@@ -470,7 +471,7 @@ void testVolumeChangesApplyAndPersistImmediatelyDespiteImportedStreamIntent() {
   fixture.settings.audioVideo.audio.requestedSampleRate = 96000;
   fixture.settings.audioVideo.audio.requestedBufferFrames = 64;
 
-  const auto result = fixture.session.applyVolumes(0.4F, 0.5F, 0.6F);
+  const auto result = fixture.session.applyVolumes(0.4F, 0.5F, 0.6F, 0.2F, 0.8F);
 
   require(result.status == audio::ApplyStatus::Applied ||
               result.status == audio::ApplyStatus::Unsupported,
@@ -481,7 +482,9 @@ void testVolumeChangesApplyAndPersistImmediatelyDespiteImportedStreamIntent() {
           "volume-only changes never restart or suspend playback");
   require(nearlyEqual(fixture.audioRuntime.volumes.master, 0.4) &&
               nearlyEqual(fixture.audioRuntime.volumes.bgm, 0.5) &&
-              nearlyEqual(fixture.audioRuntime.volumes.keysound, 0.6),
+              nearlyEqual(fixture.audioRuntime.volumes.keysound, 0.6) &&
+              nearlyEqual(fixture.audioRuntime.volumes.menuSfx, 0.2) &&
+              nearlyEqual(fixture.audioRuntime.volumes.gameplaySfx, 0.8),
           "all app-owned volume groups apply immediately");
   require(fixture.settings.audioVideo.audio.outputDeviceId ==
                   "desktop:imported" &&
@@ -489,8 +492,15 @@ void testVolumeChangesApplyAndPersistImmediatelyDespiteImportedStreamIntent() {
               fixture.settings.audioVideo.audio.requestedBufferFrames == 64,
           "volume-only changes do not discard imported stream intent");
   require(nearlyEqual(fixture.settings.audioVideo.audio.masterVolume, 0.4) &&
+              nearlyEqual(fixture.settings.audioVideo.audio.menuSfxVolume, 0.2) &&
+              nearlyEqual(fixture.settings.audioVideo.audio.gameplaySfxVolume, 0.8) &&
               fixture.saves == 1,
           "volume-only changes save immediately");
+  fixture.session.applyVolumes(0.4F, 0.5F, 0.6F, 0.0F, 0.3F);
+  require(nearlyEqual(fixture.audioRuntime.volumes.menuSfx, 0.0) &&
+              nearlyEqual(fixture.audioRuntime.volumes.gameplaySfx, 0.3) &&
+              fixture.audioRuntime.restartCalls == 0,
+          "SFX-only changes update gains without restarting the device");
 }
 
 void testStreamIntentPersistsOnlyAfterSuccessfulApply() {

@@ -7431,6 +7431,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     add_executable(gameplay_terminal_scene_tests
         ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
+        src/scene/play/RealtimeTouchInputRouter.cpp
         src/scene/play/RhythmLaneInputController.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/scene/play/PlayfieldChartVisualModel.cpp

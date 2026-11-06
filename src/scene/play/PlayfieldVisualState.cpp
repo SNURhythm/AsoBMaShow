@@ -82,6 +82,8 @@ bool PlayfieldAuthorityUpdate::operator==(
          skinTargetList == other.skinTargetList &&
          applicationUptimeMillis == other.applicationUptimeMillis &&
          autoPlayMarkVisible == other.autoPlayMarkVisible &&
+         completionCelebrationEligible == other.completionCelebrationEligible &&
+         completionFinishEligible == other.completionFinishEligible &&
          gameplayMode == other.gameplayMode &&
          loadingState == other.loadingState &&
          courseMode == other.courseMode &&
@@ -102,7 +104,8 @@ bool PlayfieldAuthorityUpdate::operator==(
          laneCoverChangeKind == other.laneCoverChangeKind &&
          resetLaneCoverVisibleTimeReference ==
              other.resetLaneCoverVisibleTimeReference &&
-         practiceMenuActive == other.practiceMenuActive;
+         practiceMenuActive == other.practiceMenuActive &&
+         originalPracticeTotalNotes == other.originalPracticeTotalNotes;
 }
 
 PlayfieldVisualStateStore::PlayfieldVisualStateStore(
@@ -138,12 +141,26 @@ void PlayfieldVisualStateStore::resetModel(
   for (const auto &timeline : model.timelines) {
     timelineTimes.emplace(timeline.id, timeline.timeMicros);
   }
+  completionFinalTailMicros_.reset();
   for (const auto &note : model.notes) {
     const auto lane = laneIndices_.find(note.lane);
     const auto time = timelineTimes.find(note.timelineId);
     if (!note.inActiveSlot || note.kind != ChartVisualNoteKind::LongHead ||
         lane == laneIndices_.end() || time == timelineTimes.end()) {
       continue;
+    }
+    // A miss or early release can resolve scoring before this authored tail.
+    // Follow active heads so pair-only tails count, but overwritten heads do not.
+    if (note.source == ChartVisualNoteSource::Playable) {
+      const auto pair = noteIndices_->find(note.pairId);
+      if (pair != noteIndices_->end()) {
+        const auto &tail = model.notes[pair->second];
+        const auto tailTime = timelineTimes.find(tail.timelineId);
+        if (tail.kind == ChartVisualNoteKind::LongTail && tailTime != timelineTimes.end()) {
+          completionFinalTailMicros_ = completionFinalTailMicros_
+              ? std::max(*completionFinalTailMicros_, tailTime->second) : tailTime->second;
+        }
+      }
     }
     const bool hcn = note.longNoteMode == ChartLongNoteMode::HCN;
     longNoteSources_.emplace(note.id, LongNoteSource{lane->second, time->second, hcn});
@@ -166,6 +183,8 @@ void PlayfieldVisualStateStore::resetModel(
   liveTouches_ = {};
   touches_.clear();
   bgaMissTracker_.reset();
+  completionTracker_.reset(model.staticMetadata.totalNotes);
+  authoritativeCompletionCelebration_.reset();
   judgeSequence_ = 0;
   lastJudge_ = JudgeResult(None, 0);
   lastJudgeVisualMicros_ = kPlayfieldTimestampOff;
@@ -387,6 +406,23 @@ PlayfieldVisualState
 PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
                                    bool includeNotes) const {
   captureTouches(clock.replayTouchTimeMicros);
+  auto completion = authoritativeCompletionCelebration_.value_or(completionTracker_.state());
+  if (authority_.failureAnimationActive ||
+      (!authority_.completionCelebrationEligible && !authority_.completionFinishEligible)) {
+    completion = {};
+  } else if (!authority_.completionCelebrationEligible &&
+             completion.achievement != completion_celebration::Achievement::None) {
+    completion.achievement = completion_celebration::Achievement::Finish;
+  }
+  if (completion.achievement == completion_celebration::Achievement::Finish &&
+      completionFinalTailMicros_) {
+    // Gate presentation only, including worker events and assisted downgrades.
+    // A future start lets the normal animation clock wait without another judge
+    // event; once reached, its age starts at zero instead of skipping the effect.
+    const auto tailVisualMicros = clock.visualTimeMicros +
+        (*completionFinalTailMicros_ - clock.gameplayTimeMicros);
+    completion.startMicros = std::max(completion.startMicros, tailVisualMicros);
+  }
   PlayfieldVisualState result{
       .clock = clock,
       .configuration = configuration_,
@@ -401,6 +437,7 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
       .lastJudge = lastJudge_,
       .lastJudgeVisualMicros = lastJudgeVisualMicros_,
       .bgaMiss = bgaMissTracker_.snapshot(),
+      .completionCelebration = completion,
       .combo = combo_,
       .score = score_,
       .fastSlowMicros = fastSlowMicros_,
@@ -543,6 +580,8 @@ void PlayfieldVisualStateStore::onJudge(JudgeResult judge, int combo,
   }
   lastJudge_ = judge;
   lastJudgeVisualMicros_ = clock.visualTimeMicros;
+  completionTracker_.observe(judge.judgement, combo, clock.visualTimeMicros,
+                              authority_.gaugeRules.ruleset == GameplayRuleset::Beatoraja);
   if (recordTimingSample) {
     onTimingSample(judge, clock);
   }

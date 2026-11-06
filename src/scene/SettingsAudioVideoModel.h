@@ -41,6 +41,8 @@ struct AudioControlModel {
   VolumeControlModel masterVolume;
   VolumeControlModel bgmVolume;
   VolumeControlModel keysoundVolume;
+  VolumeControlModel menuSfxVolume;
+  VolumeControlModel gameplaySfxVolume;
   std::string effectiveDeviceLabel;
   std::uint32_t effectiveSampleRate = 0;
   std::uint32_t effectiveBufferFrames = 0;
@@ -89,7 +91,8 @@ public:
                             display::DisplaySettingsManager &displayManager,
                             Callbacks callbacks);
 
-  audio::ApplyResult applyVolumes(float master, float bgm, float keysound);
+  audio::ApplyResult applyVolumes(float master, float bgm, float keysound,
+                                  float menuSfx, float gameplaySfx);
   audio::ApplyResult applyMonoAudio(bool enabled);
   audio::ApplyResult
   applyStreamIntent(const player_settings::AudioSettings &candidate);

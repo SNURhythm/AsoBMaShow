@@ -37,7 +37,9 @@ RealtimeGameplayTerminalAction classifyRealtimeGameplayTerminal(
                ? RealtimeGameplayTerminalAction::CompleteChart
                : RealtimeGameplayTerminalAction::Wait;
   case GameplayTerminalReason::ChartComplete:
-    return RealtimeGameplayTerminalAction::CompleteChart;
+    // Scoring can stop before the presentation's end-of-notes margin.
+    return sourcePlaytimeElapsed ? RealtimeGameplayTerminalAction::CompleteChart
+                                 : RealtimeGameplayTerminalAction::Wait;
   case GameplayTerminalReason::PracticeComplete:
     return sessionBackedPractice
                ? RealtimeGameplayTerminalAction::CompletePractice

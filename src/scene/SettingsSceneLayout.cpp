@@ -216,6 +216,8 @@ void SettingsScene::resetViewState() {
   masterVolumeInput = nullptr;
   bgmVolumeInput = nullptr;
   keysoundVolumeInput = nullptr;
+  menuSfxVolumeInput = nullptr;
+  gameplaySfxVolumeInput = nullptr;
   audioEffectiveText = nullptr;
   audioStatusText = nullptr;
   displayStatusText = nullptr;

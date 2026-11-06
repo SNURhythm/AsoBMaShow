@@ -616,6 +616,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
   result.chartMd5 = chart.Meta.MD5;
   result.chartSha256 = chart.Meta.SHA256;
   result.keyCount = chart.Meta.KeyMode;
+  result.popnFiveKeys = chart.Meta.IsPopnFiveKey();
   result.scratchlessSinglePlay = gameplay::isScratchlessSinglePlay(chart);
   result.initialBpm = chart.Meta.Bpm;
   result.text.title = chart.Meta.Title;
@@ -720,6 +721,12 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
       if (hasAny(timeline->Notes) || hasAny(timeline->InvisibleNotes) ||
           hasAny(timeline->LandmineNotes)) {
         lastVisualNoteTimelineOrdinal = authoredTimelineOrdinal;
+      }
+      if (hasAny(timeline->Notes) || hasAny(timeline->InvisibleNotes) ||
+          hasAny(timeline->LandmineNotes) || hasAny(timeline->BackgroundNotes) ||
+          timeline->BgaBase != -1 || timeline->BgaLayer != -1) {
+        result.staticMetadata.lastEventTimeMicros =
+            std::max(result.staticMetadata.lastEventTimeMicros, timeline->Timing);
       }
       ++authoredTimelineOrdinal;
     }

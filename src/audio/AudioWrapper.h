@@ -130,6 +130,8 @@ struct UserData {
   std::atomic<int> *playbackRatePercent;
   std::atomic<float> *bgmGain;
   std::atomic<float> *keysoundGain;
+  std::atomic<float> *menuSfxGain = nullptr;
+  std::atomic<float> *gameplaySfxGain = nullptr;
   std::atomic_bool *monoAudio;
   std::vector<float> *mixBuffer;
   Biquad *bassFilter;
@@ -227,7 +229,7 @@ public:
                 std::size_t maximumTotalDecodedBytes,
                 std::stop_token stop = {}) noexcept;
   bool playSkinSound(audio::SkinSoundHandle handle, float gain,
-                     bool loop) noexcept;
+                     bool loop, audio::Bus bus = audio::Bus::System) noexcept;
   bool stopSkinSound(audio::SkinSoundHandle handle) noexcept;
   bool disposeSkinSound(audio::SkinSoundHandle handle) noexcept;
   bool retireSkinSoundForTeardown(audio::SkinSoundHandle handle) noexcept;
@@ -355,6 +357,8 @@ private:
   std::atomic<int> playbackRatePercent{100};
   std::atomic<float> bgmGain{1.0f};
   std::atomic<float> keysoundGain{1.0f};
+  std::atomic<float> menuSfxGain{1.0f};
+  std::atomic<float> gameplaySfxGain{1.0f};
   std::atomic_bool monoAudio{false};
   audio::RuntimeState runtimeState_;
 

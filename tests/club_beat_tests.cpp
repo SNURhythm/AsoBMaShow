@@ -169,7 +169,7 @@ void testSaturatedGameplayEndHelpers() {
           "result helper saturates the transition delay and ignores negative grace");
   chart.Meta.TotalLength = 1'000'000;
   require(chart_playback_duration::GameplayResultTransitionMicros(chart, 100) ==
-              3'000'100,
+              2'000'100,
           "ordinary gameplay end helper retains grace and transition delays");
 }
 } // namespace
