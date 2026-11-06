@@ -3139,6 +3139,39 @@ void testPracticeSuppliesGameplayTimeProperties() {
   }
 }
 
+void testPracticeClockNeverSynthesizesResultFadeout() {
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .mutationTable = mutations});
+  // A presentation clock can cross the range while an attempt is being
+  // prepared or retired. It must not drive the ordinary result state machine.
+  // Litone12's full-screen black overlay is controlled by TIMER_FADEOUT (2).
+  std::uint64_t serial = 0;
+  for (const bool menuActive : {false, false, true}) {
+    auto state = stateAt(++serial);
+    state.authority.gameplayMode = PlayfieldGameplayMode::Practice;
+    state.authority.practiceMenuActive = menuActive;
+    state.clock.gameplayTimeMicros = 40'000'000 + serial * 1'000'000;
+    state.clock.visualTimeMicros = state.clock.gameplayTimeMicros;
+    state.clock.playTimer = practiceSkinPlayTimer(
+        state.clock.gameplayTimeMicros, 0, 30'000'000, menuActive);
+    bridge.beginFrame(state, projectionAt(serial));
+    expect(bridge.integerProperty({164}).supported &&
+               bridge.floatProperty({6}).supported,
+           "practice time displays remain available beyond the range");
+    for (const int timer : {143, 908, 2}) {
+      expect(bridge.timerProperty({timer}) == kPlayfieldTimestampOff,
+             "practice clocks never synthesize normal-play end or fadeout timers");
+    }
+    bridge.discardFrame();
+  }
+}
+
 void testSettingsPreviewSuppliesGameplayTimeProperties() {
   PlayfieldChartVisualModel chart;
   ValidatedBeatorajaSkinModel model;
@@ -4545,6 +4578,7 @@ int main() {
   testChartDocumentBooleansUseCapturedLibraryMetadata();
   testScoreAndComboTimersUseCapturedGameplayState();
   testPracticeSuppliesGameplayTimeProperties();
+  testPracticeClockNeverSynthesizesResultFadeout();
   testSettingsPreviewSuppliesGameplayTimeProperties();
   testPlayTimerPropertiesMatchPinnedJavaConversions();
   testReadyAndLiveTimersUseTheSharedSkinStateClock();

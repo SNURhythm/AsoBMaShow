@@ -704,7 +704,12 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
   }
 
   const auto &playTimer = snapshot->clock.playTimer;
-  if (playTimer.active && playTimer.elapsedMillisExact &&
+  // Native practice owns its range completion and retry/menu transitions.
+  // Its paired clock supplies time/progress properties, but must not run the
+  // ordinary BMSPlayer STATE_FINISHED -> TIMER_FADEOUT sequence. In particular,
+  // a latched fadeout would cover the still-active practice menu (Litone12).
+  if (snapshot->authority.gameplayMode != PlayfieldGameplayMode::Practice &&
+      playTimer.active && playTimer.elapsedMillisExact &&
       playTimer.playtimeMillis.has_value()) {
     const std::int64_t elapsedMillis = playTimerElapsedMillis(*snapshot);
     const bool musicEndWasActive =
