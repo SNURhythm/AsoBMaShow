@@ -21,6 +21,7 @@
 #include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
 #include "VirtualControllerLayout.h"
+#include "PracticeMenuTouchInput.h"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "StartSelectControl.h"
 #include "GuidedAccessReminder.h"
@@ -155,6 +156,14 @@ private:
   void drainRealtimeStartSelectInputs();
   void refreshRealtimeTouchLayout();
   void refreshLegacyTouchLayout();
+  void refreshPracticeMenuInput();
+  void clearPracticeMenuInput();
+  bool handlePracticeMenuTouch(SDL_FingerID finger, ReplayTouchAction action,
+                                Vector3 normalizedLocation);
+  void createPracticeMenuControls();
+  void updatePracticeMenuControls();
+  gameplay::RealtimeTouchHitSnapshot makeGameplayTouchHitSnapshot(
+      const gameplay::RealtimeTouchLayoutRefreshKey &key);
   void refreshGameplayPresentationGeometry();
   void updateSkinResetLayoutVisibility();
   void acquireGameplaySkinForAttempt();
@@ -290,6 +299,8 @@ private:
   View *playbackFailureLayout = nullptr;
   Button *pauseButton = nullptr;
   Button *practiceRestartButton = nullptr;
+  View *practiceMenuControls = nullptr;
+  TextView *practiceMenuSelectionText = nullptr;
   Button *skinResetLayoutButton = nullptr;
   TextView *practiceHudText = nullptr;
   bool coursePauseHoldActive = false;
@@ -421,6 +432,8 @@ private:
   bool practiceMenuActive = false;
   long long practiceMenuStartPressedMicros = 0;
   long long practiceMenuPresentationStartMicros = 0;
+  std::unique_ptr<gameplay::PracticeMenuTouchInput> practiceMenuTouchInput;
+  std::optional<gameplay::RealtimeTouchLayoutRefreshKey> practiceMenuTouchLayoutKey;
   bool practiceGhostPublished = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;

@@ -163,6 +163,9 @@ public:
   [[nodiscard]] bool changeVisibleItem(std::size_t index, bool increment,
                                        bool analog = false,
                                        bool turbo = false);
+  void moveSelection(bool forward) noexcept;
+  [[nodiscard]] bool changeSelection(bool increment, bool analog = false,
+                                     bool turbo = false);
   [[nodiscard]] const Configuration &configuration() const noexcept;
   [[nodiscard]] const SkinMenuProperty &property() const noexcept;
 

@@ -32,6 +32,10 @@ public:
   void setSkinVisibleItemCount(int count) noexcept;
   [[nodiscard]] bool changeSkinMenuVisibleItem(std::size_t index,
                                                bool increment);
+  void moveSkinMenuSelection(bool forward);
+  [[nodiscard]] bool changeSkinMenuSelection(bool increment,
+                                             bool analog = false,
+                                             bool turbo = false);
   [[nodiscard]] SkinMenuState skinMenuState() const;
   [[nodiscard]] SkinMenuState
   skinMenuState(const SkinMenuInputs &inputs) const;

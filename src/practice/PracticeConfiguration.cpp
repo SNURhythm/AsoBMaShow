@@ -418,7 +418,21 @@ bool SkinMenuController::changeVisibleItem(std::size_t index, bool increment,
     return false;
   }
   cursorPosition_ = *element;
-  switch (*element) {
+  return changeSelection(increment, analog, turbo);
+}
+
+void SkinMenuController::moveSelection(bool forward) noexcept {
+  for (std::size_t step = 0; step < 12; ++step) {
+    cursorPosition_ = (cursorPosition_ + (forward ? 1 : 11)) % 12;
+    if (elementAvailable(cursorPosition_)) break;
+  }
+  // Keep the selected row visible in skins that show only part of the menu.
+  setVisibleItemCount(static_cast<int>(visibleItemCount_));
+}
+
+bool SkinMenuController::changeSelection(bool increment, bool analog,
+                                         bool turbo) {
+  switch (cursorPosition_) {
   case 0: {
     const int maximum = std::max(
         0, roundDownToHundredMillis(

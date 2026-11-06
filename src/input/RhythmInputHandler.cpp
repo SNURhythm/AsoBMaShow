@@ -673,3 +673,26 @@ bms_parser::Note *RhythmInputHandler::applyTouchLane(
       {.player = player, .keyMode = keyMode}, lane, pressed,
       scratchDirection, touchEventTimestampMicros(), backSpin);
 }
+
+void RhythmInputHandler::applyRoutedTouchInput(
+    const gameplay::RealtimeGameplayInput &input) {
+  if (logicalInputPipeline == nullptr || !input.hasReplayControl) return;
+  input::LogicalActionKind kind;
+  switch (input.replayControl.kind) {
+  case replay::LogicalControlKind::Lane: kind = input::LogicalActionKind::Lane; break;
+  case replay::LogicalControlKind::ScratchClockwise:
+    kind = input::LogicalActionKind::ScratchClockwise; break;
+  case replay::LogicalControlKind::ScratchCounterClockwise:
+    kind = input::LogicalActionKind::ScratchCounterClockwise; break;
+  case replay::LogicalControlKind::Start: kind = input::LogicalActionKind::Start; break;
+  case replay::LogicalControlKind::Select: kind = input::LogicalActionKind::Select; break;
+  }
+  const bool pressed = input.type == gameplay::RealtimeGameplayInputType::Press;
+  (void)logicalInputPipeline->consumeTouchTransition(
+      {.scope = {.player = input.replayControl.player, .keyMode = keyMode},
+       .action = {.kind = kind, .lane = input.lane},
+       .pressed = pressed,
+       .value = pressed ? 1.0F : 0.0F,
+       .timestampMicros = static_cast<std::uint64_t>(std::max<std::int64_t>(0, input.steadyTimestampMicros))},
+      input.backSpin);
+}

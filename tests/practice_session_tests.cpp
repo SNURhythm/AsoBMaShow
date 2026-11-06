@@ -29,6 +29,23 @@ int main() {
     return 1;
   }
 
+  session.configureSkinMenu({.lastTimelineMicros = 10'000'000, .keyMode = 7});
+  session.setSkinVisibleItemCount(3);
+  session.moveSkinMenuSelection(false);
+  if (!expect(session.skinMenuState().cursorPosition == 9,
+              "touch navigation skips unavailable double-play settings")) return 1;
+  session.moveSkinMenuSelection(true);
+  const auto start = session.skinMenuState().startTimeMillis;
+  if (!expect(session.skinMenuState().cursorPosition == 0 &&
+                  session.skinMenuState().items[0].selected,
+              "wrapped touch selection scrolls back into view") ||
+      !expect(session.changeSkinMenuSelection(true) &&
+                  session.skinMenuState().startTimeMillis == start + 100,
+              "touch plus button changes the selected practice value")) return 1;
+  const auto heldMenu = session.skinMenuState({.horizontalInputMode = true, .inputTurbo = true});
+  if (!expect(heldMenu.horizontalInputMode && heldMenu.inputTurbo,
+              "skin menu receives current held-key modifiers")) return 1;
+
   session.beginAttempt();
   ReplayData completedReplay;
   completedReplay.events.push_back({.action = ReplayEventAction::Press,

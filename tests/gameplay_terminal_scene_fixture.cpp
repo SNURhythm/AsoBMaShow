@@ -1,3 +1,4 @@
+#include "scene/play/PracticeMenuTouchInput.h"
 #include "i18n/Localization.h"
 #include "GameplayKeyMode.h"
 #include "RAII.h"
@@ -278,6 +279,10 @@ public:
   std::unique_ptr<FixtureRealtimeSession> realtimeGameplaySession;
   std::optional<gameplay::StartSelectControl> startSelectControl;
   bool practiceMenuActive = false;
+  std::unique_ptr<gameplay::PracticeMenuTouchInput> practiceMenuTouchInput;
+  std::optional<gameplay::RealtimeTouchLayoutRefreshKey> practiceMenuTouchLayoutKey;
+  void clearPracticeMenuInput();
+  void updatePracticeMenuControls() {}
   long long practiceMenuStartPressedMicros = 0;
   bool touchVisualizerLoaded = false;
   bool recordedAttemptCompleted = false;
@@ -722,8 +727,27 @@ void testAbortExportAdmission(const ReplayData &replay) {
 
 #include "gameplay_terminal_persistence_fixture.h"
 
+void testPracticeMenuPauseClearsStartHold() {
+  GamePlayScene scene;
+  scene.practiceMenuActive = true;
+  scene.state->isPlaying = false;
+  FixturePauseView pause;
+  scene.pauseLayout = &pause;
+  scene.clock = 100;
+  scene.consumePracticeMenuLaneInput(0, true);
+  scene.showPauseMenu(false);
+  scene.clock += 2'000'000;
+  scene.update(0);
+  require(scene.practiceMenuStartPressedMicros == 0 && !scene.lanePressed[0],
+          "pausing setup clears held-key feedback and the pending start");
+  scene.closePauseMenu();
+  scene.update(0);
+  require(scene.practiceMenuActive && scene.resets == 0,
+          "closing setup pause cannot start a held section");
+}
+
 void testRestartStartsPracticeMenuAttempt() {
-  for (const bool restartButton : {true, false}) {
+  for (const int startMethod : {0, 1, 2}) {
     GamePlayScene scene;
     practice::Configuration configuration{
         .startMicros = 0, .endMicros = 10'000'000};
@@ -732,15 +756,58 @@ void testRestartStartsPracticeMenuAttempt() {
         {.lastTimelineMicros = 10'000'000, .keyMode = 7});
     scene.practiceMenuActive = true;
     scene.state->isPlaying = false;
-    if (restartButton) {
+    scene.startSelectControl.emplace(gameplay::StartSelectControl::Configuration{.keyMode = 7});
+    scene.consumeStartSelectInput({.control = {.kind = replay::LogicalControlKind::ScratchClockwise},
+                                   .pressed = true, .analogScratch = true});
+    require(scene.options.practiceSession->skinMenuState().cursorPosition == 0,
+            "analog scratch direction alone does not duplicate a menu tick");
+    scene.consumeStartSelectInput({.control = {.kind = replay::LogicalControlKind::ScratchClockwise},
+                                   .analogScratchTicks = 2});
+    require(scene.options.practiceSession->skinMenuState().cursorPosition == 2,
+            "spin scratch advances the menu once per angular tick");
+    scene.clock = 100;
+    scene.consumePracticeMenuLaneInput(7, true);
+    require(scene.practiceMenuStartPressedMicros == 0,
+            "scratch navigation never starts a practice attempt");
+    scene.consumePracticeMenuLaneInput(7, false);
+    scene.consumePracticeMenuLaneInput(1, true);
+    require(scene.lanePressed[1] && scene.state->stagePassedNotes == 0,
+            "practice setup publishes held keys without judging notes");
+    scene.consumePracticeMenuLaneInput(1, false);
+    require(!scene.lanePressed[1], "practice setup releases held key feedback");
+    if (startMethod == 0) {
       scene.restartCurrentPattern();
     } else {
       scene.clock = 1'000'000;
-      scene.consumePracticeMenuLaneInput(
-          scene.chart->Meta.GetTotalLaneIndices().front(), true);
+      if (startMethod == 1) {
+        scene.consumePracticeMenuLaneInput(
+            scene.chart->Meta.GetKeyLaneIndices().front(), true);
+      } else {
+        scene.practiceMenuTouchInput = std::make_unique<gameplay::PracticeMenuTouchInput>(
+            gameplay::RealtimeTouchInputSink{
+                .context = &scene,
+                .emit = [](void *context, const gameplay::RealtimeGameplayInput &input) {
+                  static_cast<GamePlayScene *>(context)->consumePracticeMenuLaneInput(
+                      input.lane, input.type == gameplay::RealtimeGameplayInputType::Press);
+                  return true;
+                }}, gameplay::RealtimeTouchPresentationSink{});
+        gameplay::RealtimeTouchLayout layout;
+        layout.revision = 1;
+        layout.keyMode = 7;
+        layout.laneRegions.push_back({.bottomLeft = {0, 1}, .bottomRight = {1, 1},
+                                      .topLeft = {0, 0}, .topRight = {1, 0}, .lane = 0});
+        scene.practiceMenuTouchInput->publish(layout,
+            {.layoutRevision = 1,
+             .uiTransform = {.renderWidth = 100, .renderHeight = 100,
+                             .uiScaleX = 1, .uiScaleY = 1,
+                             .uiWidth = 100, .uiHeight = 100}}, scene.clock);
+        scene.practiceMenuTouchInput->consume(1, gameplay::RealtimeTouchPhase::Down,
+                                              0.5F, 0.5F, scene.clock);
+      }
       scene.clock += 1'000'001;
       scene.update(0.0F);
     }
+    require(!scene.practiceMenuTouchInput, "attempt retires the setup touch router");
     require(!scene.practiceMenuActive && scene.practiceMenuStartPressedMicros == 0,
             "starting practice must leave the menu before gameplay updates");
     require(scene.resets == 1 && scene.practiceMenuPreparations == 1 &&
@@ -3147,6 +3214,7 @@ int main(int argc, char **argv) {
     }
   }
   std::cout << "COR01 actual scene practice tests passed\n";
+  testPracticeMenuPauseClearsStartHold();
   testRestartStartsPracticeMenuAttempt();
   testQueuedAbortLifetime();
   testPausePenaltyAndFreshAttemptBoundary();

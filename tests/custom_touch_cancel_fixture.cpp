@@ -146,6 +146,7 @@ struct GamePlayScene {
   static constexpr long long kCoursePauseHoldMicros = 1'000'000, kCoursePauseRewindMicros = 100'000;
   int completions = 0;
   bool isCoursePlayback() const { return true; }
+  bool canSkipResultDelay() const { return false; }
   void showPauseMenu(bool) { ++completions; }
   bool handleCoursePauseButtonEvent(SDL_Event &);
   void beginCoursePauseHold(bool, SDL_FingerID);

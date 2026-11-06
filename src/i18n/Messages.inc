@@ -174,6 +174,7 @@
 {"gameplay.saved.label", "Saved", "저장됨", "保存済み", "已保存", "已儲存"},
 {"gameplay.selected_gameplay_ruleset_failed_started.message", "The selected gameplay ruleset could not be started.", "선택한 플레이 규칙으로 시작하지 못했습니다.", "選択したプレイルールで開始できませんでした。", "无法启动所选演奏规则集。", "無法啟動所選演奏規則集。"},
 {"gameplay.selected_gameplay_skin_failed_used.message", "The selected gameplay skin could not be used.", "선택한 플레이 스킨을 사용할 수 없습니다.", "選択したプレイスキンを使用できませんでした。", "无法使用所选演奏皮肤。", "無法使用所選演奏皮膚。"},
+{"gameplay.start_section.label", "Start Section", "구간 시작", "区間を開始", "开始片段", "開始片段"},
 {"gameplay.unknown.label", "Unknown", "알 수 없음", "不明", "未知", "未知"},
 {"goals.ui.achieved", "Achieved", "달성", "達成", "已达成", "已達成"},
 {"goals.ui.achieved_date", "First achieved: {date}", "첫 달성: {date}", "初達成: {date}", "首次达成：{date}", "首次達成：{date}"},

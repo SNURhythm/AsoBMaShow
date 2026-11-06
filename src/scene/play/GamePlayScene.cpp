@@ -526,7 +526,7 @@ bool isInsideButton(const Button &button, float uiX, float uiY) {
 }
 
 gameplay::RealtimeTouchNativeOverlayRegion
-realtimeTouchOverlayRegion(const Button *button) noexcept {
+realtimeTouchOverlayRegion(const View *button) noexcept {
   if (button == nullptr || !button->getVisible() || button->getWidth() <= 0 ||
       button->getHeight() <= 0) {
     return {};
@@ -2062,7 +2062,12 @@ void GamePlayScene::consumePracticeMenuLaneInput(int lane, bool pressed) {
     return;
   }
   const auto lanes = chart->Meta.GetTotalLaneIndices();
-  if (lanes.empty() || lane != lanes.front()) {
+  if (std::ranges::find(lanes, lane) == lanes.end()) return;
+  if (pressed && ((pauseLayout && pauseLayout->getVisible()) ||
+                  context.appInBackground.load(std::memory_order_acquire))) return;
+  lanePressed[lane] = pressed;
+  const auto keys = chart->Meta.GetKeyLaneIndices();
+  if (keys.empty() || lane != keys.front()) {
     return;
   }
   practiceMenuStartPressedMicros = pressed ? nowMicros() : 0;
@@ -2144,8 +2149,11 @@ void GamePlayScene::startPracticeAttemptFromMenu() {
       !preparePracticeAttemptFromMenu(*attempt, "practice")) {
     return;
   }
+  clearPracticeMenuInput();
+  if (inputHandler != nullptr) inputHandler->cancelInputState();
   practiceMenuActive = false;
   practiceMenuStartPressedMicros = 0;
+  updatePracticeMenuControls();
   (void)reset();
 }
 
@@ -2237,6 +2245,161 @@ void GamePlayScene::refreshLegacyTouchLayout() {
           : std::nullopt);
 }
 
+void GamePlayScene::clearPracticeMenuInput() {
+  if (practiceMenuTouchInput) practiceMenuTouchInput->cancel(nowMicros());
+  practiceMenuTouchInput.reset();
+  practiceMenuTouchLayoutKey.reset();
+  practiceMenuStartPressedMicros = 0;
+  if (practiceMenuActive) {
+    for (auto &[lane, pressed] : lanePressed) pressed = false;
+    startButtonPressed = false;
+    selectButtonPressed = false;
+    if (startSelectControl) startSelectControl->reset();
+  }
+}
+
+void GamePlayScene::refreshPracticeMenuInput() {
+  if (!practiceMenuActive || !options.practiceSession || inputHandler == nullptr ||
+      presentation == nullptr || chart == nullptr) return;
+  updatePracticeMenuControls();
+  if ((pauseLayout && pauseLayout->getVisible()) ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
+  const auto key = makeRealtimeTouchLayoutRefreshKey(
+      effectiveRealtimeTouchLayoutRevision(presentation->touchLayoutRevision(),
+                                          virtualControllerConfig, chart->Meta.KeyMode),
+      presentation->touchHitRegionsRevision(), pauseButton, practiceRestartButton,
+      skinResetLayoutButton);
+  if (practiceMenuTouchLayoutKey == key) return;
+  auto layout = buildRealtimeTouchLayout(
+      *presentation, virtualControllerLayoutCache,
+      assist_options::isDragMode(options.assistOption), chart->Meta,
+      virtualControllerConfig,
+      context.inputProfile.playfieldTouchForKeyMode(presentationKeyMode()),
+      key.uiTransform);
+  // Skin controls are usable even before the first lane geometry is published.
+  if (!layout) layout = gameplay::RealtimeTouchLayout{.revision = key.layoutRevision};
+  if (!practiceMenuTouchInput) {
+    practiceMenuTouchInput = std::make_unique<gameplay::PracticeMenuTouchInput>(
+        gameplay::RealtimeTouchInputSink{
+            .context = this,
+            .emit = [](void *context, const gameplay::RealtimeGameplayInput &input) {
+              auto &scene = *static_cast<GamePlayScene *>(context);
+              if (input.analogScratch && input.hasReplayControl &&
+                  replay::isDirectionalScratchControl(input.replayControl.kind)) {
+                const bool pressed = input.type == gameplay::RealtimeGameplayInputType::Press;
+                scene.consumePracticeMenuLaneInput(input.lane, pressed);
+                scene.consumeStartSelectInput({.control = input.replayControl,
+                    .pressed = pressed, .timestampMicros = input.steadyTimestampMicros,
+                    .analogScratch = true});
+              } else if (scene.inputHandler) {
+                scene.inputHandler->applyRoutedTouchInput(input);
+              }
+              return true;
+            },
+            .emitAnalogScratchTicks = [](void *context, replay::LogicalControl control,
+                                         int ticks, std::int64_t time) {
+              auto &scene = *static_cast<GamePlayScene *>(context);
+              scene.consumeStartSelectInput({.control = control,
+                  .timestampMicros = time, .analogScratchTicks = ticks});
+            }},
+        gameplay::RealtimeTouchPresentationSink{
+            .context = this,
+            .begin = [](void *context, const PresentationTouchEvent &event) {
+              return static_cast<GamePlayScene *>(context)->presentation->beginPresentationTouch(event);
+            },
+            .update = [](void *context, const PresentationTouchEvent &event) {
+              return static_cast<GamePlayScene *>(context)->presentation->updatePresentationTouch(event);
+            },
+            .end = [](void *context, const PresentationTouchEvent &event, bool cancelled) {
+              return static_cast<GamePlayScene *>(context)->presentation->endPresentationTouch(event, cancelled);
+            },
+            .cancelAll = [](void *context, long long time) {
+              auto *presentation = static_cast<GamePlayScene *>(context)->presentation;
+              if (presentation) presentation->cancelPresentationTouches(time);
+            }});
+  }
+  practiceMenuTouchInput->publish(std::move(*layout), makeGameplayTouchHitSnapshot(key),
+                                  nowMicros());
+  practiceMenuTouchLayoutKey = key;
+}
+
+bool GamePlayScene::handlePracticeMenuTouch(SDL_FingerID finger,
+                                           ReplayTouchAction action,
+                                           Vector3 normalizedLocation) {
+  const bool cancelled = action == ReplayTouchAction::Cancel;
+  if (!cancelled && ((pauseLayout && pauseLayout->getVisible()) ||
+                    context.appInBackground.load(std::memory_order_acquire))) return true;
+  if (!practiceMenuTouchInput && !cancelled) refreshPracticeMenuInput();
+  if (practiceMenuTouchInput) {
+    const auto phase = action == ReplayTouchAction::Down ? gameplay::RealtimeTouchPhase::Down
+                     : action == ReplayTouchAction::Up ? gameplay::RealtimeTouchPhase::Up
+                     : cancelled ? gameplay::RealtimeTouchPhase::Cancel
+                                 : gameplay::RealtimeTouchPhase::Move;
+    practiceMenuTouchInput->consume(finger, phase, normalizedLocation.x,
+                                    normalizedLocation.y, nowMicros());
+  }
+  return true;
+}
+
+void GamePlayScene::createPracticeMenuControls() {
+  practiceMenuControls = new View();
+  addView(practiceMenuControls);
+  practiceMenuControls->setSize(520, 116);
+  practiceMenuControls->setFlexDirection(FlexDirection::Column);
+  practiceMenuControls->setPadding(Edge::All, 8);
+  practiceMenuControls->setGap(8);
+  practiceMenuControls->setThemedBackgroundColor(app_theme::panelStrong);
+  practiceMenuControls->setCornerRadius(app_theme::panelRadius());
+  practiceMenuSelectionText = new TextView(app_theme::font, 20);
+  practiceMenuSelectionText->setSize(504, 28);
+  practiceMenuSelectionText->setColor(app_theme::sdl(app_theme::textPrimary()));
+  practiceMenuControls->addView(practiceMenuSelectionText);
+  auto row = new View();
+  row->setSize(504, 56);
+  row->setFlexDirection(FlexDirection::Row);
+  row->setGap(8);
+  practiceMenuControls->addView(row);
+  const auto addControl = [&](const std::string &label, int width, auto action) {
+    auto button = new Button();
+    button->setSize(width, 56);
+    auto text = new TextView(app_theme::font, 24);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(app_theme::sdl(app_theme::textPrimary()));
+    button->setContentView(text);
+    button->setCornerRadius(app_theme::controlRadius());
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setOnClickListener(action);
+    row->addView(button);
+  };
+  addControl("↑", 56, [this] { options.practiceSession->moveSkinMenuSelection(false); });
+  addControl("↓", 56, [this] { options.practiceSession->moveSkinMenuSelection(true); });
+  addControl("−", 56, [this] { (void)options.practiceSession->changeSkinMenuSelection(false); });
+  addControl("+", 56, [this] { (void)options.practiceSession->changeSkinMenuSelection(true); });
+  addControl(i18n::tr("gameplay.start_section.label"), 248,
+             [this] { if (practiceMenuActive) restartCurrentPattern(); });
+  updatePracticeMenuControls();
+}
+
+void GamePlayScene::updatePracticeMenuControls() {
+  if (practiceMenuControls == nullptr) return;
+  const bool visible = practiceMenuActive && options.practiceSession != nullptr &&
+                       !(pauseLayout && pauseLayout->getVisible());
+  if (practiceMenuControls->getVisible() != visible) practiceMenuTouchLayoutKey.reset();
+  practiceMenuControls->setVisible(visible);
+  if (practiceRestartButton) practiceRestartButton->setVisible(!practiceMenuActive);
+  if (practiceHudText) practiceHudText->setVisible(!practiceMenuActive);
+  if (!visible) return;
+  const auto safe = rendering::uiSafeAreaInsets();
+  practiceMenuControls->setPositionNoLayout(safe.left + 24, safe.top + 24);
+  const auto menu = options.practiceSession->skinMenuState();
+  if (menu.cursorPosition < menu.legacyItems.size()) {
+    practiceMenuSelectionText->setText(menu.legacyItems[menu.cursorPosition].text);
+  }
+}
+
 void GamePlayScene::updateSkinResetLayoutVisibility() {
   if (skinResetLayoutButton == nullptr) {
     return;
@@ -2252,7 +2415,7 @@ void GamePlayScene::updateSkinResetLayoutVisibility() {
 }
 
 bool GamePlayScene::startRealtimeGameplayAuthority() {
-  if (guidedAccessReminderPending || realtimeGameplayAuthorityActive() ||
+  if (practiceMenuActive || guidedAccessReminderPending || realtimeGameplayAuthorityActive() ||
       chart == nullptr || state == nullptr || presentation == nullptr) {
     return false;
   }
@@ -2654,18 +2817,12 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
 #endif
 }
 
-bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
-  if (!realtimeGameplayAuthorityActive() || presentation == nullptr) {
-    return false;
-  }
-  auto &session = *realtimeGameplaySession;
+gameplay::RealtimeTouchHitSnapshot GamePlayScene::makeGameplayTouchHitSnapshot(
+    const gameplay::RealtimeTouchLayoutRefreshKey &key) {
   gameplay::RealtimeTouchHitSnapshot snapshot{
-      .layoutRevision = session.layoutRefreshKey.layoutRevision,
-      .uiTransform = session.layoutRefreshKey.uiTransform};
-  const auto appendNativeOverlay = [&](const auto &overlay) {
-    if (!overlay.visible) {
-      return;
-    }
+      .layoutRevision = key.layoutRevision, .uiTransform = key.uiTransform};
+  const auto appendOverlay = [&](const auto &overlay) {
+    if (!overlay.visible) return;
     snapshot.regionsTopmostFirst.push_back(
         {.hit = {.kind = PresentationUiControlKind::NativeOverlay},
          .boundary = {{{overlay.left, overlay.top},
@@ -2673,25 +2830,33 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
                        {overlay.right, overlay.bottom},
                        {overlay.left, overlay.bottom}}}});
   };
+  if (pauseLayout != nullptr && pauseLayout->getVisible()) {
+    appendOverlay(realtimeTouchOverlayRegion(pauseLayout));
+  }
+  appendOverlay(realtimeTouchOverlayRegion(practiceMenuControls));
+  for (const auto &overlay : key.nativeOverlays) appendOverlay(overlay);
+  if (chart != nullptr) {
+    appendVirtualControllerHitRegions(
+        snapshot.regionsTopmostFirst,
+        currentVirtualControllerLayout(virtualControllerLayoutCache,
+                                       virtualControllerConfig,
+                                       chart->Meta.KeyMode, key.uiTransform),
+        key.layoutRevision);
+  }
+  auto presentationRegions = presentation->touchHitRegions();
+  snapshot.regionsTopmostFirst.insert(
+      snapshot.regionsTopmostFirst.end(),
+      std::make_move_iterator(presentationRegions.begin()),
+      std::make_move_iterator(presentationRegions.end()));
+  return snapshot;
+}
+
+bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
+  if (!realtimeGameplayAuthorityActive() || presentation == nullptr) return false;
+  auto &session = *realtimeGameplaySession;
   try {
-    for (const auto &overlay : session.layoutRefreshKey.nativeOverlays) {
-      appendNativeOverlay(overlay);
-    }
-    if (chart != nullptr) {
-      appendVirtualControllerHitRegions(
-          snapshot.regionsTopmostFirst,
-          currentVirtualControllerLayout(virtualControllerLayoutCache,
-                                         virtualControllerConfig,
-                                         chart->Meta.KeyMode,
-                                         session.layoutRefreshKey.uiTransform),
-          session.layoutRefreshKey.layoutRevision);
-    }
-    auto presentationRegions = presentation->touchHitRegions();
-    snapshot.regionsTopmostFirst.insert(
-        snapshot.regionsTopmostFirst.end(),
-        std::make_move_iterator(presentationRegions.begin()),
-        std::make_move_iterator(presentationRegions.end()));
-    if (session.touchHitSnapshots.publish(std::move(snapshot))) {
+    if (session.touchHitSnapshots.publish(
+            makeGameplayTouchHitSnapshot(session.layoutRefreshKey))) {
       session.touchHitSnapshotDirty = false;
       return true;
     }
@@ -3335,6 +3500,7 @@ int GamePlayScene::presentationKeyMode() const {
 }
 
 GamePlayScene::~GamePlayScene() {
+  clearPracticeMenuInput();
   if (skinIrRankingGeneration != 0 && context.irRankingService) {
     context.irRankingService->close(skinIrRankingGeneration);
   }
@@ -3912,6 +4078,7 @@ void GamePlayScene::init() {
 #endif
 
   if (options.practiceSession != nullptr) {
+    createPracticeMenuControls();
     practiceRestartButton =
         new Button(rendering::window_width - 70, 110, 52, 52);
     addView(practiceRestartButton);
@@ -3945,6 +4112,7 @@ void GamePlayScene::init() {
 }
 
 bool GamePlayScene::reset() {
+  clearPracticeMenuInput();
   stopGuidedAccessChime(true);
   guidedAccessReminderExiting = false;
   guidedAccessReminder.reset();
@@ -4284,6 +4452,7 @@ void GamePlayScene::updateWhileBackgrounded() {
 
 void GamePlayScene::onInputQueueOverflow() {
   Scene::onInputQueueOverflow();
+  if (practiceMenuActive) clearPracticeMenuInput();
   if (realtimeGameplayAuthorityActive()) {
     const auto timestamp = static_cast<std::uint64_t>(nowMicros());
     realtimeGameplaySession->interruptInput({input::DeviceClass::Keyboard, timestamp, false});
@@ -4299,6 +4468,7 @@ void GamePlayScene::onInputQueueOverflow() {
 }
 
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
+  if (background && practiceMenuActive) clearPracticeMenuInput();
   if (background) persistFloatingLaneCoverSettings();
   if (inputHandler != nullptr) inputHandler->setApplicationBackground(background);
   if (realtimeGameplayAuthorityActive()) {
@@ -4718,6 +4888,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
 }
 
 void GamePlayScene::showPauseMenu(bool pausePlayback) {
+  if (practiceMenuActive) practiceMenuStartPressedMicros = 0;
   setRealtimeGameplayIngressEnabled(false);
   if (gameplay::shouldSuspendRealtimeGameplayForPause(pausePlayback) &&
       realtimeGameplayAuthorityActive() &&
@@ -4820,7 +4991,7 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
 }
 
 void GamePlayScene::closePauseMenu() {
-  if (!isCoursePlayback() && context.jukebox.isPaused()) {
+  if (!practiceMenuActive && !isCoursePlayback() && context.jukebox.isPaused()) {
     context.jukebox.resume();
   }
   if (realtimeGameplayAuthorityActive() &&
@@ -4848,7 +5019,7 @@ void GamePlayScene::closePauseMenu() {
 }
 
 void GamePlayScene::togglePauseMenuFromInput() {
-  if (isCoursePlayback()) {
+  if (practiceMenuActive || isCoursePlayback()) {
     if (pauseLayout != nullptr && pauseLayout->getVisible()) {
       closePauseMenu();
     } else {
@@ -4901,6 +5072,26 @@ void GamePlayScene::consumeStartSelectInput(
     const gameplay::StartSelectControlInput &input) {
   if (!startSelectControl.has_value() || isReplayPlayback() ||
       options.autoPlay) {
+    return;
+  }
+  if (practiceMenuActive && options.practiceSession &&
+      replay::isDirectionalScratchControl(input.control.kind) &&
+      !startButtonPressed && !selectButtonPressed) {
+    if ((pauseLayout && pauseLayout->getVisible()) ||
+        context.appInBackground.load(std::memory_order_acquire)) return;
+    if (input.analogScratchTicks > 0 || (input.pressed && !input.analogScratch)) {
+      const bool forward = input.control.kind == replay::LogicalControlKind::ScratchClockwise;
+      const auto [horizontal, turbo] = practiceLegacyInputState(lanePressed, chart->Meta.KeyMode);
+      const int steps = std::max(1, input.analogScratchTicks);
+      for (int step = 0; step < steps; ++step) {
+        if (horizontal) {
+          (void)options.practiceSession->changeSkinMenuSelection(
+              forward, input.analogScratchTicks > 0, turbo);
+        } else {
+          options.practiceSession->moveSkinMenuSelection(forward);
+        }
+      }
+    }
     return;
   }
   const bool noteEnd = state != nullptr && state->isEnding;
@@ -7338,6 +7529,19 @@ void GamePlayScene::update(float dt) {
     }
   }
   if (practiceMenuActive) {
+    if ((pauseLayout && pauseLayout->getVisible()) ||
+        context.appInBackground.load(std::memory_order_acquire)) {
+      // A menu command can pause from inside the touch router's callback.
+      // Retire that router here, after the callback has returned.
+      clearPracticeMenuInput();
+      if (inputHandler != nullptr) inputHandler->cancelInputState();
+      return;
+    }
+    if (practiceMenuTouchInput) practiceMenuTouchInput->advance(nowMicros());
+    if (startSelectControl) {
+      applyStartSelectControlActions(startSelectControl->tick(nowMicros()));
+      if (resultTransitionScheduled) return;
+    }
     if (practiceMenuStartPressedMicros != 0 &&
         nowMicros() - practiceMenuStartPressedMicros > 1'000'000) {
       startPracticeAttemptFromMenu();
@@ -7548,7 +7752,9 @@ void GamePlayScene::renderScene() {
   }
 #endif
   refreshGameplayPresentationGeometry();
-  const long long rawSongTimeMicros = context.jukebox.getTimeMicros();
+  const long long rawSongTimeMicros = practiceMenuActive && options.practiceSession
+      ? options.practiceSession->configuration().startMicros + getAudioOffsetMicros()
+      : context.jukebox.getTimeMicros();
   const bool startLaneIndicatorsVisible =
       preparationIndicatorActive(rawSongTimeMicros);
   const bool practiceCountIn = practiceCountInActive(rawSongTimeMicros);
@@ -7581,6 +7787,7 @@ void GamePlayScene::renderScene() {
   // Skin lane quads are published by rendering, including after viewport or
   // presentation changes. SDL input must see that newly published geometry.
   refreshLegacyTouchLayout();
+  refreshPracticeMenuInput();
   // The gameplay presentation can queue ordinary UI text before subsequent
   // direct overlay submissions.
   renderContext.flushUiBatch();
@@ -7588,6 +7795,12 @@ void GamePlayScene::renderScene() {
     float spinScratchRotationDegrees = 0.0F;
     bool commandScratchPressed = false;
     bool virtualControllerReady = false;
+    if (practiceMenuTouchInput && practiceMenuTouchInput->router()) {
+      const auto &router = *practiceMenuTouchInput->router();
+      spinScratchRotationDegrees = router.spinScratchRotationDegrees();
+      commandScratchPressed = router.commandScratchPressed();
+      virtualControllerReady = true;
+    }
     if (realtimeGameplaySession != nullptr) {
       std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);
       if (realtimeGameplaySession->touchRouter != nullptr) {
@@ -7657,7 +7870,7 @@ void GamePlayScene::renderScene() {
 bool GamePlayScene::renderViewBeforeScene(const View *view) const {
   return view != pauseLayout && view != pauseButton &&
          view != practiceRestartButton && view != skinResetLayoutButton &&
-         view != practiceHudText && view != playbackFailureLayout &&
+         view != practiceHudText && view != practiceMenuControls && view != playbackFailureLayout &&
          view != guidedAccessReminderLayout;
 }
 
@@ -9043,6 +9256,7 @@ bool GamePlayScene::handleTouchInput(SDL_FingerID fingerIndex,
                                      ReplayTouchAction action,
                                      Vector3 normalizedLocation,
                                      std::uint64_t timestampMicros) {
+  if (practiceMenuActive) return handlePracticeMenuTouch(fingerIndex, action, normalizedLocation);
   const auto songTimeMicros = timestampMicros != 0
       ? context.jukebox.audioRuntime().songTimeMicrosAtSteadyMicros(
             timestampMicros).value_or(context.jukebox.getTimeMicros())

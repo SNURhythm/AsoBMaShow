@@ -80,6 +80,7 @@ public:
   [[nodiscard]] bms_parser::Note *
   applyTouchLane(int lane, bool pressed,
                  std::optional<int> scratchDirection, bool backSpin = false);
+  void applyRoutedTouchInput(const gameplay::RealtimeGameplayInput &input);
   IRhythmControl *control;
   RhythmInputHandler(
       IRhythmControl *control, const bms_parser::ChartMeta &meta,

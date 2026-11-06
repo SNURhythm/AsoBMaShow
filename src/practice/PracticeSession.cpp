@@ -106,15 +106,26 @@ bool Session::changeSkinMenuVisibleItem(std::size_t index, bool increment) {
          skinMenu_->changeVisibleItem(index, increment);
 }
 
+void Session::moveSkinMenuSelection(bool forward) {
+  if (skinMenu_) skinMenu_->moveSelection(forward);
+}
+
+bool Session::changeSkinMenuSelection(bool increment, bool analog, bool turbo) {
+  return skinMenu_ && skinMenu_->changeSelection(increment, analog, turbo);
+}
+
 SkinMenuState Session::skinMenuState() const {
   return skinMenu_.has_value() ? skinMenu_->skinMenuState() : SkinMenuState{};
 }
 
 SkinMenuState Session::skinMenuState(const SkinMenuInputs &inputs) const {
-  return skinMenu_.has_value()
-             ? skinMenu_->skinMenuState()
-             : buildSkinMenuState(configuration_, inputs,
-                                  skinItemScrollPosition_);
+  auto result = skinMenu_.has_value()
+                    ? skinMenu_->skinMenuState()
+                    : buildSkinMenuState(configuration_, inputs,
+                                         skinItemScrollPosition_);
+  result.horizontalInputMode = inputs.horizontalInputMode;
+  result.inputTurbo = inputs.inputTurbo;
+  return result;
 }
 
 Session Session::freshForRetry() const {

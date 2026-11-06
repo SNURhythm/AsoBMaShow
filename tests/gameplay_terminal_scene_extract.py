@@ -57,6 +57,7 @@ def main():
         "void GamePlayScene::togglePauseMenuFromInput()",
         "void GamePlayScene::restartCurrentPattern()",
         "void GamePlayScene::startPracticeAttemptFromMenu()",
+        "void GamePlayScene::clearPracticeMenuInput()",
         "void GamePlayScene::consumePracticeMenuLaneInput(",
         "bool GamePlayScene::retryIfTargetsUnreachable()",
         "void GamePlayScene::playQuickRetryFeedback()",
@@ -88,6 +89,7 @@ def main():
     fixture = (args.root / "tests/gameplay_terminal_scene_fixture.cpp").read_text()
     helpers = [
         "bool laneIsPressed(",
+        "std::pair<bool, bool> practiceLegacyInputState(",
         "bool hasReachedFirstPlayableNote(",
         "replay::ReplayTouchAction modernTouchAction(",
         "bool longNoteTailJudgedBeforeTiming(",

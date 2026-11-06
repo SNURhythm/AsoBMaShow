@@ -1,3 +1,4 @@
+#include "scene/play/PracticeMenuTouchInput.h"
 #include "scene/play/RealtimeTouchInputRouter.h"
 #include "scene/play/RealtimeTouchPresentation.h"
 #include "scene/play/PlayfieldPresentation.h"
@@ -351,6 +352,54 @@ PresentationUiHitRegion rectangleHitRegion(PresentationUiHit hit, float left,
                         {right, top},
                         {right, bottom},
                         {left, bottom}}}};
+}
+
+void testPracticeMenuTouchBeforePlayback() {
+  InputCapture input;
+  PresentationCapture presentation;
+  gameplay::PracticeMenuTouchInput menu(
+      {.context = &input, .emit = &InputCapture::emit},
+      presentationSink(presentation));
+  auto layout = makeLayout();
+  gameplay::RealtimeTouchHitSnapshot snapshot{
+      .layoutRevision = layout.revision,
+      .uiTransform = {.renderWidth = 100, .renderHeight = 100,
+                      .uiScaleX = 1, .uiScaleY = 1,
+                      .uiWidth = 100, .uiHeight = 100},
+      .regionsTopmostFirst = {
+          rectangleHitRegion({.kind = PresentationUiControlKind::NativeOverlay},
+                             40, 20, 60, 40),
+          rectangleHitRegion({.kind = PresentationUiControlKind::Slider},
+                             40, 40, 60, 60)}};
+  menu.publish(layout, snapshot, 1);
+  require(menu.router() != nullptr, "setup owns a controller router without a gameplay worker");
+  menu.consume(1, gameplay::RealtimeTouchPhase::Down, 0.25F, 0.8F, 10);
+  require(input.events.size() == 1 && input.events.back().lane == 0 &&
+              input.events.back().type == gameplay::RealtimeGameplayInputType::Press,
+          "setup first lane can start a hold before playback");
+  menu.consume(1, gameplay::RealtimeTouchPhase::Cancel, 0.25F, 0.8F, 20);
+  require(input.events.size() == 2 &&
+              input.events.back().type == gameplay::RealtimeGameplayInputType::Release,
+          "cancel immediately releases setup hold without native continuation grace");
+  menu.consume(2, gameplay::RealtimeTouchPhase::Down, 0.5F, 0.3F, 30);
+  menu.consume(2, gameplay::RealtimeTouchPhase::Up, 0.5F, 0.3F, 40);
+  require(input.events.size() == 2 && presentation.records.empty(),
+          "native menu buttons cannot press lanes or skin controls underneath");
+  menu.consume(3, gameplay::RealtimeTouchPhase::Down, 0.5F, 0.5F, 50);
+  menu.consume(3, gameplay::RealtimeTouchPhase::Move, 0.7F, 0.5F, 60);
+  menu.consume(3, gameplay::RealtimeTouchPhase::Up, 0.7F, 0.5F, 70);
+  require(input.events.size() == 2 && presentation.records.size() == 3 &&
+              presentation.records[0].call == PresentationCapture::Call::Begin &&
+              presentation.records[1].call == PresentationCapture::Call::Update &&
+              presentation.records[2].call == PresentationCapture::Call::End,
+          "skin sliders capture a complete drag while excluding note input");
+  menu.consume(4, gameplay::RealtimeTouchPhase::Down, 0.25F, 0.8F, 80);
+  menu.cancel(90);
+  require(input.events.size() == 4 &&
+              input.events.back().type == gameplay::RealtimeGameplayInputType::Release,
+          "attempt start or pause releases all setup contacts");
+  menu.consume(4, gameplay::RealtimeTouchPhase::Move, 0.25F, 0.8F, 100);
+  require(input.events.size() == 4, "retired setup contact cannot reenter on a stale move");
 }
 
 void testThirdNativeOverlayIsHitTestedAndExcludedFromGameplay() {
@@ -2880,6 +2929,7 @@ void testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise() {
 } // namespace
 
 int main() {
+  testPracticeMenuTouchBeforePlayback();
   testUnpublishedLiftCanBeClosedByRecovery();
   testContinuedCancelledTouchPublishesAnotherCancellation();
   testCancellationContinuationRetainsGameplayOwnership();
