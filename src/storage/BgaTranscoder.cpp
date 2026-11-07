@@ -1,6 +1,7 @@
 #include "BgaTranscoder.h"
 #include "StorageVideoCapabilities.h"
 #include "StorageVideoEncoder.h"
+#include "../video/LocalMediaInput.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -91,7 +92,7 @@ struct Input {
   bool bestEffort = false;
   explicit Input(const fs::path &path, bool preserveEfficient = false, bool recover = false) : bestEffort(recover) {
     try {
-      checked(avformat_open_input(&format, mediaPath(path).c_str(), nullptr, nullptr), "Open media");
+      checked(video::openLocalMediaInput(&format, mediaPath(path).c_str()), "Open media");
       const std::string_view container = format->iformat->name;
       if (container.find("image2") != std::string_view::npos || container.ends_with("_pipe") ||
           container == "gif" || container == "apng") unsupported("Still images and image sequences are preserved");

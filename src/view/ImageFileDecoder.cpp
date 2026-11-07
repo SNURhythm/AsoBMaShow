@@ -1,4 +1,5 @@
 #include "ImageFileDecoder.h"
+#include "../video/LocalMediaInput.h"
 #ifdef _WIN32
 #define STBI_WINDOWS_UTF8
 #endif
@@ -610,7 +611,9 @@ decodeWebpWithFfmpeg(std::span<const std::byte> encoded,
   if (rawFormat == nullptr) return std::nullopt;
   rawFormat->pb = io.get();
   rawFormat->flags |= AVFMT_FLAG_CUSTOM_IO;
-  if (avformat_open_input(&rawFormat, nullptr, nullptr, nullptr) < 0) {
+  const auto *webp = av_find_input_format("webp_pipe");
+  if (webp == nullptr || video::restrictMediaInput(rawFormat) < 0 ||
+      avformat_open_input(&rawFormat, nullptr, webp, nullptr) < 0) {
     if (rawFormat != nullptr) avformat_free_context(rawFormat);
     return std::nullopt;
   }

@@ -41,3 +41,11 @@ Beatoraja checkout `82365b8cd8d54f401bc9ea9f4b9e82d105ef7f92`, `SkinLuaAccessor.
 
 Dependency provenance, applicability, and compatibility changes are recorded in
 `docs/reviews/2026-11-07-native-security-hardening.md`.
+
+## Follow-up review and fixes
+
+- [x] Trace additional font/media advisories against actual linked code and API parameters.
+- [x] Reproduce FreeType COLR allocation overflow with synthetic bounds and an allocator that refuses allocations; update the complete upstream snapshot and SDL build integration.
+- [x] Reproduce secondary-file access through disguised media; restrict all FFmpeg input boundaries to the selected file and retain normal-media coverage.
+- [x] Complete rendering/video tests, desktop and unsigned iOS builds, and independent review; address FIFO input and FreeType visibility findings.
+- [x] Commit and push the SDL dependency branch and parent PR update.

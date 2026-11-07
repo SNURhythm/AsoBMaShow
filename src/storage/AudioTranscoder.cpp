@@ -1,4 +1,5 @@
 #include "AudioTranscoder.h"
+#include "../video/LocalMediaInput.h"
 
 #include <sndfile.h>
 extern "C" {
@@ -60,7 +61,7 @@ StorageDiagnostic validateFlacFrames(const fs::path &path, const SF_INFO &info, 
   const auto utf8 = path.u8string();
   const std::string name(utf8.begin(), utf8.end());
   if (!decoder.packet || !decoder.frame ||
-      avformat_open_input(&decoder.input, name.c_str(), nullptr, nullptr) < 0 ||
+      video::openLocalMediaInput(&decoder.input, name.c_str(), av_find_input_format("flac")) < 0 ||
       avformat_find_stream_info(decoder.input, nullptr) < 0) return invalid;
   int audio = -1;
   for (unsigned i = 0; i < decoder.input->nb_streams; ++i) {

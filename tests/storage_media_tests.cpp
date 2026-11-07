@@ -11,6 +11,9 @@ extern "C" {
 #include <cmath>
 #include <iostream>
 #include <vector>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 using namespace storage_management;
 using storage_test::require;
@@ -125,6 +128,47 @@ std::string withFlacComments(std::string bytes, const std::vector<std::string> &
     offset += 4 + size;
   }
   throw std::runtime_error("FLAC fixture has no comment block");
+}
+void externalMediaReferenceTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture;
+  fixture.timestamps = {0, 1};
+  storage_test::makeVideo(temp.root / "selected.nut", fixture);
+  temp.write("disguised.mpg", "ffconcat version 1.0\nfile selected.nut\n");
+  bool rejected = false;
+  try { Input input(temp.root / "disguised.mpg"); }
+  catch (const Failure &) { rejected = true; }
+  require(rejected, "media decoding must not open files referenced by a playlist");
+  AVFormatContext *format = nullptr;
+  const auto protocol = "concat:" + (temp.root / "selected.nut").string();
+  require(video::openLocalMediaInput(&format, protocol.c_str()) < 0 && !format,
+          "media paths are literal files, not FFmpeg protocol expressions");
+  // A name that contains a colon is still a valid file, not a protocol.
+#ifndef _WIN32
+  const auto literal = temp.root / "clip:raw.nut";
+  std::filesystem::copy_file(temp.root / "selected.nut", literal);
+  require(video::openLocalMediaInput(&format, literal.string().c_str()) >= 0,
+          "literal filesystem punctuation is preserved");
+  avformat_close_input(&format);
+  const int borrowed = open(literal.c_str(), O_RDONLY);
+  require(borrowed >= 0, "open borrowed media descriptor");
+#ifdef __linux__
+  const std::string reference = "/proc/self/fd/" + std::to_string(borrowed);
+#else
+  const std::string reference = "/dev/fd/" + std::to_string(borrowed);
+#endif
+  const int opened = video::openLocalMediaInput(&format, reference.c_str());
+  close(borrowed);
+  require(opened >= 0 && avformat_find_stream_info(format, nullptr) >= 0,
+          "regular descriptor paths remain usable after the borrowed handle closes");
+  avformat_close_input(&format);
+  const auto fifo = temp.root / "stream.mp4";
+  require(mkfifo(fifo.c_str(), 0600) == 0, "create nonblocking media-input fixture");
+  require(video::openLocalMediaInput(&format, fifo.c_str()) < 0 && !format,
+          "a FIFO must be rejected without waiting for a writer");
+#endif
+  Input ordinary(temp.root / "selected.nut");
+  require(ordinary.video >= 0, "single-file media still decodes");
 }
 void timelineTests() {
   const auto maximum = std::numeric_limits<std::int64_t>::max();
@@ -1925,8 +1969,14 @@ void videoTests() {
 
 }
 }
-int main() {
+int main(int argc, char **argv) {
   av_log_set_level(AV_LOG_ERROR);
+  if (argc == 2 && std::string_view(argv[1]) == "--input-policy") {
+    try { externalMediaReferenceTests(); return 0; }
+    catch (const Failure &failure) { std::cerr << failure.detail << '\n'; }
+    catch (const std::exception &error) { std::cerr << error.what() << '\n'; }
+    return 1;
+  }
   int failures = 0;
   for (const auto test : {selectedVideoCodecTests, efficientCodecHeaderTests, efficientVideoPreservationTests, decodedDisplayTransformTests, decodedColorTests, chromaLocationTests, decodedAudioFormatTests, decodedAudioPresentationTests,
                           encodedAudioPresentationTests, embeddedAudioSideDataTests, audioRemuxTrimTests, audioRemuxContentTests, timelineTests,

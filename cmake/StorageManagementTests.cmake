@@ -28,6 +28,8 @@ add_executable(storage_media_tests tests/storage_media_tests.cpp src/storage/Aud
 target_compile_features(storage_media_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_media_tests PRIVATE SndFile::sndfile ${FFMPEG_LIBRARIES})
 asobmashow_register_test(storage_media_tests)
+add_test(NAME storage_media_input_tests COMMAND storage_media_tests --input-policy)
+set_tests_properties(storage_media_input_tests PROPERTIES TIMEOUT 5)
 
 add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
     tests/storage_archive_tests.cpp

@@ -18,6 +18,7 @@ than moving the entire dependency baseline. No deployment is part of this work.
 | PCRE2 | 10.47 | 10.49, `6f9d7c1373262c541324a16a358785b33ef116cf` | Includes the 10.48 security fixes and follow-up corrections. The app disables PCRE2 JIT; JIT-only advisories are not applicable, but skins can supply regex patterns. |
 | miniz | 3.0.0 from bimg | Official 3.1.2 amalgamation | Includes ZIP central-directory offset overflow and decompression progress fixes. App-owned archive, replay gzip, PNG and export paths now use `third_party/miniz`; bimg itself is unchanged. |
 | SQLite | 3.53.4 | Unchanged | Already contains the fixes for CVE-2026-11822/11824 and older listed CVEs. The 3.54.0-only 32-bit overflow does not affect 3.53.4. |
+| FreeType (SDL_ttf) | SDL fork of 2.13.3, `535d2993d` | Complete upstream `5a280ecde6f324de0d226261036e736e0cb49a71` (2.14.3 plus fixes, 2026-05-13) | Replaces unchecked COLR bitmap allocation arithmetic associated with CVE-2026-49919. Includes the variable-coordinate fix for CVE-2026-50811, without importing selected security patches. |
 
 The libsndfile project has not released a newer tagged version containing the
 ADPCM fixes, so its complete upstream snapshot is pinned rather than carrying
@@ -93,6 +94,73 @@ replace the prior directory so renamed slices cannot leave stale libraries.
 iOS networking uses the Apple implementation and does not link curl/OpenSSL.
 The miniaudio/stb/miniz sources and PCRE2 submodule are compiled into iOS directly.
 
+## Follow-up review: fonts and media input
+
+**High — COLR bitmap allocation overflow.** The previous vendored FreeType
+multiplied combined layer dimensions in 32-bit unsigned arithmetic before
+allocating the destination bitmap. The new regression supplies synthetic glyph
+bounds for `16384 * 65537 * 4` bytes and an allocator that refuses all requests.
+The old code requested only 65,536 bytes; the selected upstream code returns
+`FT_Err_Array_Too_Large` before calling the allocator. No oversized payload or
+unsafe copy is needed for this check. Skin fonts reach FreeType through SDL_ttf's
+color-glyph loading; an end-to-end application exploit was not attempted.
+The upstream allocation correction is linked from the
+[Android advisory](https://source.android.com/docs/security/bulletin/2026/2026-09-01)
+as [the COLR fix](https://android.googlesource.com/platform/external/freetype/+/65f3c6ba20e777f45f409ae2a7500c4583a6545f).
+
+The source snapshot is unchanged upstream. SDL_ttf retains its static symbol
+visibility through a configuration-header wrapper and uses its existing HarfBuzz
+target, with dynamic HarfBuzz loading and the new optional Apple HVF backend
+disabled. The Xcode source list includes
+the new HVF module stub; the former SDL Android makefile lives in SDL_ttf's build
+support rather than modifying the upstream font sources. iOS builds FreeType
+from this submodule as part of `SDL3_ttf.framework`; it is not a separate
+checked-in XCFramework.
+
+**Medium — media could open secondary files.** A harmless ffconcat fixture
+named with a video extension caused the storage decoder to open another local
+file. The shared input helper now opens the selected path literally, supplies
+its I/O context, and denies additional I/O. An empty protocol whitelist also
+protects child contexts that do not inherit the callback. Device/sequence
+demuxers and playlists are excluded before header parsing. BGA playback,
+transcoding, FLAC validation, and memory-backed WebP decoding use this policy;
+FLAC and WebP additionally select their expected demuxer. Ordinary single-file
+media, literal path punctuation, and cleanup after rejection have regression
+coverage. The local fixture confirms secondary-file access; it does not claim
+that network access or data exfiltration was demonstrated.
+
+**Medium — special-file inputs could block media loading.** A chart's media path
+could name a FIFO, blocking inside the file open before probing or cancellation.
+The input helper now opens with nonblocking flags on POSIX, requires a regular
+file through descriptor inspection, and passes that same descriptor to FFmpeg.
+It never reopens the checked pathname. A five-second bounded test reproduced
+the old hang and now passes immediately. Regular `/proc/self/fd`-style inputs
+remain supported; the host regression also checks ownership after the original
+descriptor closes.
+
+Additional advisory checks:
+
+- FFmpeg 8.1.2 retains the TY packet-size underflow corrected by
+  [this upstream change](https://github.com/FFmpeg/FFmpeg/commit/de771bd52774a52d45b0e2c82e56995a1ef40df7)
+  (CVE-2026-65704). The published concat/Shorten route needs demuxer options the
+  app did not enable. The new input policy also excludes concat entirely.
+  This is an application-side restriction, not an FFmpeg source update or a
+  claim that every decoder in the library is free of defects.
+- The old SDL FreeType fork already contained CVE-2026-23865's upstream fix,
+  despite retaining its 2.13.3 version number. The selected newer snapshot also
+  contains it and the
+  [variable-coordinate bounds fix](https://github.com/freetype/freetype/commit/5a280ecde6f324de0d226261036e736e0cb49a71).
+- [HarfBuzz GHSA-q4gc-p4hh-3765](https://github.com/harfbuzz/harfbuzz/security/advisories/GHSA-q4gc-p4hh-3765)
+  requires an out-of-range text offset. SDL_ttf supplies offset zero and length
+  `-1`; this call path does not meet the advisory prerequisites.
+- The reviewed 7-Zip XZ and filesystem-image advisories concern handlers absent
+  from the app's explicitly selected ZIP/RAR/RAR5/7z/LZH backend list. No direct
+  affected-handler path was identified. The app does not use 7-Zip's CLI
+  extraction or Mark-of-the-Web propagation.
+- FreeType's optional PNG backend is disabled in the reviewed build. Version
+  matches for the unused vcpkg FreeType/libpng packages do not describe the
+  SDL_ttf font implementation actually linked by the app.
+
 ## Verification
 
 Regression tests cover valid, harmless LuaJIT binary chunks at entry, dynamic,
@@ -122,10 +190,23 @@ ADPCM frame counts before their fixes. The binary PNM correction also had a
 failing endpoint/reduction regression before the inclusive-MAXVAL fix. No
 distribution action was performed.
 
+Follow-up verification after the font and media changes:
+
+- Desktop `main`, `tests_rendering`, and `tests_video` built successfully.
+- All 77 rendering/video CTest checks passed at `-j 6` (13.31 seconds), including
+  the COLR allocation, secondary-file access, FIFO, and descriptor-lifetime tests.
+- The final unsigned iOS build and artifact audit passed.
+- Symbol inspection confirmed that the desktop FreeType archive and iOS
+  FreeType objects mark their public APIs as private external symbols.
+- Both iOS FFmpeg configurations include the descriptor protocol used by the
+  input helper. Full Android and Windows builds were not run.
+
 ## Review limits and follow-up
 
-The independent review found no remaining security or application-integration
-blocker after the binary PNM correction. One packaging-only follow-up remains:
+The initial independent review found no remaining security or
+application-integration blocker after the binary PNM correction. The follow-up review identified the
+FIFO input issue and an ineffective FreeType visibility definition; both were
+corrected and verified with the checks above. One packaging-only follow-up remains:
 the libsndfile overlay does not carry the baseline `mp3lame-static.diff`, so its
 Windows static pkg-config metadata still names `mp3lame` rather than the static
 library names. The app consumes the CMake `SndFile::sndfile` target, not that

@@ -1497,6 +1497,15 @@ void testRealVideoAdapterHonorsBoundedGeneratedFixture() {
               player.getReservedDecodedBytes() <= limits.maximumDecodedBytes,
           "real codec adapter opens the deterministic generated 2x2 fixture "
           "within its pre-allocation decoded budget");
+  storage_test::TempDirectory directory;
+  std::filesystem::copy_file(path, directory.root / "asset.mp4");
+  directory.write("playlist.mp4", "ffconcat version 1.0\nfile asset.mp4\n");
+  require(!player.loadVideo((directory.root / "playlist.mp4").string(), cancelled),
+          "BGA loading rejects external references hidden behind a media extension");
+  require(!player.loadVideo("concat:" + path.string(), cancelled),
+          "BGA paths cannot invoke FFmpeg protocols");
+  require(player.loadVideo(path.string(), cancelled, limits),
+          "ordinary BGA loading recovers after rejecting external references");
 }
 
 void testNativeVideoPlaybackSelectsSurfaceRendering() {
