@@ -65,7 +65,6 @@ public final class BmsBrowserActivity extends Activity {
         action(sites, "Digital Emergency Exit", () -> load(MANBOW));
         action(sites, "GingerRush", () -> load(GINGER));
         action(sites, "BMS Search", () -> load("https://bmssearch.net/"));
-        action(sites, "horieyuuka.github.io", () -> load("https://horieyuuka.github.io/"));
         importTable = action(menu, "Import table", this::importCurrentTable);
         importTable.setEnabled(false);
         action(menu, "Downloads", () -> { nativeShowDownloads(); finish(); });

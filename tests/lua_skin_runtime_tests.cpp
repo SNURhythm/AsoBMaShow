@@ -10,6 +10,11 @@
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+}
+
 #include <atomic>
 #include <array>
 #include <clocale>
@@ -1075,6 +1080,98 @@ void testLanguageSurfaceBit32AndTextOnlyLoading() {
   }
 }
 
+// Generate a valid, harmless chunk with the linked VM. A truncated foreign-VM
+// header only checks syntax errors, not whether binary loading is disabled.
+void testValidBinaryChunksAreRejectedByEverySkinLoader() {
+  lua_State *compiler = luaL_newstate();
+  expect(compiler != nullptr, "binary fixture compiler creates");
+  if (!compiler) return;
+  std::string binary;
+  const int compiled = luaL_loadstring(compiler, "return {}");
+  expect(compiled == 0, "harmless fixture compiles");
+  if (compiled == 0) {
+    expect(lua_dump(compiler, [](lua_State *, const void *bytes, size_t size,
+                                 void *output) {
+      static_cast<std::string *>(output)->append(
+          static_cast<const char *>(bytes), size);
+      return 0;
+    }, &binary) == 0, "valid binary fixture serializes");
+  }
+  lua_close(compiler);
+  if (binary.empty()) return;
+
+  auto &package = runtimePackage();
+  const auto root = package.roots.visiblePackages /
+                    package.package.directoryName / "skin";
+  writeText(root / "valid-binary.lua", binary);
+  std::string quoted = "\"";
+  for (unsigned char byte : binary) {
+    const auto digits = std::to_string(byte);
+    quoted += "\\" + std::string(3 - digits.size(), '0') + digits;
+  }
+  quoted += "\"";
+  writeText(root / "binary-loaders.luaskin",
+            "local binary = " + quoted + R"lua(
+assert(loadstring(binary) == nil)
+assert(load(binary) == nil)
+assert(loadfile("valid-binary.lua") == nil)
+assert(not pcall(dofile, "valid-binary.lua"))
+assert(not pcall(require, "valid-binary"))
+assert(assert(loadstring("return 11"))() == 11)
+assert(assert(load("return 13"))() == 13)
+return {}
+)lua");
+  for (auto level : {SkinSafetyLevel::Standard,
+                     SkinSafetyLevel::BeatorajaCompatibility,
+                     SkinSafetyLevel::Unrestricted}) {
+    auto entry = makeHarness(LuaRuntimePurpose::Gameplay, "valid-binary.lua",
+                             false, false, level);
+    if (entry) {
+      const auto result = entry->runtime->loadHeader();
+      expect(!result.value && result.failure,
+             "valid binary entry is rejected in every safety mode");
+    }
+    auto loaders = makeHarness(LuaRuntimePurpose::Gameplay,
+                               "binary-loaders.luaskin", false, false, level);
+    if (loaders) {
+      expect(loaders->runtime->loadHeader().value.has_value(),
+             "dynamic, file and module loaders reject valid binary chunks");
+    }
+    auto callbacks = makeHarness(LuaRuntimePurpose::Gameplay,
+                                 "language_surface.luaskin", false, false, level);
+    if (callbacks) {
+      loadThroughConfigured(*callbacks);
+      expect(callbacks->runtime->compileCallbackScript(
+                 "return 7", LuaCallbackScriptKind::Statement).callback.has_value(),
+             "configured binding callback accepts source");
+      const auto result = callbacks->runtime->compileCallbackScript(
+          binary, LuaCallbackScriptKind::Statement);
+      expect(!result.callback && result.failure,
+             "configured binding callback rejects valid binary chunks");
+    }
+  }
+}
+
+void testLuaJitNativeNumericExtensionsAreUnavailable() {
+  auto &package = runtimePackage();
+  writeText(package.roots.visiblePackages / package.package.directoryName /
+                "skin/source-numbers.luaskin", R"lua(
+assert(assert(loadstring("return 42"))() == 42)
+assert(assert(loadstring("return 0xff"))() == 255)
+assert(loadstring("return 1LL") == nil)
+assert(loadstring("return 1ULL") == nil)
+assert(loadstring("return 1i") == nil)
+return {}
+)lua");
+  auto harness = makeHarness(LuaRuntimePurpose::Validation,
+                             "source-numbers.luaskin");
+  if (harness) {
+    const auto result = harness->runtime->loadHeader();
+    expect(result.value.has_value(),
+           "Lua source retains ordinary numbers without native numeric extensions");
+  }
+}
+
 void testCatalogHasNoOverlayWriteOrEventAuthority() {
   auto harness = makeHarness(LuaRuntimePurpose::Catalog,
                              "catalog_read_only.luaskin", true);
@@ -1513,6 +1610,8 @@ int main(int argc, char **argv) {
   testConfiguredTableUsesCanonicalVirtualData();
   testFreshPurposesDoNotShareLuaState();
   testLanguageSurfaceBit32AndTextOnlyLoading();
+  testValidBinaryChunksAreRejectedByEverySkinLoader();
+  testLuaJitNativeNumericExtensionsAreUnavailable();
   testLoadfileUsesBeatorajaRestrictedIoRoot();
   testControlledCallbackAndFrameDeadlines();
   testCallbackWallTimeIncludesHostCalls();

@@ -83,7 +83,7 @@ decodePnmRows(std::span<const std::byte> encoded,
       !portableWhitespace(bytes[position]) ||
       !portableDimensionsValid(width, height, options)) return std::nullopt;
   // stb consumes exactly the one separator after MAXVAL. Further whitespace
-  // belongs to the raster, and sample values are not rescaled by MAXVAL.
+  // belongs to the raster.
   ++position;
   const int channels = bytes[1] == '6' ? 3 : 1;
   const int sampleBytes = maximum > 255 ? 2 : 1;
@@ -97,15 +97,16 @@ decodePnmRows(std::span<const std::byte> encoded,
       if ((x & 4095) == 0 && options.stop.stop_requested()) return std::nullopt;
       std::array<unsigned char, 4> rgba{0, 0, 0, 255};
       for (int channel = 0; channel < channels; ++channel) {
-        if (sampleBytes == 2) {
-          // Preserve bundled stb's native-endian PNM16 conversion, including
-          // its high-byte truncation, instead of changing existing artwork.
-          std::uint16_t sample = 0;
-          std::memcpy(&sample, encoded.data() + position, sizeof(sample));
-          rgba[channel] = static_cast<unsigned char>(sample >> 8);
-        } else {
-          rgba[channel] = std::to_integer<unsigned char>(encoded[position]);
+        unsigned sample = std::to_integer<unsigned char>(encoded[position]);
+        if (sampleBytes == 2)
+          sample = (sample << 8) | std::to_integer<unsigned char>(encoded[position + 1]);
+        const unsigned expectedMaximum = sampleBytes == 2 ? 65535 : 255;
+        if (static_cast<unsigned>(maximum) != expectedMaximum) {
+          // MAXVAL is inclusive: its sample must map to full intensity.
+          sample = std::min(sample, static_cast<unsigned>(maximum));
+          sample = sample * expectedMaximum / static_cast<unsigned>(maximum);
         }
+        rgba[channel] = static_cast<unsigned char>(sampleBytes == 2 ? sample >> 8 : sample);
         position += sampleBytes;
       }
       if (channels == 1) rgba[1] = rgba[2] = rgba[0];

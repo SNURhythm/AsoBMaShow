@@ -883,8 +883,8 @@ int compileCallbackArgument(lua_State *state) {
     return 0;
   }
   const int loadStatus =
-      luaL_loadbuffer(state, request->source.data(), request->source.size(),
-                      "@skin-binding-script");
+      luaL_loadbufferx(state, request->source.data(), request->source.size(),
+                      "@skin-binding-script", "t");
   if (loadStatus != 0) {
     request->failure = CallbackCompileFailure::InvalidScript;
     try {
@@ -1045,8 +1045,8 @@ struct LuaSkinRuntime::Impl {
     int loadStatus = LUA_ERRFILE;
     std::optional<SkinDiagnostic> readFailure;
     if (source) {
-      loadStatus = luaL_loadbuffer(state, source->data(), source->size(),
-                                  "@skin-properties");
+      loadStatus = luaL_loadbufferx(state, source->data(), source->size(),
+                                  "@skin-properties", "t");
     } else {
       auto entry = fileSystem->readEntry(budget.maxAllocatorBytes);
       if (entry.failure) {
@@ -1054,9 +1054,9 @@ struct LuaSkinRuntime::Impl {
             makeDiagnostic(runtimeFileFailureCode(entry.failure->code),
                            entry.failure->message, entry.failure->virtualPath);
       } else {
-        loadStatus = luaL_loadbuffer(
+        loadStatus = luaL_loadbufferx(
             state, reinterpret_cast<const char *>(entry.bytes.data()),
-            entry.bytes.size(), "@skin-entry");
+            entry.bytes.size(), "@skin-entry", "t");
       }
     }
     if (readFailure) {

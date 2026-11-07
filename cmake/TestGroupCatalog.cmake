@@ -560,6 +560,7 @@ asobmashow_label_tests(area_rendering
     skin_renderer_golden_tests
     skin_text_graph_normalization_tests
     text_view_font_lifetime_tests
+    font_bitmap_bounds_tests
     text_view_metal_tests
     ui_batch_android_upload_metal_tests
     ui_batch_metal_tests
@@ -630,9 +631,10 @@ asobmashow_label_tests(area_library grouped_chart_list_tests storage_inventory_t
 asobmashow_label_tests(area_ui grouped_chart_list_tests)
 asobmashow_label_tests(area_audio storage_inventory_tests storage_music_admission_tests)
 asobmashow_label_tests(area_video storage_inventory_tests)
-asobmashow_label_tests(area_audio storage_media_tests)
-asobmashow_label_tests(area_video storage_media_tests storage_video_capability_tests storage_video_capability_startup_failure_tests)
-asobmashow_label_tests(area_library storage_media_tests)
+asobmashow_label_tests(area_audio storage_media_tests storage_media_input_tests)
+asobmashow_label_tests(area_video storage_media_tests storage_media_input_tests storage_video_capability_tests storage_video_capability_startup_failure_tests)
+asobmashow_label_tests(area_library storage_media_tests storage_media_input_tests)
+asobmashow_test_build_targets(storage_media_input_tests storage_media_tests)
 asobmashow_label_tests(area_ir
     ir_credential_store_tests ir_credential_migration_tests pending_ir_credential_cleanup_tests
     result_skin_ir_tests result_skin_ir_scene_tests gameplay_skin_ir_scene_tests)

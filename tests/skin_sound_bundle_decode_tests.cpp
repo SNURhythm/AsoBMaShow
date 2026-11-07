@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -81,6 +82,75 @@ public:
 private:
   std::filesystem::path root_;
 };
+
+void testImaAdpcmFrameCountWidensBeforeMultiplication() {
+  // Five million 256-byte mono IMA blocks contain 2,525,000,000 frames.
+  // Virtual I/O exposes the length without allocating or scanning the payload.
+  struct VirtualWave {
+    std::array<unsigned char, 48> header{};
+    sf_count_t position = 0;
+    sf_count_t bytesRead = 0;
+    static constexpr sf_count_t length() { return 1280000048; }
+  } wave;
+  auto put16 = [&](std::size_t offset, unsigned value) {
+    for (unsigned i = 0; i < 2; ++i) wave.header[offset + i] = value >> (8 * i);
+  };
+  auto put32 = [&](std::size_t offset, unsigned value) {
+    for (unsigned i = 0; i < 4; ++i) wave.header[offset + i] = value >> (8 * i);
+  };
+  std::memcpy(wave.header.data(), "RIFF", 4);
+  put32(4, 1280000040);
+  std::memcpy(wave.header.data() + 8, "WAVEfmt ", 8);
+  put32(16, 20);
+  put16(20, 0x11); // WAVE_FORMAT_IMA_ADPCM
+  put16(22, 1);
+  put32(24, 8000);
+  put32(28, 4055);
+  put16(32, 256);
+  put16(34, 4);
+  put16(36, 2);
+  put16(38, 505);
+  std::memcpy(wave.header.data() + 40, "data", 4);
+  put32(44, 1280000000);
+  SF_VIRTUAL_IO io{};
+  io.get_filelen = [](void *) -> sf_count_t { return VirtualWave::length(); };
+  io.seek = [](sf_count_t offset, int whence, void *data) -> sf_count_t {
+    auto &file = *static_cast<VirtualWave *>(data);
+    const auto base = whence == SEEK_SET ? 0 :
+                      whence == SEEK_CUR ? file.position : VirtualWave::length();
+    const auto next = base + offset;
+    if (next < 0 || next > VirtualWave::length()) return -1;
+    return file.position = next;
+  };
+  io.read = [](void *output, sf_count_t count, void *data) -> sf_count_t {
+    auto &file = *static_cast<VirtualWave *>(data);
+    count = std::min(count, VirtualWave::length() - file.position);
+    if (count <= 0) return 0;
+    std::memset(output, 0, static_cast<std::size_t>(count));
+    if (file.position < static_cast<sf_count_t>(file.header.size())) {
+      const auto copied = std::min(count,
+          static_cast<sf_count_t>(file.header.size()) - file.position);
+      std::memcpy(output, file.header.data() + file.position,
+                  static_cast<std::size_t>(copied));
+    }
+    file.position += count;
+    file.bytesRead += count;
+    return count;
+  };
+  io.tell = [](void *data) -> sf_count_t {
+    return static_cast<VirtualWave *>(data)->position;
+  };
+  SF_INFO info{};
+  SNDFILE *file = sf_open_virtual(&io, SFM_READ, &info, &wave);
+  if (!file) std::cerr << "IMA open diagnostic: " << sf_strerror(nullptr) << '\n';
+  expect(file != nullptr, "large virtual IMA WAV opens");
+  if (file) {
+    expect(info.frames == 2525000000LL,
+           "IMA frame count remains correct above signed 32-bit range");
+    sf_close(file);
+  }
+  expect(wave.bytesRead < 4096, "IMA metadata check reads bounded header data");
+}
 
 struct ReferencePcm {
   SF_INFO info{};
@@ -758,6 +828,7 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
   testBundleOnlyPreviewExtensionFallback(argv[0]);
 #endif
+  testImaAdpcmFrameCountWidensBeforeMultiplication();
   testForgedFrameCountDoesNotAllocateDeclaredPcm();
   testKeysoundDecodeAvoidsRepeatedGrowth();
   testSkinDecodeUsesOutputRateBudget();

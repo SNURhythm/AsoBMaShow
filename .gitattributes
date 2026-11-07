@@ -5,3 +5,10 @@
 *.h text
 *.cpp text
 src/sqlite3.c -whitespace
+# Preserve upstream formatting when refreshing vendored sources.
+include/miniaudio.h -whitespace
+include/stb_image.h -whitespace
+third_party/miniz/* -whitespace
+# Leading context markers in port patches are part of the patch syntax.
+vcpkg-overlays/**/*.patch -whitespace
+vcpkg-overlays/**/*.diff -whitespace

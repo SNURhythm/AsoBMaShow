@@ -52,7 +52,7 @@
 #endif
 
 #if !ASOBMSHOW_HAS_LIBARCHIVE
-#include "../../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
+#include "../../third_party/miniz/miniz.h"
 #endif
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR

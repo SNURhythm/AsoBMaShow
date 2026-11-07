@@ -4,7 +4,7 @@
 #include "support/AllocationFailure.h"
 
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
-#include "../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
+#include "../third_party/miniz/miniz.h"
 
 #include <array>
 #include <algorithm>
@@ -158,6 +158,24 @@ void appendPngChunk(std::vector<std::byte> &png, const char *type,
   png.insert(png.end(), payload.begin(), payload.end());
   appendBigEndian(png, static_cast<std::uint32_t>(mz_crc32(
       0, reinterpret_cast<const unsigned char *>(png.data() + start), payload.size() + 4)));
+}
+
+void testStbRejectsInvalidPngColorDepthBeforeDecoding() {
+  std::vector<std::byte> png{std::byte{137}, std::byte{80}, std::byte{78}, std::byte{71},
+                             std::byte{13}, std::byte{10}, std::byte{26}, std::byte{10}};
+  std::vector<std::byte> header;
+  appendBigEndian(header, 1);
+  appendBigEndian(header, 1);
+  // Truecolor PNG requires 8 or 16 bits per sample; 4 is only legal for
+  // grayscale or indexed color. Querying metadata must enforce this too.
+  for (unsigned char value : {4, 2, 0, 0, 0}) header.push_back(std::byte(value));
+  appendPngChunk(png, "IHDR", header);
+  appendPngChunk(png, "IEND", {});
+  int width = 0, height = 0, channels = 0;
+  expect(stbi_info_from_memory(reinterpret_cast<const stbi_uc *>(png.data()),
+                               static_cast<int>(png.size()), &width, &height,
+                               &channels) == 0,
+         "stb rejects invalid PNG color/depth combinations at metadata query");
 }
 
 std::vector<std::byte> makeLargePng(int width, int height) {
@@ -787,6 +805,7 @@ int main() {
   verifyOptionalCimTree();
   testCimNativeRows();
   testWebpFfmpegFallback();
+  testStbRejectsInvalidPngColorDepthBeforeDecoding();
   testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread();
   return failures == 0 ? 0 : 1;
 }

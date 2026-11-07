@@ -216,7 +216,11 @@ void defaultAndCaptureConfigurationStayUnchanged() {
   ma_AAudioStream* output = nullptr;
   requestedSize = 0;
   require(ma_device_init_by_type__aaudio(&device, &config, ma_device_type_playback, &d, &output) == MA_SUCCESS, "default opens");
-  require(observed.callbackFrames == 480 && observed.capacity == 1440 && requestedSize == 0, "non-opted-in AAudio must retain defaults");
+  require(observed.callbackFrames == 0 && observed.capacity == 0 && requestedSize == 0, "default AAudio must leave buffer sizing to the device");
+  config.aaudio.allowSetBufferCapacity = MA_TRUE;
+  d = descriptor();
+  require(ma_device_init_by_type__aaudio(&device, &config, ma_device_type_playback, &d, &output) == MA_SUCCESS, "explicit buffer sizing opens");
+  require(observed.callbackFrames == 480 && observed.capacity == 1440 && requestedSize == 0, "explicit AAudio buffer sizing retains the requested periods");
   config.aaudio.bufferSizeInBursts = 2;
   d = descriptor();
   require(ma_device_init_by_type__aaudio(&device, &config, ma_device_type_capture, &d, &output) == MA_SUCCESS, "capture opens");

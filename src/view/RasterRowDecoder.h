@@ -113,12 +113,10 @@ inline std::optional<DecodedImageData> decodeBmpRows(
 
   std::size_t metadataEnd = 14 + headerSize;
   std::array<std::uint32_t, 4> masks{};
-  bool defaultAlpha = false;
   if (depth == 16 || depth == 32) {
     if (compression == 0) {
       masks = depth == 16 ? std::array<std::uint32_t, 4>{0x7c00, 0x3e0, 0x1f, 0}
-                          : std::array<std::uint32_t, 4>{0xff0000, 0xff00, 0xff, 0xff000000};
-      defaultAlpha = depth == 32;
+                          : std::array<std::uint32_t, 4>{0xff0000, 0xff00, 0xff, 0};
     } else {
       const std::size_t maskOffset = headerSize == 40 ? metadataEnd : 54;
       const unsigned maskCount = compression == 6 || headerSize >= 56 ? 4 : 3;
@@ -149,7 +147,6 @@ inline std::optional<DecodedImageData> decodeBmpRows(
   if (stride64 > SIZE_MAX || height > (encoded.size() - pixelOffset) / stride64) return std::nullopt;
   const auto stride = static_cast<std::size_t>(stride64);
   ImageRowReducer reducer(static_cast<int>(width), static_cast<int>(height), options);
-  bool anyAlpha = false;
   for (unsigned y = 0; y < height; ++y) {
     if (options.stop.stop_requested()) return std::nullopt;
     const auto row = pixelOffset + static_cast<std::size_t>(y) * stride;
@@ -169,12 +166,11 @@ inline std::optional<DecodedImageData> decodeBmpRows(
         const auto pixel = row + static_cast<std::size_t>(x) * (depth / 8);
         const auto packed = depth == 16 ? rasterU16(encoded, pixel) : rasterU32(encoded, pixel);
         for (int c = 0; c < 4; ++c) rgba[c] = rasterMaskedChannel(packed, masks[c]);
-        anyAlpha = anyAlpha || rgba[3] != 0;
       }
       reducer.add(static_cast<int>(x), static_cast<int>(y), rgba);
     }
   }
-  return finishRasterRows(reducer, false, !topDown, options, defaultAlpha && !anyAlpha);
+  return finishRasterRows(reducer, false, !topDown, options);
 }
 
 // TGA has no signature; use only after signature-based codecs. This mirrors

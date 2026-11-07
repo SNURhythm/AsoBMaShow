@@ -78,10 +78,8 @@ decodeGifRows(std::span<const std::byte> bytes, const ImageDecodeOptions &option
     const bool interlaced = (frameFlags & 64) != 0;
     ImageRowReducer reducer(width, height, options, interlaced);
     std::array<unsigned char, 4> backdrop{};
-    if (background > 0 && background < globalCount) {
-      // Preserve stb's first-frame untouched-canvas palette byte order.
-      backdrop = {global[background][2], global[background][1],
-                   global[background][0], 255};
+    if (background < globalCount && transparent < 0) {
+      backdrop = global[background];
     }
     const auto fillRow = [&](int y, int begin, int end) {
       for (int x = begin; x < end; ++x) reducer.add(x, y, backdrop);

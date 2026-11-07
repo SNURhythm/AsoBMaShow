@@ -1,0 +1,29 @@
+--- a/src/lj_arch.h
++++ b/src/lj_arch.h
+@@ -7,6 +7,9 @@
+ #define _LJ_ARCH_H
+ 
+ #include "lua.h"
++
++/* Skin runtimes never expose native calls, even when JIT is disabled. */
++#define LUAJIT_DISABLE_FFI
+ 
+ /* -- Target definitions -------------------------------------------------- */
+ 
+--- a/src/msvcbuild.bat
++++ b/src/msvcbuild.bat
+@@ -46,12 +46,12 @@
+   %LJMT% -manifest minilua.exe.manifest -outputresource:minilua.exe
+ @endlocal
+ 
+-@set DASMFLAGS=-D WIN -D JIT -D FFI -D ENDIAN_LE -D FPU -D P64
++@set DASMFLAGS=-D WIN -D JIT -D ENDIAN_LE -D FPU -D P64
+ @set LJARCH=x64
+ @minilua
+ @if errorlevel 8 goto :NO32
+ @set DASC=vm_x86.dasc
+-@set DASMFLAGS=-D WIN -D JIT -D FFI -D ENDIAN_LE -D FPU
++@set DASMFLAGS=-D WIN -D JIT -D ENDIAN_LE -D FPU
+ @set LJARCH=x86
+ @set LJCOMPILE=%LJCOMPILE% /arch:SSE2
+ @goto :DA

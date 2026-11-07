@@ -1,4 +1,5 @@
 #include "ImageFileDecoder.h"
+#include "../video/LocalMediaInput.h"
 #ifdef _WIN32
 #define STBI_WINDOWS_UTF8
 #endif
@@ -16,7 +17,7 @@ extern "C" {
 
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
 #define MINIZ_NO_ARCHIVE_WRITING_APIS
-#include "../../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
+#include "../../third_party/miniz/miniz.h"
 
 #include <fstream>
 #include <algorithm>
@@ -610,7 +611,9 @@ decodeWebpWithFfmpeg(std::span<const std::byte> encoded,
   if (rawFormat == nullptr) return std::nullopt;
   rawFormat->pb = io.get();
   rawFormat->flags |= AVFMT_FLAG_CUSTOM_IO;
-  if (avformat_open_input(&rawFormat, nullptr, nullptr, nullptr) < 0) {
+  const auto *webp = av_find_input_format("webp_pipe");
+  if (webp == nullptr || video::restrictMediaInput(rawFormat) < 0 ||
+      avformat_open_input(&rawFormat, nullptr, webp, nullptr) < 0) {
     if (rawFormat != nullptr) avformat_free_context(rawFormat);
     return std::nullopt;
   }
@@ -629,6 +632,11 @@ decodeImageMemory(std::span<const std::byte> encoded,
     return std::nullopt;
   }
   if (detail::isPng(encoded)) return detail::decodePngRows(encoded, options);
+  // Upstream stb no longer decodes PIC; our bounded row decoder supports both
+  // native-size and reduced output without an additional full-size image.
+  if (detail::isPic(encoded)) return detail::decodePicRows(encoded, options);
+  // Keep binary PNM's inclusive MAXVAL conversion consistent at every size.
+  if (detail::isPnm(encoded)) return detail::decodePnmRows(encoded, options);
   int width = 0;
   int height = 0;
   int channels = 0;
@@ -658,9 +666,7 @@ decodeImageMemory(std::span<const std::byte> encoded,
     if (detail::isGif(encoded)) return detail::decodeGifRows(encoded, options);
     if (detail::isBmp(encoded)) return detail::decodeBmpRows(encoded, options);
     if (detail::isPsd(encoded)) return detail::decodePsdRows(encoded, options);
-    if (detail::isPnm(encoded)) return detail::decodePnmRows(encoded, options);
     if (detail::isHdr(encoded)) return detail::decodeHdrRows(encoded, options);
-    if (detail::isPic(encoded)) return detail::decodePicRows(encoded, options);
     if (detail::isTga(encoded)) return detail::decodeTgaRows(encoded, options);
   }
   std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> decoded(

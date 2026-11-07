@@ -115,7 +115,7 @@ std::optional<image_decode::DecodedImageData> rasterFixtureDecode(
 }
 
 void expectRasterStbEquivalent(const std::vector<std::byte> &bytes, bool bmp,
-                               const std::string &label, bool reflectReferenceX = false) {
+                               const std::string &label) {
   int width = 0, height = 0, channels = 0;
   auto *reference = stbi_load_from_memory(reinterpret_cast<const unsigned char *>(bytes.data()),
       static_cast<int>(bytes.size()), &width, &height, &channels, 4);
@@ -125,9 +125,7 @@ void expectRasterStbEquivalent(const std::vector<std::byte> &bytes, bool bmp,
     image_decode::ImageDecodeOptions options{.targetWidth = target[0], .targetHeight = target[1]};
     image_decode::detail::ImageRowReducer expected(width, height, options);
     for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
-      // stb ignores TGA's right-origin flag. Apply that specified reflection to
-      // its independently decoded source before the reference area reduction.
-      const auto offset = (y * width + (reflectReferenceX ? width - 1 - x : x)) * 4;
+      const auto offset = (y * width + x) * 4;
       expected.add(x, y, {reference[offset], reference[offset + 1], reference[offset + 2], reference[offset + 3]});
     }
     const auto reducedReference = expected.finish();
@@ -176,13 +174,12 @@ void testRasterTgaVariants() {
     const auto label = std::string("TGA ") + (rle ? "RLE " : "raw ") + std::to_string(descriptor);
     for (int depth : {8, 15, 16, 24, 32})
       expectRasterStbEquivalent(rasterFixtureTga(depth, rle, descriptor), false,
-                               label + " depth " + std::to_string(depth), (descriptor & 0x10) != 0);
+                               label + " depth " + std::to_string(depth));
     expectRasterStbEquivalent(rasterFixtureTga(16, rle, descriptor, 0, true), false,
-                             label + " gray-alpha", (descriptor & 0x10) != 0);
+                             label + " gray-alpha");
     for (int indexDepth : {8, 16}) for (int paletteDepth : {8, 15, 16, 24, 32})
       expectRasterStbEquivalent(rasterFixtureTga(indexDepth, rle, descriptor, paletteDepth), false,
-          label + " palette " + std::to_string(paletteDepth) + " index " + std::to_string(indexDepth),
-          (descriptor & 0x10) != 0);
+          label + " palette " + std::to_string(paletteDepth) + " index " + std::to_string(indexDepth));
   }
 
   const auto original = rasterFixtureTga(8, false, 0x20, 24);

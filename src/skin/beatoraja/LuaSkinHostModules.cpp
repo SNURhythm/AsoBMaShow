@@ -2319,7 +2319,7 @@ int textLoader(lua_State *state) {
   std::size_t size = 0;
   const char *text = luaL_checklstring(state, 1, &size);
   const char *name = luaL_optstring(state, 2, "=(skin-load)");
-  const int status = luaL_loadbuffer(state, text, size, name);
+  const int status = luaL_loadbufferx(state, text, size, name, "t");
   if (status != 0) {
     lua_pushnil(state);
     lua_insert(state, -2);
@@ -2343,9 +2343,9 @@ int doFile(lua_State *state) {
       impl->storeFileError(*read.failure);
     } else {
       std::string chunkName = "@" + std::string(virtualPath);
-      loadStatus = luaL_loadbuffer(
+      loadStatus = luaL_loadbufferx(
           state, reinterpret_cast<const char *>(read.bytes.data()),
-          read.bytes.size(), chunkName.c_str());
+          read.bytes.size(), chunkName.c_str(), "t");
     }
   }
   if (loadStatus == LUA_ERRFILE) {
@@ -2372,9 +2372,9 @@ int loadFile(lua_State *state) {
     return expectedFailure(state, read.failure->message);
   }
   std::string chunkName = "@" + std::string(virtualPath);
-  const int loadStatus = luaL_loadbuffer(
+  const int loadStatus = luaL_loadbufferx(
       state, reinterpret_cast<const char *>(read.bytes.data()),
-      read.bytes.size(), chunkName.c_str());
+      read.bytes.size(), chunkName.c_str(), "t");
   if (loadStatus == 0) {
     return 1;
   }
@@ -2462,9 +2462,9 @@ int moduleLoader(lua_State *state) {
       if (!read.failure) {
         found = true;
         std::string chunkName = "@module:" + std::string(name, nameSize);
-        loadStatus = luaL_loadbuffer(
+        loadStatus = luaL_loadbufferx(
             state, reinterpret_cast<const char *>(read.bytes.data()),
-            read.bytes.size(), chunkName.c_str());
+            read.bytes.size(), chunkName.c_str(), "t");
         break;
       }
       if (read.failure->code != SkinFileError::Missing) {

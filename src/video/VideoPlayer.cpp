@@ -1,5 +1,6 @@
 #include "VideoPlayer.h"
 #include "VideoDecodeState.h"
+#include "LocalMediaInput.h"
 #include "VideoFrameLayout.h"
 #include "HardwareVideoDecoder.h"
 #include "../rendering/common.h"
@@ -268,8 +269,7 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     };
     // genpts
     tempFormatContext->flags |= AVFMT_FLAG_GENPTS | AVFMT_FLAG_SORT_DTS;
-    if (avformat_open_input(&tempFormatContext, videoPath.c_str(), nullptr,
-                            nullptr) < 0) {
+    if (video::openLocalMediaInput(&tempFormatContext, videoPath.c_str()) < 0) {
       return fail();
     }
     if (avformat_find_stream_info(tempFormatContext, nullptr) < 0) {

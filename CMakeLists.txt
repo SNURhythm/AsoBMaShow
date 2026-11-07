@@ -5133,6 +5133,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(video_frame_layout_tests PRIVATE cxx_std_23)
 
+    add_executable(font_bitmap_bounds_tests tests/font_bitmap_bounds_tests.c)
+    target_link_libraries(font_bitmap_bounds_tests PRIVATE Freetype::Freetype)
+
     add_executable(video_decode_state_tests
         tests/video_decode_state_tests.cpp
         src/video/VideoDecodeState.cpp
@@ -9233,6 +9236,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(lua_skin_file_system_tests)
     asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(video_frame_layout_tests)
+    asobmashow_register_test(font_bitmap_bounds_tests)
     asobmashow_register_test(video_decode_state_tests)
 
     asobmashow_register_test(audio_video_settings_tests foundation_av_settings)
