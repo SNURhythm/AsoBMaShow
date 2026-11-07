@@ -6,13 +6,12 @@ Find BMS searches supported external sources, downloads and validates a matching
 archive, and hands the resulting content to the library. The flow avoids exposing
 partially written or unverified content as a chart folder.
 
-Automatic lookup uses GingerRush, Konmai, Wriggle, and BMS Search. HorieYuuka
-is available through **Browse Sites** only; Find BMS does not call its API.
+Automatic lookup uses GingerRush, Konmai, Wriggle, and BMS Search.
 
 ## Mobile browsing and downloads
 
-On iOS and Android, **Browse Sites** opens an embedded browser with Manbow and
-GingerRush bookmarks, navigation, an address field, and an external-browser action.
+On iOS and Android, **Browse Sites** opens an embedded browser with Manbow,
+GingerRush, and BMS Search bookmarks, navigation, an address field, and an external-browser action.
 Manbow appears first and is the default on each app launch. Reopening the browser
 within the same app session resumes the last page; the URL is not saved to disk. Native URL-entry controls provide clear/edit/go
 behavior. HTTP(S) URLs and hostnames navigate directly; other input opens an
