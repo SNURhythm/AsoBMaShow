@@ -6,6 +6,7 @@ vcpkg_from_github(
     HEAD_REF master
     PATCHES
         msvcbuild.patch
+        disable-ffi.patch
         003-do-not-set-macosx-deployment-target.patch
 )
 
@@ -52,7 +53,19 @@ if(VCPKG_DETECTED_MSVC)
 
 else()
     vcpkg_list(SET options)
-    if(VCPKG_CROSSCOMPILING)
+    if(VCPKG_TARGET_IS_IOS)
+        # Build the generators on macOS with the target's actual feature flags.
+        # Generic host buildvm binaries enable JIT and have a different layout
+        # from the interpreter-only iOS VM.
+        find_program(XCRUN xcrun REQUIRED)
+        execute_process(COMMAND "${XCRUN}" --sdk macosx --find clang
+            OUTPUT_VARIABLE host_cc OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY)
+        execute_process(COMMAND "${XCRUN}" --sdk macosx --show-sdk-path
+            OUTPUT_VARIABLE host_sdk OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY)
+        list(APPEND options "HOST_CC=${host_cc} -isysroot ${host_sdk}")
+    elseif(VCPKG_CROSSCOMPILING)
         list(APPEND options
             "LJARCH=${VCPKG_TARGET_ARCHITECTURE}"
             "BUILDVM_X=${CURRENT_HOST_INSTALLED_DIR}/manual-tools/${PORT}/buildvm-${VCPKG_TARGET_ARCHITECTURE}${VCPKG_HOST_EXECUTABLE_SUFFIX}"

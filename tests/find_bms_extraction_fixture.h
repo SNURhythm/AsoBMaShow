@@ -5,7 +5,7 @@
 #include "downloads/DownloadJobs.h"
 #include "downloads/DownloadImport.h"
 #include "RAII.h"
-#include "../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
+#include "../third_party/miniz/miniz.h"
 
 #include <iostream>
 #include <limits>

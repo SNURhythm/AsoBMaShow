@@ -3,7 +3,7 @@
 #include "../BmsChartFile.h"
 #include "../CanonicalDigest.h"
 #include "../RAII.h"
-#include "../../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
+#include "../../third_party/miniz/miniz.h"
 
 #if ASOBMSHOW_HAS_LIBARCHIVE
 #include "../ArchiveRAII.h"

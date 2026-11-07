@@ -1570,10 +1570,13 @@ void testBzipZipFallbackStopsBeforeOversizedAllocation() {
         archive_file::makeVirtualPath(forged, "artwork.png"), bytes, budget, &error);
     bounded_allocation_probe::enabled = false;
     std::cerr << "BZIP2 fallback largest allocation: "
-              << bounded_allocation_probe::largest << " budget: " << budget << '\n';
+              << bounded_allocation_probe::largest << " budget: " << budget
+              << " error: " << error << '\n';
     assert(!succeeded && bytes.empty());
     assert(bounded_allocation_probe::largest <= budget);
-    assert(error.find("exceeds bounded read limit") != std::string::npos);
+    // Updated libarchive rejects the understated size before emitting a block
+    // to our bounded accumulator. The output and allocation guarantees remain.
+    assert(error.find("larger than the declared entry size") != std::string::npos);
     bool consumed = false;
     bounded_allocation_probe::largest = 0;
     bounded_allocation_probe::enabled = true;
@@ -1592,7 +1595,7 @@ void testBzipZipFallbackStopsBeforeOversizedAllocation() {
     // Full unzip streams to disk within the memory budget. A forged size can
     // fail after partial writes, but must never certify the output as complete.
     assert(!unzipped && bounded_allocation_probe::largest <= budget);
-    assert(error.find("wrong size") != std::string::npos);
+    assert(error.find("larger than the declared entry size") != std::string::npos);
     assert(std::filesystem::exists(outputFolder / ".asobmashow_unzip_incomplete"));
     assert(!std::filesystem::exists(outputFolder / ".asobmashow_unzip_complete"));
     assert(std::filesystem::exists(forged));
@@ -1622,7 +1625,7 @@ void testBzipZipFallbackStopsBeforeOversizedAllocation() {
   std::stop_source stop;
   bounded_allocation_probe::cancelOnChunk = &stop;
   const bool cancelledRead = archive_file::readFileBounded(
-      archive_file::makeVirtualPath(forged, "artwork.png"), cancelledBytes,
+      archive_file::makeVirtualPath(valid, "artwork.png"), cancelledBytes,
       1048576, &error, stop.get_token());
   bounded_allocation_probe::cancelOnChunk = nullptr;
   assert(stop.stop_requested());
@@ -4222,7 +4225,9 @@ void testTarGlobalPaxUsesSequentialReader() {
   std::snprintf(header.data() + 100, 8, "%07o", 0644);
   std::snprintf(header.data() + 108, 8, "%07o", 0);
   std::snprintf(header.data() + 116, 8, "%07o", 0);
-  const std::string attributes = "11 uid=123\n";
+  // libarchive rejects unsupported global attributes that it would otherwise
+  // apply to members. An informational comment still exercises the g header.
+  const std::string attributes = "15 comment=123\n";
   std::snprintf(header.data() + 124, 12, "%011llo", static_cast<unsigned long long>(attributes.size()));
   std::snprintf(header.data() + 136, 12, "%011o", 0);
   std::memset(header.data() + 148, ' ', 8);
@@ -4249,6 +4254,17 @@ void testTarGlobalPaxUsesSequentialReader() {
   assert(archive_file::readFileBounded(archive_file::makeVirtualPath(path, "last.bin"), bytes, 4));
   assert(std::string(bytes.begin(), bytes.end()) == "data");
   assert(archive_file::archiveReaderStatsForTesting().libarchiveHeaders == before + 2);
+
+  const auto unsupported = temporary.path() / "unsupported-global.tar";
+  std::filesystem::copy_file(path, unsupported);
+  {
+    std::fstream output(unsupported, std::ios::binary | std::ios::in | std::ios::out);
+    output.seekp(512);
+    output.write("15 uid=1234567\n", 15);
+  }
+  std::string error;
+  assert(!archive_file::listEntries(unsupported, entries, &error));
+  assert(error.find("Unsupported pax global") != std::string::npos);
 }
 
 void testTarSparseAndPersistedOffsetValidation() {

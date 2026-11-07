@@ -98,10 +98,10 @@
 #define ASOBMSHOW_ARCHIVEFILE_HAS_ICONV 0
 #endif
 
-#if __has_include("../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h")
+#if __has_include("../third_party/miniz/miniz.h")
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
 #define MINIZ_NO_ARCHIVE_WRITING_APIS
-#include "../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
+#include "../third_party/miniz/miniz.h"
 #define ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ 1
 #else
 #define ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ 0

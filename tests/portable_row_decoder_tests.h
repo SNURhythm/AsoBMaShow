@@ -27,8 +27,8 @@ std::vector<std::byte> portableTestPnm(int channels, int depth,
       "\f\r\n" + (depth == 16 ? "65535\n" : "255\n"));
   for (int y = 0; y < height; ++y) for (int x = 0; x < width; ++x) {
     for (int channel = 0; channel < channels; ++channel) {
-      // Deliberately unequal high/low bytes detect changes to stb's PNM16
-      // native-endian conversion as well as incorrect grayscale replication.
+      // Unequal high/low bytes detect incorrect PNM16 byte order as well as
+      // incorrect grayscale replication.
       if (depth == 16) bytes.push_back(std::byte((x * 19 + y * 13 + channel * 83) & 255));
       bytes.push_back(std::byte((x * 47 + y * 29 + channel * 61 + 10) & 255));
     }
@@ -139,15 +139,31 @@ void testPortablePnmRows() {
              "PNM rejects truncated headers and pixel data");
     }
   }
-  // MAXVAL does not rescale samples in bundled stb; a whitespace-valued first
-  // pixel must not be accidentally consumed with the header separator.
+  // MAXVAL is inclusive; a whitespace-valued first pixel must not be consumed
+  // with the header separator.
   auto smallRange = portableTestBytes("P5\n3 1\n31\n");
   smallRange.insert(smallRange.end(), {std::byte{10}, std::byte{13}, std::byte{31}});
   const auto pixels = decodePnmRows(smallRange, {});
-  expect(pixels && *pixels->rgba == std::vector<unsigned char>{10, 10, 10, 255,
-             13, 13, 13, 255, 31, 31, 31, 255},
-         "PNM retains raw samples and whitespace-valued raster bytes");
-  expectPortableMatchesStb(smallRange, decodePnmRows, "PNM non-255 MAXVAL matches stb");
+  expect(pixels && *pixels->rgba == std::vector<unsigned char>{82, 82, 82, 255,
+             106, 106, 106, 255, 255, 255, 255, 255},
+         "PNM normalizes MAXVAL while retaining whitespace-valued raster bytes");
+  for (const int channels : {1, 3}) for (const unsigned maximum : {1u, 31u, 1000u}) {
+    auto endpoints = portableTestBytes(std::string(channels == 1 ? "P5" : "P6") +
+        "\n2 1\n" + std::to_string(maximum) + "\n");
+    for (const unsigned sample : {0u, maximum}) for (int c = 0; c < channels; ++c) {
+      if (maximum > 255) endpoints.push_back(std::byte(sample >> 8));
+      endpoints.push_back(std::byte(sample & 255));
+    }
+    const auto native = image_decode::decodeImageMemory(endpoints,
+        image_decode::ImageDecodeOptions{});
+    expect(native && *native->rgba == std::vector<unsigned char>{0, 0, 0, 255,
+                255, 255, 255, 255},
+           "PNM zero and inclusive MAXVAL remain black and white at native size");
+    const auto reduced = image_decode::decodeImageMemory(endpoints,
+        {.targetWidth = 1, .targetHeight = 1});
+    expect(reduced && *reduced->rgba == std::vector<unsigned char>{128, 128, 128, 255},
+           "PNM reduction preserves the full MAXVAL range");
+  }
   for (const auto header : {"P5\n0 1\n255\n", "P6\n2147483648 1\n255\n",
                             "P5\n1 1\n65536\n", "P5\n1 1\n0\n"}) {
     expect(!decodePnmRows(portableTestBytes(header), {}),

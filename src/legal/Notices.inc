@@ -25,6 +25,7 @@
 {"luajit.txt", "luajit"},
 {"lz4.txt", "lz4"},
 {"miniaudio.txt", "miniaudio"},
+{"miniz.txt", "miniz"},
 {"mp3lame.txt", "mp3lame"},
 {"mpg123.txt", "mpg123"},
 {"noto-sans-cjk.txt", "Noto Sans CJK"},

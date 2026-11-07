@@ -148,7 +148,22 @@ void testGifAndPicRowDecoders() {
   checkRowDecodeAgainstStb(lzw, "GIF growing LZW dictionary matches independent stb reference");
   for (int compression : {0, 1, 2}) {
     const auto pic = smallPic(compression);
-    checkRowDecodeAgainstStb(pic, "PIC raw and RLE rows match independent stb reference");
+    // PIC was removed upstream. Compare against the fixture's known pixels,
+    // including native-size output as well as both fractional reductions.
+    for (const auto target : {std::pair{0, 0}, std::pair{5, 3}, std::pair{11, 8}}) {
+      const image_decode::ImageDecodeOptions options{.targetWidth = target.first,
+                                                      .targetHeight = target.second};
+      image_decode::detail::ImageRowReducer reference(9, 7, options);
+      for (int y = 0; y < 7; ++y) for (int x = 0; x < 9; ++x)
+        reference.add(x, y, {static_cast<unsigned char>(10 + y * 30), 80,
+                             static_cast<unsigned char>(190 - y * 20),
+                             static_cast<unsigned char>(20 + y * 35)});
+      const auto expected = reference.finish();
+      const auto actual = image_decode::decodeImageMemory(pic, options);
+      expect(actual && expected && actual->width == expected->width &&
+                 actual->height == expected->height && *actual->rgba == *expected->rgba,
+             "PIC raw and RLE rows preserve known pixels at native and reduced sizes");
+    }
     expect(!image_decode::decodeImageMemory(std::span(pic).first(pic.size() - 1),
                 {.targetWidth = 5, .targetHeight = 3}), "truncated PIC row is rejected");
   }

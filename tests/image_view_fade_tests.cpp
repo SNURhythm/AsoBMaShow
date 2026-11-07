@@ -7,7 +7,7 @@
 #include "support/AllocationFailure.h"
 
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
-#include "../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
+#include "../third_party/miniz/miniz.h"
 
 #include <bgfx/bgfx.h>
 
