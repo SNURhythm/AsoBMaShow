@@ -55,15 +55,13 @@ void MainMenuScene::buildTutorial() {
         case NewcomerTutorialStep::Language: return nullptr;
         default: break;
         }
-        View *target = step == NewcomerTutorialStep::Download
-                           ? findBmsButton : readyPlayOptionsButton;
-        // Play options scroll on short screens; Download stays in the fixed
-        // primary action area. Only scroll a target inside the scroll view.
+        View *target = readyPlayOptionsButton;
+        // Play options scroll on short screens.
         auto *scrollContent = tutorialRightScroll_
             ? tutorialRightScroll_->getContentView() : nullptr;
         const bool targetScrolls = scrollContent &&
             scrollContent->findViewByName("mainMenuPlayOptions") == target;
-        if (step != NewcomerTutorialStep::Download && target && targetScrolls) {
+        if (target && targetScrolls) {
           const int top = tutorialRightScroll_->getY();
           const int bottom = top + tutorialRightScroll_->getHeight();
           if (target->getY() < top || target->getY() + target->getHeight() > bottom) {
@@ -74,7 +72,6 @@ void MainMenuScene::buildTutorial() {
         return target;
       },
       .stepChanged = [this, originalScroll](NewcomerTutorialStep) {
-        setFindBmsButtonVisible(findBmsAvailableWithoutTutorial_);
         if (tutorial_ && !tutorial_->getVisible()) {
           tutorialRightScroll_->setScrollOffset(originalScroll);
         }

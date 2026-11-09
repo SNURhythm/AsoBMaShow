@@ -2,7 +2,8 @@
 #include "ArchiveUnzipModal.h"
 #include "ArchiveUnzipPresentation.h"
 
-#include "FindBmsProgressPresentation.h"
+#include <iomanip>
+#include <sstream>
 #include "../rendering/common.h"
 #include "../rendering/ResponsiveUi.h"
 #include "../rendering/UiSafeArea.h"
@@ -17,6 +18,25 @@
 #include <utility>
 
 namespace {
+std::string formatArchiveBytes(std::uint64_t bytes) {
+  constexpr double kKib = 1024.0;
+  constexpr double kMib = kKib * 1024.0;
+  constexpr double kGib = kMib * 1024.0;
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(bytes >= 10 * 1024 ? 1 : 0);
+  if (bytes >= static_cast<std::uint64_t>(kGib)) {
+    stream << static_cast<double>(bytes) / kGib << " GB";
+  } else if (bytes >= static_cast<std::uint64_t>(kMib)) {
+    stream << static_cast<double>(bytes) / kMib << " MB";
+  } else if (bytes >= static_cast<std::uint64_t>(kKib)) {
+    stream << static_cast<double>(bytes) / kKib << " KB";
+  } else {
+    stream.str("");
+    stream.clear();
+    stream << bytes << " B";
+  }
+  return stream.str();
+}
 
 Button *makeModalButton(const i18n::Text &label, int fontSize,
                         TextView **textOut = nullptr) {
@@ -428,7 +448,7 @@ void ArchiveUnzipModal::updateProgress(double fraction,
   if (estimatedSize_ > 0) {
     detail = i18n::message("library.archive.progress.detail_with_size",
                            {{"detail", detail},
-                            {"size", formatFindBmsBytes(estimatedSize_)}});
+                            {"size", formatArchiveBytes(estimatedSize_)}});
   }
   detail_->setLocalizedText(detail);
   if (isVisible()) {

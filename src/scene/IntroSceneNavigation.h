@@ -2,6 +2,7 @@
 
 #include "../music_select/MusicSelectInputProcessor.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -10,6 +11,7 @@ enum class IntroSceneChoice : std::uint8_t {
   Start,
   Settings,
   Tutorial,
+  PublicApology,
 };
 
 struct IntroSceneNavigationResult {
@@ -43,12 +45,11 @@ public:
       IntroSceneChoice next = choice_;
       switch (action.kind) {
       case MusicSelectInputActionKind::MoveNext:
-        next = choice_ == IntroSceneChoice::Start ? IntroSceneChoice::Settings
-                                                : IntroSceneChoice::Tutorial;
+        next = static_cast<IntroSceneChoice>(std::min(
+            static_cast<int>(IntroSceneChoice::PublicApology), static_cast<int>(choice_) + 1));
         break;
       case MusicSelectInputActionKind::MovePrevious:
-        next = choice_ == IntroSceneChoice::Tutorial ? IntroSceneChoice::Settings
-                                                   : IntroSceneChoice::Start;
+        next = static_cast<IntroSceneChoice>(std::max(0, static_cast<int>(choice_) - 1));
         break;
       case MusicSelectInputActionKind::Play:
         result.activated = choice_;

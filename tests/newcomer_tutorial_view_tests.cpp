@@ -57,10 +57,9 @@ void testLanguagePrecedesTourAndCompletionRequiresSave() {
   require(preference == "ko" && tour.step() == NewcomerTutorialStep::Tables,
           "chosen language must be saved before explaining difficulty tables");
   tour.advance();
-  require(tour.step() == NewcomerTutorialStep::Download, "explain Find BMS after tables");
+  require(tour.step() == NewcomerTutorialStep::Folder, "explain local folder import after tables");
   tour.back();
   require(tour.step() == NewcomerTutorialStep::Tables, "Back revisits the previous tip");
-  tour.advance();
   tour.advance();
   require(tour.step() == NewcomerTutorialStep::Folder, "explain importing a library folder");
   tour.advance();
@@ -129,7 +128,7 @@ void testTranslatedTipsFitAndLeaveTargetsVisible() {
           .complete = [] { return true; },
           .target = [&](NewcomerTutorialStep) { return &target; }});
       // Portrait coverage exercises the language chooser without a spotlight.
-      for (int step = 0; step <= (width == 390 ? 0 : 4); ++step) {
+      for (int step = 0; step <= (width == 390 ? 0 : 3); ++step) {
         tour.updateLayout(width, height);
         const auto *panel = tour.getChildren().back();
         require(panel->getX() >= 0 && panel->getY() >= 0 &&

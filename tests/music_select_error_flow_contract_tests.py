@@ -87,32 +87,6 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         del cls.fixture_executables
         del cls.fixture_objects
 
-    def test_download_reuses_shared_dialog_and_disables_unavailable_actions(self):
-        source = read_music_select_scene()
-        signatures = [
-            "bool MusicSelectScene::toolbarControlAvailable(",
-            "void MusicSelectScene::refreshToolbarAvailability()",
-            "bool MusicSelectScene::canDownloadSelectedChart() const",
-            "void MusicSelectScene::openDownload()",
-        ]
-        methods = []
-        for signature in signatures:
-            start = source.index(signature)
-            opening = source.index("{", start)
-            methods.append(source[start:opening] + function_body(source, signature))
-        toolbar = (ROOT / "src/scene/MusicSelectToolbarView.h").read_text()
-        modal = (ROOT / "src/scene/FindBmsModal.h").read_text()
-        records = (ROOT / "src/scene/MusicSelectRecords.h").read_text()
-        fixture = (ROOT / "tests/music_select_download_fixture.cpp").read_text()
-        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
-            .replace("TOOLBAR_ENUM", "enum class MusicSelectToolbarControl " +
-                     function_body(toolbar, "enum class MusicSelectToolbarControl") + ";")
-            .replace("MODAL_CALLBACKS", "struct FindBmsModalCallbacks " +
-                     function_body(modal, "struct FindBmsModalCallbacks") + ";")
-            .replace("RECORDS_TARGET", "std::optional<ChartMetaRecord> musicSelectRecordsTarget(const MusicSelectBar &bar) " +
-                     function_body(records, "musicSelectRecordsTarget("))
-            .replace("SCENE_METHODS", "\n".join(methods)))
-
     def test_course_stage_and_result_navigation_preserve_records_owner(self):
         methods = []
         for file, signature in (
@@ -235,9 +209,6 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
 
     def test_healthy_settings_still_retains_selector(self):
         self.run_error_recovery_fixture("testHealthySettingsRetainsSelector")
-
-    def test_native_browser_blocks_selector_input_until_closed(self):
-        self.run_error_recovery_fixture("testBrowserInputIsolation")
 
     def run_error_recovery_fixture(self, test_name):
         source = read_music_select_scene()
@@ -414,8 +385,8 @@ int main() {
             "reload must discard the old provider before configuration can rebuild its index",
         )
 
-    def test_missing_chart_activation_offers_download(self):
-        self.run_directory_loading_fixture("testMissingChartActivationOffersDownload")
+    def test_missing_chart_activation_does_not_offer_download(self):
+        self.run_directory_loading_fixture("testMissingChartActivationDoesNotOfferDownload")
 
     def test_personal_goal_directory_restores_after_return(self):
         self.run_directory_loading_fixture("testPersonalGoalDirectoryRestores")

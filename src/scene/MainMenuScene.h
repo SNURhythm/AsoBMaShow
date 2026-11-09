@@ -1,7 +1,6 @@
 #pragma once
 #include "../goals/GoalPacemaker.h"
 #include "../i18n/Localization.h"
-#include "../BmsSearchService.h"
 #include "../ChartLibraryScanner.h"
 #include "../library/ChartLibraryPlatform.h"
 #include "../library/ChartLibraryTaskService.h"
@@ -49,7 +48,6 @@
 #include "CourseRecordActions.h"
 #include "RecordFileActions.h"
 #include "ReplayRecordTask.h"
-#include "FindBmsModal.h"
 #include "TasksModal.h"
 #include "ChartReadmeModal.h"
 #include "ArchiveUnzipModal.h"
@@ -145,7 +143,6 @@ private:
   void refreshTabPresentation();
   bool renderViewBeforeScene(const View *view) const override;
   bool showTutorial_ = false;
-  bool findBmsAvailableWithoutTutorial_ = false;
   NewcomerTutorialView *tutorial_ = nullptr;
   Button *addFolderButton_ = nullptr;
   ScrollView *tutorialRightScroll_ = nullptr;
@@ -304,9 +301,6 @@ private:
   Button *revealButton = nullptr;
   View *replayButtonSlot = nullptr;
   Button *replayButton = nullptr;
-  View *findBmsButtonSlot = nullptr;
-  Button *findBmsButton = nullptr;
-  TextView *findBmsButtonText = nullptr;
   View *unzipButtonSlot = nullptr;
   Button *unzipButton = nullptr;
   TextView *unzipButtonText = nullptr;
@@ -365,7 +359,6 @@ private:
   TextView *musicCloseButtonText = nullptr;
   ScrollView *tasksScrollView = nullptr;
   TextView *tasksText = nullptr;
-  std::unique_ptr<FindBmsModal> findBmsModal_;
   std::unique_ptr<TasksModal> tasksDialog_;
   std::unique_ptr<ChartReadmeModal> readmeModal_;
   TextView *readyGaugeText = nullptr;
@@ -596,8 +589,6 @@ private:
   enum class AutoSelectionPreview { Load, Suppress };
   void selectChartByPathAfterReload(const std::filesystem::path &path,
                                     AutoSelectionPreview preview);
-  void setFindBmsButtonVisible(bool visible);
-  void openFindBmsForSelection();
   void buildParseLogModal();
   void showParseLogModal();
   void hideParseLogModal();
@@ -630,18 +621,11 @@ private:
   void resizeTasksModal();
   void resizeParseLogModal();
   void toggleAddBmsMenu();
-  void openBmsBrowser();
   void buildTasksModal();
-  void showTasksModal(bool downloads = false);
+  void showTasksModal();
   void hideTasksModal();
   void refreshTasksModal(bool force = false);
   std::string tasksModalTextSnapshot();
-  void buildFindBmsModal();
-  void showFindBmsModal(const ChartMetaRecord &record);
-  void hideFindBmsModal();
-  void refreshFindBmsModal();
-  void applyFindBmsUpdates();
-  std::filesystem::path preferredBmsDownloadRoot();
   void reselectCurrentChart();
   void refreshReplayAvailability(const ChartMetaRecord *record);
   void setReplayButtonVisible(bool visible);

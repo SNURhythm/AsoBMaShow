@@ -350,7 +350,7 @@ struct MusicSelectScene {
 
 SCENE_METHODS
 
-void testMissingChartActivationOffersDownload() {
+void testMissingChartActivationDoesNotOfferDownload() {
   MusicSelectScene scene;
   auto missing = song();
   missing.chart->unavailable = true;
@@ -360,7 +360,7 @@ void testMissingChartActivationOffersDownload() {
   scene.selectedBarMoved();
   expect(scene.downloadPrompts == 0, "browsing a missing chart does not prompt");
   scene.launchSelected();
-  expect(scene.downloadPrompts == 1, "activating a missing chart opens confirmation");
+  expect(scene.downloadPrompts == 0, "activating a missing chart cannot reopen retired downloads");
 }
 
 void testArchiveConfirmation() {
@@ -777,7 +777,7 @@ void testFailedSceneCancelsReadyAutoplay() {
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
   const std::string test = argv[1];
-  if (test == "testMissingChartActivationOffersDownload") testMissingChartActivationOffersDownload();
+  if (test == "testMissingChartActivationDoesNotOfferDownload") testMissingChartActivationDoesNotOfferDownload();
   else if (test == "testArchiveConfirmation") testArchiveConfirmation();
   else if (test == "testSolidArchiveDirectory") testSolidArchiveDirectory();
   else if (test == "testUnzipAllConfirmation") testUnzipAllConfirmation();

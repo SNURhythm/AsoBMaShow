@@ -333,22 +333,9 @@ asobmashow_label_tests(area_archives
     windows_extraction_path_policy_tests
 )
 
-asobmashow_label_tests(area_downloads
-    music_select_toolbar_view_tests
-    download_jobs_tests
-    browser_table_detection_tests
-    download_coordinator_tests
-    download_publication_tests
-    android_background_download_tests
+asobmashow_label_tests(area_library
+    bms_download_removal_tests
     android_metadata_post_cancellation_tests
-    find_bms_archive_flow_audit
-    find_bms_download_tests
-    find_bms_ios_file_bridge_tests
-    find_bms_metadata_loopback_transport_tests
-    find_bms_metadata_transport_tests
-    find_bms_task_tests
-    find_bms_verification_guard_tests
-    find_bms_verification_tests
 )
 
 asobmashow_label_tests(area_profiles
@@ -669,10 +656,6 @@ asobmashow_test_build_targets(beatoraja_gameplay_oracle beatoraja_gameplay_cross
 asobmashow_test_build_targets(beatoraja_gameplay_skin_ledger_evidence_contract json_gameplay_skin_decoder_tests)
 foreach(test_name lua_skin_coroutine_header lua_skin_coroutine_callback)
     asobmashow_test_build_targets(${test_name} lua_skin_coroutine_tests)
-endforeach()
-asobmashow_test_build_targets(find_bms_metadata_loopback_transport_tests find_bms_metadata_transport_tests)
-foreach(test_name find_bms_verification_guard_tests find_bms_verification_tests)
-    asobmashow_test_build_targets(${test_name} find_bms_download_tests)
 endforeach()
 asobmashow_test_build_targets(lua_skin_java_pattern_oracle_tests lua_skin_java_pattern_tests)
 asobmashow_test_build_targets(lua_skin_java_pattern_foundation_oracle_tests lua_skin_java_pattern_foundation_tests)

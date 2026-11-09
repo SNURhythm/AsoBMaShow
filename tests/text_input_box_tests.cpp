@@ -2,6 +2,7 @@
 #include "scene/ChartReadmeModal.h"
 #include "scene/ChartSourceOverlay.h"
 #include "view/LegalNoticeReader.h"
+#include "scene/PublicApologyModal.h"
 #include "library/DocumentLinks.h"
 #include "library/ReadmeTranslation.h"
 #include "rendering/ResponsiveUi.h"
@@ -1555,6 +1556,70 @@ void testLegalNoticeReaderReflowsAndResets() {
   expect(reader->size() < 10, "changing notice replaces old license lines");
 }
 
+void testPublicApologyIsOfflineScrollableAndClosable() {
+  const auto savedLanguage = i18n::language();
+  for (auto language : {i18n::Language::English, i18n::Language::Korean,
+                        i18n::Language::Japanese, i18n::Language::SimplifiedChinese,
+                        i18n::Language::TraditionalChinese}) {
+    i18n::setLanguage(language);
+    View root(0, 0, 390, 844);
+    auto *modal = new PublicApologyModal();
+    root.addView(modal);
+    modal->resize(390, 844);
+    modal->show();
+    auto *reader = dynamic_cast<DocumentTextReader *>(modal->findViewByName("publicApologyText"));
+    expect(reader && reader->size() > 100, "each apology language loads its complete bundled text");
+    expect(!reader->onOpenUrl, "the apology reader is entirely offline");
+    auto *original = modal->findViewByName("publicApologyOriginal");
+    expect(original->getVisible() == (language != i18n::Language::Korean),
+        "translations offer the Korean original");
+    const auto translatedFirstLine = reader->get(0).text;
+    SDL_Event key{}; key.type = SDL_EVENT_KEY_DOWN; key.key.key = SDLK_END;
+    expect(modal->consumeEvent(key) && reader->scrollOffset > 0, "End reaches the end of the long notice");
+    key.key.key = SDLK_HOME;
+    modal->consumeEvent(key);
+    expect(reader->scrollOffset == 0, "Home returns to the beginning");
+    key.key.key = SDLK_DOWN;
+    modal->consumeEvent(key);
+    expect(reader->scrollOffset == reader->itemHeight, "arrow keys scroll the notice");
+    if (language != i18n::Language::Korean) {
+      key.key.key = SDLK_TAB; modal->consumeEvent(key);
+      key.key.key = SDLK_RETURN; modal->consumeEvent(key);
+      expect(modal->getVisible() && reader->get(0).text.starts_with("안녕하세요"),
+          "keyboard action opens the Korean original without closing");
+      expect(reader->scrollOffset == 0, "changing language resets the document position");
+      modal->consumeEvent(key);
+      expect(reader->get(0).text == translatedFirstLine, "the original toggles back to the app language");
+    }
+    for (auto [width, height] : {std::pair{390, 844}, std::pair{844, 390}, std::pair{1280, 720}}) {
+      root.setSize(width, height);
+      modal->resize(width, height);
+      root.applyYogaLayout();
+      auto *close = modal->findViewByName("publicApologyClose");
+      expect(reader->getWidth() > 0 && reader->getHeight() > 0, "notice has a usable viewport in both orientations");
+      expect(close->getX() >= 0 && close->getY() >= 0 &&
+          close->getX() + close->getWidth() <= width && close->getY() + close->getHeight() <= height,
+          "the close action stays in the viewport");
+    }
+    key.key.key = SDLK_ESCAPE;
+    expect(modal->consumeEvent(key) && !modal->getVisible(), "Escape closes the notice");
+    expect(!modal->consumeEvent(key), "closed notice releases scene input");
+    root.setSize(390, 844);
+    modal->resize(390, 844);
+    modal->show();
+    expect(reader->scrollOffset == 0 && reader->get(0).text == translatedFirstLine,
+        "reopening starts at the beginning in the app language");
+    auto *close = modal->findViewByName("publicApologyClose");
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+        close->getX() + close->getWidth() / 2, close->getY() + close->getHeight() / 2);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP,
+        close->getX() + close->getWidth() / 2, close->getY() + close->getHeight() / 2);
+    modal->consumeEvent(down); modal->consumeEvent(up);
+    expect(!modal->getVisible(), "pointer close dismisses the notice");
+  }
+  i18n::setLanguage(savedLanguage);
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -1567,6 +1632,7 @@ int main() {
   testDocumentHighlightsWrapAndFocus();
   testDocumentLinksDoNotHijackScrolling();
   testLegalNoticeReaderReflowsAndResets();
+  testPublicApologyIsOfflineScrollableAndClosable();
   testReadmeModalDisplaysAndCloses();
   testTextPresentationInvalidationAndDeadlines();
 

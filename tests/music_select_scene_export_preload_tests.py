@@ -214,13 +214,6 @@ int main() {
   manager.pause = [&] { scene.onPause(); };
   PublishedActions published;
   scene.skinSession_ = &published;
-  downloads::browserFocused = true;
-  published.actions = {skin::Action{skin::MusicSelectSkinActionKind::FloatWriter, 17, 0.25}};
-  scene.consumeActions();
-  expect(published.actions.empty() && scene.context.audioDeviceManager.applied.empty() &&
-             scene.context.savedAudio.empty(),
-         "browser focus discards queued skin actions instead of applying or replaying them");
-  downloads::browserFocused = false;
   expect(scene.recordsExportJob_.tryBegin(), "fixture reserves exporter ownership");
   published.actions = {skin::Action{}};
   scene.consumeActions();

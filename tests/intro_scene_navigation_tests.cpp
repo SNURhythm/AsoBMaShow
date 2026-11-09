@@ -85,6 +85,18 @@ int main() {
     (void)navigation.process(down, 2001);
     require(navigation.choice() == IntroSceneChoice::Tutorial,
             "keyboard navigation must reach the replayable tutorial button");
+    (void)navigation.process(logicalInput(MusicSelectKeyLayout::Beat7K), 3000);
+    (void)navigation.process(down, 3001);
+    require(static_cast<int>(navigation.choice()) == 3,
+            "keyboard navigation must reach the public apology after Tutorial");
+    auto enter = logicalInput(MusicSelectKeyLayout::Beat7K);
+    enter.controlPressed.insert(MusicSelectControlKey::Enter);
+    const auto opened = navigation.process(enter, 3002);
+    require(opened.activated && static_cast<int>(*opened.activated) == 3,
+            "Enter must activate the public apology action");
+    (void)navigation.process(down, 4000);
+    require(static_cast<int>(navigation.choice()) == 3,
+            "navigation must stop at the last start-screen action");
   }
   testKeyboardNavigationAndEnterActivateSettings();
   testConfiguredNavigationAndStartArePointerIndependent();

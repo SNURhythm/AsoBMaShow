@@ -599,31 +599,7 @@ void SettingsScene::refreshChartLibrary() {
       });
 }
 
-void SettingsScene::setFindBmsDownloadEntry(
-    const std::string &entryPathText) {
-  if (context.storageMaintenanceActive) return;
-  auto session = context.chartRepository.OpenSession();
-  if (!session.has_value()) {
-    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
-    chartFolderStatusColor = app_theme::sdl(app_theme::coral());
-  } else if (!session->SetPrimaryStorageEntry(
-                 std::filesystem::path(utf8_to_path_t(entryPathText)))) {
-    chartFolderStatusMessage =
-        i18n::message("settings.difficulty_tables.could_not_use_folder_find_bms_downloads.message");
-    chartFolderStatusColor = app_theme::sdl(app_theme::coral());
-  } else {
-    chartFolderStatusMessage = i18n::message("settings.difficulty_tables.find_bms_download_folder_updated.message");
-    chartFolderStatusColor = app_theme::sdl(app_theme::lime());
-    loadChartEntries();
-    refreshChartEntryBackupStatuses();
-  }
 
-  if (chartFolderStatusText != nullptr) {
-    chartFolderStatusText->setLocalizedText(chartFolderStatusMessage);
-    chartFolderStatusText->setColor(chartFolderStatusColor);
-  }
-  lastLayoutWidth = -1;
-}
 
 void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
   if (context.storageMaintenanceActive) return;

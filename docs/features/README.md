@@ -18,7 +18,7 @@ which data/lifecycle rules matter, and where to start testing it.
 | [Profiles and data transfer](profiles-and-data-transfer.md) | profile services, settings, and document handoff |
 | [Input and controllers](input-and-controllers.md) | `src/input/` |
 | [Audio, video, and display](audio-video-and-display.md) | `src/audio/`, `src/video/`, rendering |
-| [Find BMS and downloads](find-bms-and-downloads.md) | `src/bms_search/` |
+| [Retired BMS downloads and public apology](find-bms-and-downloads.md) | `src/scene/PublicApologyModal.h` |
 | [Settings and user interface](settings-and-user-interface.md) | settings scenes and `src/view/` |
 | [Mobile and platform integration](mobile-and-platform-integration.md) | Android/iOS bridges and document handoff |
 | [Build, release, and verification](build-release-and-verification.md) | CMake, scripts, CI, and release metadata |

@@ -209,7 +209,6 @@ int main() {
                                  "float MainMenuScene::portraitDetailsHeight(float availableHeight) const")
         method += "\n" + extract((root / "src/scene/MainMenuScene.cpp").read_text(), "void MainMenuScene::updatePhonePanelLayout()")
         for signature in ("void MainMenuScene::refreshPrimaryActionVisibility()",
-                          "void MainMenuScene::setFindBmsButtonVisible(bool visible)",
                           "void MainMenuScene::setUnzipButtonVisible(bool visible)"):
             method += "\n" + extract((root / "src/scene/MainMenuScene.cpp").read_text(), signature)
         source = r'''
@@ -285,7 +284,6 @@ struct MainMenuScene {
   Tutorial *tutorial_=nullptr;
   Button *parseLogButton=nullptr, *tasksButton=nullptr, *addFolderButton_=nullptr;
   void refreshPrimaryActionVisibility();
-  void setFindBmsButtonVisible(bool visible);
   void setUnzipButtonVisible(bool visible);
 };
 PRODUCTION_METHOD
@@ -366,20 +364,16 @@ int main() {
       assert(YGNodeLayoutGetWidth(iconButton->node)==YGNodeLayoutGetHeight(iconButton->node));
     assert(findSlot.parent==&actionSlot && unzipSlot.parent==&actionSlot && start.parent==&actionSlot);
     // Every replacement occupies the same slot, including across rotation.
-    for (int action : {0,1,2,1,0}) {
-      scene.setFindBmsButtonVisible(action==1);
+    for (int action : {0,2,0}) {
       scene.setUnzipButtonVisible(action==2);
       root.applyYogaLayout();
-      assert(start.visible==(action==0) && findSlot.visible==(action==1) && unzipSlot.visible==(action==2));
+      assert(start.visible==(action==0) && !findSlot.visible && unzipSlot.visible==(action==2));
       auto *active=action==0?static_cast<View*>(&start):action==1?&findSlot:&unzipSlot;
       assert(YGNodeLayoutGetTop(active->node)==0);
       assert(YGNodeLayoutGetWidth(active->node)==YGNodeLayoutGetWidth(actionSlot.node));
       assert(YGNodeLayoutGetHeight(active->node)==YGNodeLayoutGetHeight(actionSlot.node));
     }
     scene.setUnzipButtonVisible(true);
-    scene.setFindBmsButtonVisible(true);
-    assert(findSlot.visible && !unzipSlot.visible && !start.visible);
-    scene.setFindBmsButtonVisible(false);
     assert(unzipSlot.visible && !start.visible);
     scene.setUnzipButtonVisible(false);
     assert(YGNodeLayoutGetLeft(reveal.node)==YGNodeLayoutGetLeft(ranking.node));
@@ -512,6 +506,7 @@ int main() {
 enum class FlexDirection { Column=YGFlexDirectionColumn, Row=YGFlexDirectionRow };
 enum class Edge { Left=YGEdgeLeft, Right=YGEdgeRight, Top=YGEdgeTop, Bottom=YGEdgeBottom, All=YGEdgeAll };
 struct View {
+  struct LayoutBatchScope {};
   YGNodeRef node=YGNodeNew();
   std::string name;
   std::vector<View*> children;
@@ -629,7 +624,7 @@ void requestAnimationFrame() { ++frames; }
 void requestRedrawAt(Uint64 when) { redraw = when; }
 }
 struct SDL_Rect { int x,y,w,h; };
-struct RenderContext {};
+struct RenderContext { struct OpacityScope { OpacityScope(RenderContext &, float) {} }; };
 namespace bgfx { bool isValid(int value) { return value != 0; } }
 struct TextView {
   enum class TextOverflow { Visible, Hidden, Marquee };
@@ -639,7 +634,7 @@ struct TextView {
   const char *text = "";
   TextOverflow overflow = TextOverflow::Marquee;
   int texture=1, width=0, height=30, draws=0, unclippedDraws=0;
-  bool wrapEnabled=false;
+  bool wrapEnabled=false, strikethrough_=false;
   SDL_Rect rect{0,0,200,30};
   SDL_Rect lastDraw{};
   enum TextAlign { LEFT, CENTER, RIGHT };

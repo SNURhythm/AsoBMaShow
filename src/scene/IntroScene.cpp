@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "IntroScene.h"
+#include "PublicApologyModal.h"
 #include "MainMenuScene.h"
 
 #include "MusicSelectScene.h"
@@ -44,6 +45,7 @@ Button *button(std::string label) {
   result->setStyledBorderWidth(0);
   auto *labelView = text(std::move(label), 34, app_theme::textPrimary);
   labelView->setPadding(Edge::Left, 24)->setPadding(Edge::Right, 24);
+  labelView->setAutoFitText(true);
   result->setContentView(labelView);
   return result;
 }
@@ -88,6 +90,12 @@ void IntroScene::buildView() {
   tutorialButton_ = button(i18n::tr("tutorial.replay.label"));
   tutorialButton_->setOnClickListener([this] { startTutorial(); });
   menu_->addView(tutorialButton_);
+  apologyButton_ = button(i18n::tr("intro.apology.label"));
+  apologyButton_->setName("introPublicApology");
+  apologyButton_->setOnClickListener([this] { openPublicApology(); });
+  menu_->addView(apologyButton_);
+  apologyModal_ = new PublicApologyModal();
+  rootLayout_->addView(apologyModal_);
   layoutView();
 }
 
@@ -112,7 +120,12 @@ void IntroScene::layoutView() {
   menu_->setFlexShrink(0);
   title_->setVAlign(portrait ? TextView::BOTTOM : TextView::MIDDLE);
   title_->setAutoFitText(rendering::compactMenuCanvasActive);
+  const int buttonHeight = std::clamp(
+      (layoutHeight_ - safe.top - safe.bottom - inset * 2 - 3) / 4, 48, 80);
+  for (auto *control : {startButton_, settingsButton_, tutorialButton_, apologyButton_})
+    control->setHeight(buttonHeight)->setFlexShrink(0);
   rootLayout_->applyYogaLayout();
+  apologyModal_->resize(layoutWidth_, layoutHeight_);
 }
 
 void IntroScene::start() {
@@ -173,7 +186,16 @@ void IntroScene::startTutorial() {
   context.sceneManager->changeScene("MainMenu");
 }
 
+void IntroScene::openPublicApology() {
+  pendingStart_ = false;
+  rootLayout_->cancelPointerInput();
+  stopInputListening();
+  navigation_.cancelInput(musicSelectKeyLayoutForConfig(context.settings.skinMusicSelectInput));
+  apologyModal_->show();
+}
+
 EventHandleResult IntroScene::handleEvents(SDL_Event &event) {
+  if (apologyModal_ && apologyModal_->consumeEvent(event)) return {};
   if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
       event.key.repeat == 0 && inputBindingAdapter_) {
     const bool down = event.type == SDL_EVENT_KEY_DOWN;
@@ -208,6 +230,8 @@ void IntroScene::update(float) {
     return;
   }
 #endif
+  if (apologyModal_ && !apologyModal_->getVisible() && !inputBindingAdapter_)
+    startInputListening();
   processNavigationInput();
   const auto safe = rendering::uiSafeAreaInsets();
   if (rootLayout_ != nullptr &&
@@ -231,6 +255,8 @@ void IntroScene::cleanupScene() {
   startButton_ = nullptr;
   settingsButton_ = nullptr;
   tutorialButton_ = nullptr;
+  apologyButton_ = nullptr;
+  apologyModal_ = nullptr;
   layoutWidth_ = -1;
   layoutHeight_ = -1;
 }
@@ -267,11 +293,23 @@ void IntroScene::stopInputListening() {
 }
 
 void IntroScene::syncNavigationSelection() {
-  const std::array buttons{startButton_, settingsButton_, tutorialButton_};
+  const std::array buttons{startButton_, settingsButton_, tutorialButton_, apologyButton_};
   for (std::size_t i = 0; i < buttons.size(); ++i) {
     if (buttons[i] == nullptr) continue;
     const bool selected = static_cast<std::size_t>(navigation_.choice()) == i;
     buttons[i]->setSelected(selected);
+    if (buttons[i] == apologyButton_) {
+      buttons[i]->setBackgroundColors(Color(255, 200, 87, 255),
+                                       Color(255, 216, 132, 255),
+                                       Color(235, 173, 52, 255));
+      buttons[i]->setThemedBorderColors(app_theme::darkText,
+                                        app_theme::darkText,
+                                        app_theme::darkText);
+      buttons[i]->setStyledBorderWidth(selected ? 4 : 1);
+      if (auto *label = dynamic_cast<TextView *>(buttons[i]->getContentView()))
+        label->setThemedColor(app_theme::darkText);
+      continue;
+    }
     buttons[i]->setThemedBackgroundColors(
         selected ? app_theme::primaryAction : app_theme::control,
         selected ? app_theme::primaryActionHover : app_theme::controlHover,
@@ -295,6 +333,8 @@ void IntroScene::processNavigationInput() {
     openSettings();
   } else if (*result.activated == IntroSceneChoice::Tutorial) {
     startTutorial();
+  } else if (*result.activated == IntroSceneChoice::PublicApology) {
+    openPublicApology();
   } else {
     start();
   }

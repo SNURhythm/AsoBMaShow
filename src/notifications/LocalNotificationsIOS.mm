@@ -1,6 +1,6 @@
 #include "LocalNotifications.h"
 #if TARGET_OS_IPHONE
-#include "../downloads/DownloadPlatform.h"
+#include "../platform/RetiredBmsDownloadsIOS.h"
 #import <UIKit/UIKit.h>
 #import <UserNotifications/UserNotifications.h>
 #define SDL_MAIN_HANDLED
@@ -107,7 +107,7 @@ extern int AsoBMaShowMain(int argc, char **argv);
 int main(int argc, char **argv) {
   @autoreleasepool {
     installDelegate();
-    downloads::platform::prepareApplicationLaunch();
+    retired_bms_downloads::prepareApplicationLaunch();
     return SDL_RunApp(argc, argv, AsoBMaShowMain, nullptr);
   }
 }

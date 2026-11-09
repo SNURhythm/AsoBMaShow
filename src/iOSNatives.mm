@@ -3,7 +3,7 @@
 #include "i18n/Localization.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
-#include "bms_search/DownloadRetryWait.h"
+#include "utils/DownloadRetryWait.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/IOSMusicStream.h"
 #include "ir/IrHttpClientIOS.h"
