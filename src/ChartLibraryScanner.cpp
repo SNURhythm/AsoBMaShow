@@ -8,7 +8,6 @@
 #include "ChartScanWorkScheduler.h"
 #include "ThreadCompat.h"
 #include "Utils.h"
-#include "bms_search/DownloadStorageIdentity.h"
 #include "path.h"
 #include "repositories/ChartStorageIdentity.h"
 #include "targets.h"
@@ -81,7 +80,7 @@ bool isFindBmsPrivateStorageDirectory(const std::filesystem::path &path) {
     return false;
   }
   return fspath_to_utf8(path.filename()) ==
-         asobmshow::bms_search::kFindBmsTransactionDirectoryName;
+         ".asobmashow-transactions";
 }
 
 std::optional<bool> isIncompleteUnzipFolder(

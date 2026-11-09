@@ -1,7 +1,6 @@
 #include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
 #include "REPOSITORY_ROOT/src/i18n/Localization.h"
 #include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
-#include "REPOSITORY_ROOT/src/scene/FindBmsTask.h"
 #include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"
 #include <atomic>
 #include <cassert>
@@ -196,22 +195,6 @@ struct Callbacks {
   std::function<void(const ModernCourseResultRecord &, bool)> recallModernCourse;
   std::function<void(const IrRemoteRecordId &, const std::string &)> recallRemote;
 };
-struct FindBmsModal {
-  FindBmsTask task;
-  void cancelAndWait() { task.stopAndWait(); }
-};
-struct FindBmsLifetime {
-  std::atomic_bool workerFinished = false;
-  std::atomic_bool dependenciesAlive = true;
-};
-struct FindBmsDependencies {
-  FindBmsLifetime *lifetime = nullptr;
-  ~FindBmsDependencies() {
-    if (lifetime == nullptr) return;
-    assert(lifetime->workerFinished.load());
-    lifetime->dependenciesAlive = false;
-  }
-};
 struct MainMenuScene {
   enum class Tab { Play, Course, Music, Ir };
   Tab activeTab_ = Tab::Play;
@@ -250,8 +233,6 @@ struct MainMenuScene {
   ReplayRecordsModal *readmeModal_ = nullptr;
   PreviewWorker *previewWorker_ = nullptr;
   // Explicit owner teardown must stop the modal before callback dependencies.
-  std::unique_ptr<FindBmsModal> findBmsModal_ = std::make_unique<FindBmsModal>();
-  FindBmsDependencies findBmsDependencies;
   std::atomic_bool willStart = false;
   replay::ReplayExportJob replayExportJob_;
   ReplayRecordTask replayLoadTask_;
@@ -493,39 +474,6 @@ void testDestructionStopsPreparationBeforePreviewDependencies() {
   expect(previewStopped && loadStopped && exportStopped,
          "destruction must join playback work while its scene dependencies are alive");
 }
-void testDestructionStopsFindBmsBeforeStatusDependencies() {
-  using namespace std::chrono_literals;
-  FindBmsLifetime lifetime;
-  std::promise<void> entered, stopped, release;
-  auto released = release.get_future().share();
-  auto scene = std::make_unique<MainMenuScene>();
-  scene->findBmsDependencies.lifetime = &lifetime;
-  scene->findBmsModal_->task.start(
-      [&](std::atomic_bool &cancelled, BmsSearchDownloadProgressCallback) {
-        entered.set_value();
-        const auto deadline = std::chrono::steady_clock::now() + 5s;
-        while (!cancelled.load() &&
-               std::chrono::steady_clock::now() < deadline) {
-          std::this_thread::yield();
-        }
-        assert(cancelled.load());
-        stopped.set_value();
-        assert(released.wait_for(5s) == std::future_status::ready);
-        // Pending artifact transactions can finish after cancellation.
-        assert(lifetime.dependenciesAlive.load());
-        lifetime.workerFinished = true;
-        return BmsSearchResult{};
-      });
-  assert(entered.get_future().wait_for(5s) == std::future_status::ready);
-  auto destroyed = std::async(std::launch::async, [&] { scene.reset(); });
-  assert(stopped.get_future().wait_for(5s) == std::future_status::ready);
-  assert(lifetime.dependenciesAlive.load());
-  assert(destroyed.wait_for(50ms) == std::future_status::timeout);
-  release.set_value();
-  assert(destroyed.wait_for(5s) == std::future_status::ready);
-  destroyed.get();
-  assert(lifetime.workerFinished && !lifetime.dependenciesAlive);
-}
 int main() {
   {
     MainMenuScene menu;
@@ -543,6 +491,5 @@ int main() {
   testRecall();
   testExport();
   testDestructionStopsPreparationBeforePreviewDependencies();
-  testDestructionStopsFindBmsBeforeStatusDependencies();
   return failures == 0 ? 0 : 1;
 }

@@ -152,7 +152,7 @@ struct IrUploadsScene {
   Context context;
   std::string displayedProfileId="one",origin="https://example.test";
   std::string observedServerOrigin="https://example.test";
-  std::uint64_t observedScoreRevision=1,observedProfileCacheRevision=1;
+  std::uint64_t observedScoreRevision=1,observedProfileCacheRevision=1,observedLibraryRevision=1;
   std::uint64_t observedAccountEvidenceRevision=1,observedAttemptStatusRevision=1;
   bool candidatesLoaded=true,reloadRequested=false;
   bool presentationActive=true;
@@ -178,6 +178,8 @@ struct IrUploadsScene {
   void onResume();
   void update(float);
   void applyPreparationUpdates();
+  void applyCandidateLoad() {}
+  struct { bool hasWorker() { return false; } } candidateLoadTask;
   void observeRemoteRevisions();
   void refreshProfileIfNeeded();
   void onProfileWillChange() { candidatesLoaded=false;reloadRequested=false;displayedProfileId.clear(); }

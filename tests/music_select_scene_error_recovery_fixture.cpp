@@ -233,35 +233,10 @@ void testHealthySettingsRetainsSelector() {
   assert(scene.manager.settingsReturn.retained == &scene && scene.reactivateSkinOnResume_);
 }
 
-void testBrowserInputIsolation() {
-  MusicSelectScene scene;
-  scene.searchOverlay.visible = false;
-  scene.skinTextInput.editing = false;
-  assert(!scene.selectorInputBlocked());
-  downloads::browserFocused = true;
-  assert(scene.selectorInputBlocked() && "native browser must block physical/logical input too");
-  for (const int type : {SDL_EVENT_MOUSE_WHEEL, SDL_EVENT_KEY_DOWN,
-                         SDL_EVENT_GAMEPAD_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_DOWN,
-                         SDL_EVENT_FINGER_DOWN, SDL_EVENT_MOUSE_MOTION}) {
-    SDL_Event event;
-    event.type = type;
-    scene.handleEvents(event);
-  }
-  assert(scene.normalEvents == 0 && scene.resets == 6);
-  assert(!scene.skinPointerUiPosition_ && !scene.skinSession_->pointer);
-  downloads::browserFocused = false;
-  assert(!scene.selectorInputBlocked());
-  SDL_Event wheel;
-  wheel.type = SDL_EVENT_MOUSE_WHEEL;
-  scene.handleEvents(wheel);
-  assert(scene.normalEvents == 1 && "fresh selector input resumes after browser closes");
-}
-
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
   const std::string test = argv[1];
-  if (test == "testBrowserInputIsolation") testBrowserInputIsolation();
-  else if (test == "testSettingsRecovery") testSettingsRecovery();
+  if (test == "testSettingsRecovery") testSettingsRecovery();
   else if (test == "testBackRecovery") testBackRecovery();
   else if (test == "testErrorModalIsolation") testErrorModalIsolation();
   else if (test == "testHealthySettingsRetainsSelector") testHealthySettingsRetainsSelector();

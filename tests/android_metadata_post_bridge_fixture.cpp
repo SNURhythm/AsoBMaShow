@@ -34,10 +34,11 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_request(
   fixtureEnv = env;
   fixtureActivity = activity;
   std::string error;
-  auto result = postUrlText(jstringToUtf8(env, url), error,
-                           cancellable ? &fixtureCancelled : nullptr,
-                           16 * 1024 * 1024);
-  return utf8ToJString(env, result ? result->c_str() : ("ERROR:" + error).c_str());
+  std::string body;
+  AndroidDownloadCheckpoint checkpoint;
+  if (cancellable) checkpoint = [] { return !fixtureCancelled.load(); };
+  const bool success = PostURLTextAndroid(jstringToUtf8(env, url), body, error, checkpoint);
+  return utf8ToJString(env, success ? body.c_str() : ("ERROR:" + error).c_str());
 }
 
 template <typename Request>

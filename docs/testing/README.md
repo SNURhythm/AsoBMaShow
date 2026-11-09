@@ -74,9 +74,8 @@ platform's exact membership, including required fixtures.
 | `results` | Result models, persistence/recovery, record lists/actions, score queries | `replay`, `ir`, `profiles` |
 | `replay` | `src/replay`, replay repositories, codecs, storage, playback, export | `gameplay`, `results`, `video` |
 | `ir` | `src/ir`, HTTP, Tachi, rankings, submissions, credentials | `results`, `profiles`, `music_select` |
-| `library` | `src/library`, chart repositories/scanning, folder/document import, difficulty tables | `archives`, `downloads`, `music_select` |
-| `archives` | `src/archive`, `ArchiveFile`, extraction, indexes, temporary archive cache | `library`, `downloads`, `skin_assets` |
-| `downloads` | `src/bms_search`, Find BMS flow, metadata transport, verification | `archives`, `library`, platform label |
+| `library` | `src/library`, chart repositories/scanning, folder/document import, difficulty tables | `archives`, `music_select` |
+| `archives` | `src/archive`, `ArchiveFile`, extraction, indexes, temporary archive cache | `library`, `skin_assets` |
 | `profiles` | `PlayerProfile*`, profile settings/archive/database ownership, provenance | `settings`, `results`, `ir` |
 | `settings` | `src/settings`, settings scene models/controls and initialization | The subsystem whose setting changes |
 | `music_select` | `src/music_select`, MainMenu library browsing, preview, launch, skin bridge | `library`, `audio`, `skin_runtime` |

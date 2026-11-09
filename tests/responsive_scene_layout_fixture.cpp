@@ -22,6 +22,7 @@ constexpr int YGDisplayNone=0, YGDisplayFlex=1, YGWrapWrap=1,
               YGWrapNoWrap=0, YGAlignStretch=1;
 constexpr float YGUndefined=NAN, kRailWidth=350, kHeaderHeight=82, kScreenPadding=18;
 struct View {
+  struct LayoutBatchScope {};
   virtual ~View()=default;
   std::array<float,4> padding{};
   int layouts=0;
@@ -94,10 +95,18 @@ struct IrUploadsScene: LayoutFixture {
   void update(float); void updateLayoutInsets();
   void refreshProfileIfNeeded() {} void applyPreparationUpdates() {}
   void observeRemoteRevisions() {} void reloadCandidates() {}
+  void applyCandidateLoad() {}
+  struct { bool hasWorker() { return false; } } candidateLoadTask;
 };
 struct IntroScene {
   View root, content, menu;
   TextView title;
+  View control;
+  View *startButton_=&control, *settingsButton_=&control, *tutorialButton_=&control, *apologyButton_=&control;
+  struct Notice { bool getVisible() { return false; } void resize(int, int) {} } notice;
+  Notice *apologyModal_=&notice;
+  bool inputBindingAdapter_=true;
+  void startInputListening() { inputBindingAdapter_=true; }
   View *rootLayout_=&root, *content_=&content, *menu_=&menu;
   TextView *title_=&title;
   int layoutWidth_=-1, layoutHeight_=-1;

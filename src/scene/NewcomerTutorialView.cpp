@@ -190,10 +190,10 @@ void NewcomerTutorialView::refresh() {
     title_->setText("Language · 언어 · 言語 · 语言");
     body_->setLocalizedText(i18n::message("tutorial.language.body"));
   } else {
-    constexpr std::array<const char *, 4> titles{
-        "tutorial.tables.title", "tutorial.download.title", "tutorial.folder.title", "tutorial.options.title"};
-    constexpr std::array<const char *, 4> bodies{
-        "tutorial.tables.body", "tutorial.download.body", "tutorial.folder.body", "tutorial.options.body"};
+    constexpr std::array<const char *, 3> titles{
+        "tutorial.tables.title", "tutorial.folder.title", "tutorial.options.title"};
+    constexpr std::array<const char *, 3> bodies{
+        "tutorial.tables.body", "tutorial.folder.body", "tutorial.options.body"};
     const auto index = static_cast<std::size_t>(step_) - 1;
     title_->setLocalizedText(i18n::message(titles[index]));
     body_->setLocalizedText(i18n::message(step_ == NewcomerTutorialStep::Folder && folderImportCopies_

@@ -11,6 +11,7 @@
 class Button;
 class View;
 class TextView;
+class PublicApologyModal;
 
 class IntroScene final : public Scene {
 public:
@@ -33,6 +34,7 @@ private:
   void start();
   void startTutorial();
   void openSettings();
+  void openPublicApology();
   void buildView();
   void layoutView();
   void startInputListening();
@@ -47,6 +49,8 @@ private:
   Button *startButton_ = nullptr;
   Button *settingsButton_ = nullptr;
   Button *tutorialButton_ = nullptr;
+  Button *apologyButton_ = nullptr;
+  PublicApologyModal *apologyModal_ = nullptr;
   IntroSceneNavigation navigation_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;

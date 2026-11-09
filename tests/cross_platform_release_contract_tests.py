@@ -37,7 +37,6 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.audio_decoder = read("src/audio/decoder.cpp")
         cls.replay_store = read("src/replay/ReplayFileStore.cpp")
         cls.curl_raii = read("src/CurlRAII.h")
-        cls.download_support = read("src/bms_search/DownloadSupport.cpp")
         cls.difficulty_importer = read("src/DifficultyTableImporter.cpp")
         cls.android_natives_header = read("src/AndroidNatives.h")
         cls.android_natives = read("src/AndroidNatives.cpp")
@@ -70,7 +69,7 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
 
     def test_download_redirects_cannot_downgrade_https_to_http(self):
         self.assertIn("CurlRedirectProtocolsForInitialUrl", self.curl_raii)
-        for source in (self.download_support, self.difficulty_importer):
+        for source in (self.difficulty_importer,):
             # Audit each request before execution, including newly added probes.
             requests = re.findall(
                 r"curl_easy_setopt\(curl\.get\(\), CURLOPT_URL,.*?"

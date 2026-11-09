@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from find_bms_transport_extract import function
+from gameplay_terminal_scene_extract import extract as function
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,9 +85,6 @@ class AndroidMetadataPostCancellationTests(unittest.TestCase):
             callback = "Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFile" + name + "("
             if callback in native:
                 pieces.append('extern "C" JNIEXPORT ' + result + ' JNICALL\n' + function(native, callback))
-        transport = (ROOT / "src/bms_search/DownloadSupport.cpp").read_text()
-        signature = "std::optional<std::string> postUrlText("
-        pieces.append(function(transport[transport.rindex(signature):], signature))
         (output / "android_metadata_post_methods.inc").write_text("\n\n".join(pieces))
         cls.library = output / ("libpost.dylib" if sys.platform == "darwin" else "libpost.so")
         subprocess.run([compiler, "-std=c++20", "-shared", "-fPIC",

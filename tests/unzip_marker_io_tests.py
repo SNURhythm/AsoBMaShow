@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from find_bms_transport_extract import function
+from gameplay_terminal_scene_extract import extract as function
 
 
 ROOT = Path(__file__).resolve().parents[1]

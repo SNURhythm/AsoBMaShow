@@ -4,8 +4,6 @@
 #include "../platform/SDLMainThread.h"
 #include "../i18n/Localization.h"
 #include "MainMenuScene.h"
-#include "../downloads/BmsBrowser.h"
-#include "../downloads/DownloadService.h"
 #include "play/QuickRetrySummary.h"
 #include "../view/PlayStartButton.h"
 #include "NewcomerTutorialView.h"
@@ -68,7 +66,6 @@
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
 #include "CourseGameplaySessionBuilder.h"
-#include "FindBmsProgressPresentation.h"
 #include "IrUploadsScene.h"
 #include "MusicPlayerScene.h"
 #include "RemoteResultRecallController.h"
@@ -708,10 +705,7 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
 }
 
 EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
-  if (downloads::browserHasInputFocus()) {
-    for (auto *view : views) view->cancelPointerInput();
-    return {};
-  }
+
   if (pendingTab_) return {};
   if (tutorial_ != nullptr && tutorial_->getVisible()) {
     (void)tutorial_->handleEvents(event);
@@ -723,9 +717,7 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
   }
   if (tasksDialog_ && !tasksDialog_->handleEvents(event)) return {};
   if (readmeModal_ && !readmeModal_->handleEvents(event)) return {};
-  if (findBmsModal_ != nullptr && !findBmsModal_->handleEvents(event)) {
-    return {};
-  }
+
   // While a chart is launching, the decide overlay blocks all input so the
   // user cannot start another chart or mutate the library mid-launch.
   if (willStart.load(std::memory_order_acquire) && decideOverlay_ != nullptr &&
@@ -1010,7 +1002,6 @@ MainMenuScene::MainMenuScene(ApplicationContext &context, bool showTutorial)
 
 MainMenuScene::~MainMenuScene() {
   stopReplayAndPreviewWork();
-  if (findBmsModal_ != nullptr) findBmsModal_->cancelAndWait();
 }
 
 void MainMenuScene::stopReplayAndPreviewWork() {
@@ -1034,8 +1025,7 @@ void MainMenuScene::init() {
     if (replayExportJob_.inProgress()) {
       return i18n::tr("menu.replay_export_active.message");
     }
-    if (archiveUnzipInProgress() ||
-        (findBmsModal_ != nullptr && findBmsModal_->inProgress())) {
+    if (archiveUnzipInProgress()) {
       return i18n::tr("menu.chart_archive_operation_active.message");
     }
     if (willStart.load(std::memory_order_acquire)) {
@@ -1072,9 +1062,8 @@ void MainMenuScene::onInputQueueOverflow() {
 }
 
 bool MainMenuScene::canPrepareForStorageMaintenance(std::string &error) {
-  if (willStart || replayLoadTask_.active() || replayExportJob_.inProgress() || archiveUnzipInProgress() ||
-      (findBmsModal_ && findBmsModal_->inProgress())) {
-    error = "A chart download, preparation, or export is active.";
+  if (willStart || replayLoadTask_.active() || replayExportJob_.inProgress() || archiveUnzipInProgress()) {
+    error = "A chart preparation or export is active.";
     return false;
   }
   if (irTab_) {
@@ -1221,7 +1210,6 @@ void MainMenuScene::onLanguageChanged() {
   refreshTasksButton();
   refreshTasksModal(true);
   refreshMusicModal();
-  refreshFindBmsModal();
   if (rootLayout != nullptr) rootLayout->applyYogaLayout();
 }
 
@@ -1273,7 +1261,6 @@ void MainMenuScene::applyThemeChange() {
   refreshAssistOptionButtons();
   refreshChartFilterButtons();
   if (recordsModal_ != nullptr) recordsModal_->refresh();
-  refreshFindBmsModal();
   refreshMusicModal();
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -1336,7 +1323,7 @@ void MainMenuScene::requestLibraryScanFlush() {
 
 void MainMenuScene::refreshTasksButton() {
   const int libraryCount = activeLibraryTaskCount();
-  if (tasksDialog_) { tasksDialog_->setLibraryCount(libraryCount); tasksDialog_->update(); }
+  if (tasksDialog_) { tasksDialog_->setLibraryCount(libraryCount); }
   icon_button::setBadgeCount(tasksCountBadge, tasksDialog_ ? tasksDialog_->notificationCount() : libraryCount);
 }
 
@@ -1347,11 +1334,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   detailsContent_ = nullptr;
   detailsControlsContent_ = nullptr;
   detailsControlsScroll_ = nullptr;
-  findBmsAvailableWithoutTutorial_ = false;
   archiveUnzipModal_.reset();
   readmeModal_.reset();
   tasksDialog_.reset();
-  findBmsModal_.reset();
   // Initialize the view
   addBmsContextMenu_.reset();
   revealContextMenu.reset();
@@ -1378,9 +1363,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartActionsRow = nullptr;
   replayButtonSlot = nullptr;
   replayButton = nullptr;
-  findBmsButtonSlot = nullptr;
-  findBmsButton = nullptr;
-  findBmsButtonText = nullptr;
   unzipButtonSlot = nullptr;
   unzipButton = nullptr;
   unzipButtonText = nullptr;
@@ -1596,7 +1578,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (item.courseStart || item.randomSelect) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
-      setFindBmsButtonVisible(false);
       if (previewWorker_ != nullptr) {
         previewWorker_->cancelAndReleaseWhenIdle();
       }
@@ -1608,9 +1589,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     setPlayableChartActionsVisible(!item.unavailable && !item.solidArchive &&
                                    !meta.BmsPath.empty());
     refreshUnzipButtonForSelection(&item);
-    setFindBmsButtonVisible(
-        item.unavailable && !item.solidArchive &&
-        (!meta.SHA256.empty() || !meta.MD5.empty() || !meta.Title.empty()));
     refreshStartButtonForActiveFolder();
     if (previewWorker_ != nullptr) {
       previewWorker_->cancelAndReleaseWhenIdle();
@@ -2460,17 +2438,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   });
   replayButtonSlot->addView(replayButton);
 
-  findBmsButtonSlot = new View();
-  findBmsButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0)->setFlexShrink(0);
-  findBmsButtonSlot->setVisible(false);
-  findBmsButtonSlot->setDisplay(YGDisplayNone);
-  findBmsButtonSlot->setAlignItems(YGAlignStretch);
-
-  findBmsButton = makePrimarySelectorButton(
-      i18n::message("menu.find_bms.label"), ui_icons::kDownload, &findBmsButtonText);
-  findBmsButton->setOnClickListener([this]() { openFindBmsForSelection(); });
-  findBmsButtonSlot->addView(findBmsButton);
-
   unzipButtonSlot = new View();
   unzipButtonSlot->setWidth(kDetailsContentWidth)->setHeight(0);
   unzipButtonSlot->setVisible(false);
@@ -2590,7 +2557,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   primaryActionSlot_->setName("mainMenuPrimaryActionSlot");
   primaryActionSlot_->setFlexShrink(0)->setAlignItems(YGAlignStretch);
   primaryActionSlot_->addView(startButton);
-  primaryActionSlot_->addView(findBmsButtonSlot);
   primaryActionSlot_->addView(unzipButtonSlot);
   primaryActions->addView(primaryActionSlot_);
   primaryActions->addView(recordActions);
@@ -2619,7 +2585,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #if TARGET_OS_ANDROID
   buildFileActionsModal();
 #endif
-  buildFindBmsModal();
   buildUnzipProgressModal();
   rootLayout->addView(new SelectedGoalOverlay<ChartListItemView>([this]() -> ChartListItemView * {
     return activeTab_ == Tab::Play && !pendingTab_ && recyclerView && recyclerView->getVisible()
@@ -2778,11 +2743,10 @@ void MainMenuScene::updatePhonePanelLayout() {
   dock->setHeight(dockHeight);
   primaryActionSlot_->setWidth(portrait ? YGUndefined : detailsWidth)->setHeight(primaryHeight);
   if (portrait) primaryActionSlot_->setWidthPercent(100);
-  for (auto *button : {startButton, findBmsButton, unzipButton}) {
+  for (auto *button : {startButton, unzipButton}) {
     button->setWidthPercent(100)->setHeight(primaryHeight);
     button->getContentView()->setPadding(Edge::Bottom, 0);
   }
-  findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? primaryHeight : 0);
   unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? primaryHeight : 0);
   if (!portrait) readyPlayOptionsButton->setHeight(dockHeight);
   auto *summary = readyPlayOptionsButton->getContentView();
@@ -2826,12 +2790,12 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   settings->getContentView()->setAutoFitText(portrait);
   replayButtonText->setAutoFitText(portrait);
   rankingsButtonText->setAutoFitText(portrait);
-  for (auto *view : std::array<View *, 8>{primary, records, primaryActionSlot_, startButton,
-           readyPlayOptionsButton, chartActionsRow, unzipButtonSlot, findBmsButtonSlot}) {
+  for (auto *view : std::array<View *, 7>{primary, records, primaryActionSlot_, startButton,
+           readyPlayOptionsButton, chartActionsRow, unzipButtonSlot}) {
     if (portrait) view->setWidthPercent(100);
     else view->setWidth(kDetailsContentWidth);
   }
-  for (auto *button : {unzipButton, findBmsButton}) {
+  for (auto *button : {unzipButton}) {
     if (portrait) button->setWidthPercent(100);
     else button->setWidth(kDetailsContentWidth);
   }
@@ -2841,12 +2805,10 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   const int detailActionHeight = portrait ? 64 : 76;
   records->setHeight(detailActionHeight);
   const int primaryHeight = portrait ? height : kPlayDockHeight;
-  for (auto *button : {startButton, findBmsButton, unzipButton})
+  for (auto *button : {startButton, unzipButton})
     button->getContentView()->setPadding(Edge::Bottom, 0);
   primaryActionSlot_->setHeight(primaryHeight);
   startButton->setHeight(primaryHeight);
-  findBmsButton->setHeight(primaryHeight);
-  findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? primaryHeight : 0);
   for (auto *view : std::array<View *, 4>{replayButtonSlot, replayButton, rankingsButton,
            chartActionsRow}) view->setHeight(detailActionHeight);
   for (auto *view : chartActionsRow->getChildren()) view->setHeight(detailActionHeight);
@@ -2906,8 +2868,7 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
     readyPlayOptionsButton->setWidth(YGUndefined)->setFlex(1)->setMinWidth(0)->setHeight(kPlayDockHeight);
     primaryActionSlot_->moveTo(*dock);
     primaryActionSlot_->setWidth(kDetailsPanelWidth)->setHeight(kPlayDockHeight);
-    for (auto *view : std::array<View *, 5>{startButton, findBmsButtonSlot,
-             findBmsButton, unzipButtonSlot, unzipButton}) view->setWidthPercent(100);
+    for (auto *view : std::array<View *, 3>{startButton, unzipButtonSlot, unzipButton}) view->setWidthPercent(100);
   } else {
     // Preserve the primary action and grid order after returning from the dock.
     records->moveTo(*dock);
@@ -4382,7 +4343,6 @@ void MainMenuScene::refreshSelectedChartActionState() {
     refreshReplayAvailability(nullptr);
     setPlayableChartActionsVisible(false);
     setUnzipButtonVisible(false);
-    setFindBmsButtonVisible(false);
     refreshStartButtonForActiveFolder();
     return;
   }
@@ -4391,7 +4351,6 @@ void MainMenuScene::refreshSelectedChartActionState() {
   if (record->randomSelect) {
     setPlayableChartActionsVisible(true, false);
     refreshUnzipButtonForSelection(nullptr);
-    setFindBmsButtonVisible(false);
     refreshStartButtonForActiveFolder();
     return;
   }
@@ -4401,7 +4360,6 @@ void MainMenuScene::refreshSelectedChartActionState() {
         activeFolder.courseId > 0;
     setPlayableChartActionsVisible(currentCourseStart, false);
     refreshUnzipButtonForSelection(nullptr);
-    setFindBmsButtonVisible(false);
     refreshStartButtonForActiveFolder();
     return;
   }
@@ -4410,10 +4368,6 @@ void MainMenuScene::refreshSelectedChartActionState() {
                                  !record->solidArchive &&
                                  !record->meta.BmsPath.empty());
   refreshUnzipButtonForSelection(&*record);
-  setFindBmsButtonVisible(
-      record->unavailable && !record->solidArchive &&
-      (!record->meta.SHA256.empty() || !record->meta.MD5.empty() ||
-       !record->meta.Title.empty()));
   refreshStartButtonForActiveFolder();
 }
 
@@ -5684,8 +5638,7 @@ void MainMenuScene::toggleAddBmsMenu() {
           } else if (actionId == "manage-files") {
             showFileActionsModal();
 #endif
-          } else if (actionId == "browse-bms") {
-            openBmsBrowser();
+
           }
         }});
   }
@@ -5701,25 +5654,11 @@ void MainMenuScene::toggleAddBmsMenu() {
 #if TARGET_OS_ANDROID
   actions.push_back({.id = "manage-files", .label = i18n::message("menu.manage_files.label"), .enabled = available});
 #endif
-#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  actions.push_back({.id = "browse-bms", .label = i18n::message("downloads.ui.browse"), .enabled = available});
-#endif
   addBmsContextMenu_->setViewportSize(rendering::window_width, rendering::window_height);
   addBmsContextMenu_->show({.x = addFolderButton_->getX(), .y = addFolderButton_->getY(),
       .width = addFolderButton_->getWidth(), .height = addFolderButton_->getHeight()}, std::move(actions), 260);
 }
 
-void MainMenuScene::openBmsBrowser() {
-#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  if (context.storageMaintenanceActive.load()) return;
-  downloads::Request defaults;
-  defaults.libraryRoot = preferredBmsDownloadRoot();
-  defaults.skipUnarchiving = context.settings.findBmsSkipUnarchivingForNonSolidArchives;
-  defaults.storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences);
-  downloads::configureBrowser(std::move(defaults));
-  downloads::openBrowser();
-#endif
-}
 
 void MainMenuScene::toggleRevealContextMenu(View *anchor) {
   if (!anchor) anchor = revealButton;
@@ -5960,17 +5899,15 @@ void MainMenuScene::setUnzipButtonVisible(bool visible) {
 }
 
 void MainMenuScene::refreshPrimaryActionVisibility() {
-  if (!startButton || !findBmsButtonSlot || !unzipButtonSlot) return;
-  const bool download = findBmsButtonSlot->getVisible();
-  const bool unzip = unzipButtonAvailable_ && !download;
+  if (!startButton || !unzipButtonSlot) return;
+  const bool unzip = unzipButtonAvailable_;
   const int height = rendering::window_height > rendering::window_width
                          ? kPortraitMenuActionHeight : kPlayDockHeight;
   unzipButtonSlot->setVisible(unzip);
   unzipButtonSlot->setDisplay(unzip ? YGDisplayFlex : YGDisplayNone);
   unzipButtonSlot->setHeight(unzip ? height : 0);
-  findBmsButtonSlot->setHeight(download ? height : 0);
-  startButton->setVisible(!download && !unzip);
-  startButton->setDisplay(download || unzip ? YGDisplayNone : YGDisplayFlex);
+  startButton->setVisible(!unzip);
+  startButton->setDisplay(unzip ? YGDisplayNone : YGDisplayFlex);
   if (rootLayout) rootLayout->applyYogaLayout();
 }
 
@@ -6064,42 +6001,9 @@ void MainMenuScene::startLibraryRebuild() {
   tasksModalOpenRequested.store(true);
 }
 
-void MainMenuScene::setFindBmsButtonVisible(bool visible) {
-  findBmsAvailableWithoutTutorial_ = visible;
-  visible = visible || (tutorial_ && tutorial_->getVisible() &&
-                       tutorial_->step() == NewcomerTutorialStep::Download);
-  if (findBmsButtonSlot == nullptr) {
-    return;
-  }
 
-  findBmsButtonSlot->setVisible(visible);
-  findBmsButtonSlot->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
-  refreshPrimaryActionVisibility();
-}
 
-void MainMenuScene::openFindBmsForSelection() {
-  if (willStart.load() || replayExportJob_.inProgress() ||
-      recyclerView == nullptr) {
-    return;
-  }
 
-  const auto selection = selectedRecordSnapshot();
-  if (!selection) {
-    return;
-  }
-
-  const ChartMetaRecord record = *selection;
-  if (record.solidArchive || !record.unavailable ||
-      (record.meta.SHA256.empty() && record.meta.MD5.empty() &&
-       record.meta.Title.empty())) {
-    return;
-  }
-  showFindBmsModal(record);
-}
-
-std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
-  return findBmsDownloadRoot(chartSession ? &*chartSession : nullptr);
-}
 
 #if TARGET_OS_ANDROID
 void MainMenuScene::buildFileActionsModal() {
@@ -7170,24 +7074,7 @@ void MainMenuScene::stopMusicPlayback() {
 void MainMenuScene::buildTasksModal() {
   if (!rootLayout) return;
   tasksDialog_ = std::make_unique<TasksModal>(rootLayout,
-      [this] { requestLibraryScanFlush(); applyPendingUiUpdates(); },
-      [this](const std::filesystem::path &path) {
-        if (!chartSession || this->context.storageMaintenanceActive || willStart.load() ||
-            replayExportJob_.inProgress()) return false;
-        selectTab(Tab::Play);
-        defer([this, path, profile = this->context.profileManager.activeProfile().id] {
-          if (profile != this->context.profileManager.activeProfile().id) return true;
-          if (pendingTab_) return false;
-          applyFolderGoalSelection(
-              {.kind = folder_goals::SourceKind::Directory,
-               .identity = chart_storage_identity::StoredFolderPathText(path),
-               .name = fspath_to_utf8(path.filename())},
-              long_note_mode::valueFromId(this->context.settings.selectedLnMode));
-          refreshChartFilterPanel();
-          return true;
-        }, 0, true);
-        return true;
-      });
+      [this] { requestLibraryScanFlush(); applyPendingUiUpdates(); });
   tasksModalRoot = tasksDialog_->root();
   tasksScrollView = tasksDialog_->libraryScroll();
   tasksText = tasksDialog_->libraryText();
@@ -7197,12 +7084,12 @@ void MainMenuScene::buildTasksModal() {
   refreshTasksModal(true);
 }
 
-void MainMenuScene::showTasksModal(bool downloads) {
+void MainMenuScene::showTasksModal() {
   if (tasksModalRoot == nullptr) {
     return;
   }
   tasksModalRoot->setSize(rendering::window_width, rendering::window_height);
-  tasksDialog_->show(downloads ? TasksModal::Tab::Downloads : TasksModal::Tab::Library);
+  tasksDialog_->show();
 #if TARGET_OS_ANDROID
   resizeTasksModal();
   tasksModalRoot->applyYogaLayout();
@@ -7333,61 +7220,11 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
   return text.str();
 }
 
-void MainMenuScene::buildFindBmsModal() {
-  findBmsModal_ = FindBmsModal::Create(
-      rootLayout, {
-      .admit = [this] { return !context.storageMaintenanceActive.load(); },
-      .downloadRoot = [this]() { return preferredBmsDownloadRoot(); },
-      .downloadOptions = [this]() {
-        return BmsSearchDownloadOptions{
-            .skipUnarchivingForNonSolidArchives =
-                context.settings.findBmsSkipUnarchivingForNonSolidArchives,
-            .storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences),
-            .storagePauseRequested = [app = &context] {
-              return app->backgroundTasksPausedForForegroundScene.load() || app->appInBackground.load();
-            }
-#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-            , .enqueueDownload = [](const downloads::Request &request) {
-              return downloads::service()->submit(request).id;
-            }
-#endif
-            };
-      },
-      .downloadStarted = [this]() {
-        findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
-      },
-      .filesReady = [this](const ChartMetaRecord &record,
-                           const BmsSearchResult &result, bool matched) {
-        enqueueDownloadedPathIndexTask(
-            result.outputPath,
-            matched ? main_menu_library::findBmsChartIdentity(record.meta)
-                    : main_menu_library::FindBmsChartIdentity{},
-            matched ? findBmsSelectionGenerationAtDownloadStart : 0,
-            result.removedPaths);
-      },
-      .refreshLibrary = [this]() { startLibraryRefresh(); },
-      .openDownloads = [](const std::string &id) {
-#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-        downloads::requestDownloadsPresentation(id);
-#endif
-      }});
-}
 
-void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
-  if (findBmsModal_ != nullptr) findBmsModal_->show(record);
-}
 
-void MainMenuScene::hideFindBmsModal() {
-  if (findBmsModal_ != nullptr) findBmsModal_->hide();
-}
 
-void MainMenuScene::refreshFindBmsModal() {
-  if (findBmsModal_ != nullptr) findBmsModal_->refresh();
-}
 
-void MainMenuScene::applyFindBmsUpdates() {
-  if (findBmsModal_ != nullptr) findBmsModal_->update();
-}
+
 
 void MainMenuScene::buildPlayOptionsModal() {
   if (rootLayout == nullptr) {
@@ -8871,9 +8708,6 @@ bool MainMenuScene::needsContinuousPresentation() const {
 }
 
 void MainMenuScene::update(float dt) {
-#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  if (downloads::takeDownloadsPresentation()) showTasksModal(true);
-#endif
   refreshTasksButton();
   context.refreshAudioTimingProfile();
   if (!applyPendingTabSwitch()) return;
@@ -8933,7 +8767,6 @@ void MainMenuScene::update(float dt) {
   if (selectorTabActive()) refreshScoreClearRanksIfNeeded();
   refreshIrRecordListIfNeeded();
   applyPendingUiUpdates();
-  applyFindBmsUpdates();
   if (archiveUnzipModal_ != nullptr) {
     archiveUnzipModal_->update();
   }
@@ -9040,9 +8873,6 @@ void MainMenuScene::renderScene() {
     resizeParseLogModal();
   }
 
-  if (findBmsModal_ != nullptr && (layoutChanged || findBmsModal_->isVisible())) {
-    findBmsModal_->resize(rendering::window_width, rendering::window_height);
-  }
   if (archiveUnzipModal_ != nullptr && (layoutChanged || archiveUnzipModal_->isVisible())) {
     archiveUnzipModal_->resize(rendering::window_width, rendering::window_height);
   }
@@ -9100,7 +8930,6 @@ void MainMenuScene::cleanupScene() {
   }
   readmeModal_.reset();
   tasksDialog_.reset();
-  findBmsModal_.reset();
   archiveUnzipModal_.reset();
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
@@ -9135,9 +8964,6 @@ void MainMenuScene::cleanupScene() {
   revealButton = nullptr;
   replayButtonSlot = nullptr;
   replayButton = nullptr;
-  findBmsButtonSlot = nullptr;
-  findBmsButton = nullptr;
-  findBmsButtonText = nullptr;
   unzipButtonSlot = nullptr;
   unzipButton = nullptr;
   unzipButtonText = nullptr;

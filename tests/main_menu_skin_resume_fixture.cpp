@@ -139,7 +139,10 @@ struct IntroScene {
   MainMenuScene::Context &context;
   View *rootLayout_ = nullptr, *startButton_ = nullptr;
   View *content_ = nullptr, *menu_ = nullptr, *title_ = nullptr;
-  View *settingsButton_ = nullptr, *tutorialButton_ = nullptr;
+  View *settingsButton_ = nullptr, *tutorialButton_ = nullptr, *apologyButton_ = nullptr;
+  struct Notice { bool getVisible() { return false; } } *apologyModal_ = nullptr;
+  bool inputBindingAdapter_ = true;
+  void startInputListening() { inputBindingAdapter_ = true; }
   int layoutWidth_ = -1, layoutHeight_ = -1;
   int lastSafeTop = -1, lastSafeLeft = -1, lastSafeBottom = -1, lastSafeRight = -1;
   bool pendingStart_ = false;

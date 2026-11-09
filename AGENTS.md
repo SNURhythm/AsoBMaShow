@@ -95,6 +95,19 @@
 - Stop the emulator when done:
   `/opt/homebrew/share/android-commandlinetools/platform-tools/adb emu kill`
 
+## External Service Integrations
+
+- BMS network downloads and the embedded browser are retired. Before adding,
+  restoring or expanding an integration, record official permission covering
+  AsoBMaShow, its source and review date, the exact access method, applicable
+  restrictions and the implementation's compliance with them. Another client's
+  source code does not establish service-use permission.
+- If access is blocked or restricted, suspend the integration immediately and
+  reconfirm the operator's position before deciding whether to resume. Do not
+  change User Agent, browser behavior, endpoints or access methods to continue
+  using the service while permission is unresolved.
+- See [External-service review](docs/features/find-bms-and-downloads.md#external-service-review-before-any-new-integration).
+
 ## BMS Parser Updates
 
 - `src/bms_parser.hpp` and `src/bms_parser.cpp` are amalgamated from `../bms-parser-cpp`. Do not edit parser code directly in this repo.
