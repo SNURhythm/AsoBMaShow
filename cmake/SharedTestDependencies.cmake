@@ -242,6 +242,7 @@ asobmashow_share_test_sources(dependencies
         difficulty_table_importer_tests
         dropdown_view_tests
         file_checksum_tests
+        find_bms_download_tests
         gameplay_automatic_authority_tests
         gameplay_bga_target_tests
         gameplay_gauge_rules_tests

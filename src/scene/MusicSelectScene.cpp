@@ -7,6 +7,7 @@
 #include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
+#include "../downloads/DownloadService.h"
 #include "KomboScene.h"
 #include "ChartGoalsScene.h"
 #include "FolderGoalsScene.h"
@@ -556,6 +557,16 @@ void MusicSelectScene::init() {
         if (context.chartLibraryTasks && context.chartLibraryTasks->snapshot().activeCount > 0)
           context.chartLibraryScanFlushRequested.fetch_add(1, std::memory_order_release);
         reloadLibrary(); selectedBarMoved();
+      },
+      [this](const std::filesystem::path &path) {
+        if (!chartSession_ || !repositoryMetadata_ || !sceneActive_ || failed_ ||
+            launching_ || context.storageMaintenanceActive) return false;
+        applyFolderGoalSelection(
+            {.kind = folder_goals::SourceKind::Directory,
+             .identity = chart_storage_identity::StoredFolderPathText(path),
+             .name = fspath_to_utf8(path.filename())},
+            long_note_mode::valueFromId(context.settings.selectedLnMode));
+        return true;
       });
   tasksModal_ = tasksDialog_->root();
   tasksModalText_ = tasksDialog_->libraryText();
@@ -564,9 +575,9 @@ void MusicSelectScene::init() {
 }
 
 bool MusicSelectScene::canPrepareForStorageMaintenance(std::string &error) {
-  if (launching_ ||
+  if (launching_ || (findBmsModal_ && findBmsModal_->inProgress()) ||
       (archiveUnzipModal_ && archiveUnzipModal_->inProgress())) {
-    error = "A chart preparation or extraction is active.";
+    error = "A chart download, preparation, or extraction is active.";
     return false;
   }
   return true;
@@ -591,6 +602,7 @@ void MusicSelectScene::onPause() {
   if (revealContextMenu_) revealContextMenu_->dismiss();
   recordsTask_.cancelAndWait();
   finishRecordsLoading();
+  if (findBmsModal_) findBmsModal_->cancelAndWait();
   if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   if (folderStatusLoader_) folderStatusLoader_->cancel();
@@ -670,6 +682,7 @@ void MusicSelectScene::onLanguageChanged() {
   // Native retained controls update in place; skin content, playback, and
   // in-progress directory work belong to the active selector session.
   refreshTasksModal(true);
+  if (findBmsModal_) findBmsModal_->refresh();
   if (modalLayer_ != nullptr) modalLayer_->applyYogaLayout();
 }
 
@@ -1450,7 +1463,10 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     if (modalOverlayPortal_) (void)modalOverlayPortal_->handleEvents(event);
     return {};
   }
-
+  if (findBmsModal_ && findBmsModal_->isVisible()) {
+    (void)findBmsModal_->handleEvents(event);
+    return {};
+  }
   if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) {
     (void)archiveUnzipModal_->handleEvents(event);
     return {};
@@ -2422,6 +2438,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   }
   const auto record = *selected.chart;
   if (record.unavailable) {
+    openDownload();
     return;
   }
   if (record.solidArchive ||
@@ -2970,6 +2987,7 @@ void MusicSelectScene::consumeActions() {
 bool MusicSelectScene::selectorInputBlocked() const {
   return launching_ || (revealContextMenu_ && revealContextMenu_->isOpen()) ||
          (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
+         (findBmsModal_ && findBmsModal_->isVisible()) ||
          (tasksDialog_ && tasksDialog_->isVisible()) ||
          (readmeModal_ && readmeModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
@@ -3297,7 +3315,7 @@ void MusicSelectScene::executeEvent(
       }
       break;
     case MusicSelectEventEffectKind::OpenDownloadSite:
-      // Retained skin event IDs must not reopen the retired download flow.
+      // Retained skin event IDs must not reopen unreviewed external sources.
       break;
     case MusicSelectEventEffectKind::OpenIr:
       if (selected != nullptr && irExternalUrlService_) {
@@ -3471,7 +3489,10 @@ void MusicSelectScene::update(float) {
   applyRecordsExportProgress();
   applyRecordsExportResult();
   updateRecordServices();
-
+  if (findBmsModal_) {
+    findBmsModal_->resize(rendering::window_width, rendering::window_height);
+    findBmsModal_->update();
+  }
   if (archiveUnzipModal_) {
     archiveUnzipModal_->resize(rendering::window_width,
                                rendering::window_height);
@@ -3566,6 +3587,7 @@ void MusicSelectScene::enterError(
   if (failed_) return;
   failed_ = true;
   closeRankings();
+  if (findBmsModal_) findBmsModal_->cancelAndWait();
   if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   stopInputListening();
@@ -3865,6 +3887,7 @@ void MusicSelectScene::ensureToolbarContextMenu() {
               if (toolbarControlAvailable(Control::Tasks)) openTasks();
             } else if (actionId == "ir-uploads") {
               if (toolbarControlAvailable(Control::IrUploads)) openIrUploads();
+
             } else if (actionId == "settings") {
               if (toolbarControlAvailable(Control::Settings)) openSettings();
             }
@@ -4159,12 +4182,85 @@ void MusicSelectScene::refreshToolbarGoal() {
   }
 }
 
+bool MusicSelectScene::canDownloadSelectedChart() const {
+  if (!sceneActive_ || failed_ || selectorInputBlocked() ||
+      context.appInBackground.load(std::memory_order_acquire) ||
+      !modalLayer_ || !context.chartLibraryTasks) return false;
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return false;
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  const auto *chart = selected.kind == skin::MusicSelectBarKind::Song && selected.chart
+      ? &*selected.chart : nullptr;
+  return chart && chart->unavailable && !chart->solidArchive &&
+         BmsSearchService::canDownload(chart->meta.MD5);
+}
 
+void MusicSelectScene::openDownload() {
+  if (!canDownloadSelectedChart()) return;
+  const auto snapshot = bars_.readView();
+  const auto record = *snapshot.rowAt(snapshot.selectedIndex).chart;
+  if (!findBmsModal_) {
+    findBmsModal_ = FindBmsModal::Create(modalLayer_, {
+        .admit = [this] { return !context.storageMaintenanceActive.load(); },
+      .downloadRoot = [this] {
+          return findBmsDownloadRoot(chartSession_ ? &*chartSession_ : nullptr);
+        },
+        .downloadOptions = [this] {
+          return BmsSearchDownloadOptions{.skipUnarchivingForNonSolidArchives =
+              context.settings.findBmsSkipUnarchivingForNonSolidArchives,
+            .storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences),
+            .storagePauseRequested = [app = &context] {
+              return app->backgroundTasksPausedForForegroundScene.load() || app->appInBackground.load();
+            }
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+            , .enqueueDownload = [](const downloads::Request &request) {
+              return downloads::service()->submit(request).id;
+            }
+#endif
+          };
+        },
+        .filesReady = [this](const ChartMetaRecord &record, const BmsSearchResult &result,
+                             bool matched) {
+          if (!context.chartLibraryTasks) return;
+          context.chartLibraryTasks->enqueue({
+              .kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
+              .title = i18n::message("menu.index_downloaded_bms.label"),
+              .downloadedPath = result.outputPath,
+              .downloadedRemovedPaths = result.removedPaths,
+              .downloadedTargetIdentity = matched
+                  ? main_menu_library::findBmsChartIdentity(record.meta)
+                  : main_menu_library::FindBmsChartIdentity{},
+          });
+        },
+        .refreshLibrary = [this] {
+          if (context.chartLibraryTasks) {
+            context.chartLibraryTasks->enqueue({
+                .kind = chart_library_tasks::TaskKind::RefreshLibrary,
+                .title = i18n::message("menu.refresh_list.label"),
+            });
+          }
+        },
+        .openDownloads = [](const std::string &id) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+          downloads::requestDownloadsPresentation(id);
+#endif
+        },
+    });
+  }
+  if (!findBmsModal_) return;
+  findBmsModal_->show(record, true);
+  resetLogicalInput();
+  refreshToolbarAvailability();
+}
 
 void MusicSelectScene::refreshTaskNotifications() {
   if (tasksDialog_) {
+#if TARGET_OS_IPHONE || TARGET_OS_ANDROID
+    if (downloads::takeDownloadsPresentation()) showTasksModal(true);
+#endif
     tasksDialog_->setLibraryCount(context.chartLibraryTasks ? context.chartLibraryTasks->snapshot().activeCount : 0);
     tasksDialog_->resize(rendering::window_width, rendering::window_height);
+    tasksDialog_->update();
     if (toolbar_) toolbar_->setTaskCount(tasksDialog_->notificationCount());
   }
 }
@@ -4243,12 +4339,12 @@ std::string MusicSelectScene::tasksModalTextSnapshot() const {
   return text.str();
 }
 
-void MusicSelectScene::showTasksModal() {
+void MusicSelectScene::showTasksModal(bool downloads) {
   if (!tasksDialog_) return;
   if (playOptionsModal_) playOptionsModal_->hide();
   if (recordsModal_) recordsModal_->hide();
   tasksDialog_->resize(rendering::window_width, rendering::window_height);
-  tasksDialog_->show();
+  tasksDialog_->show(downloads ? TasksModal::Tab::Downloads : TasksModal::Tab::Library);
   displayedTasksRevision_ = 0;
   displayedTaskProgressRevision_ = 0;
   refreshTasksModal(true);
@@ -4733,6 +4829,7 @@ void MusicSelectScene::cleanupScene() {
   if (recordFileActions_) recordFileActions_->close();
   sceneActive_ = false;
   readmeModal_.reset();
+  findBmsModal_.reset();
   archiveUnzipModal_.reset();
   ++launchGeneration_;
   cancelDirectoryLoad();

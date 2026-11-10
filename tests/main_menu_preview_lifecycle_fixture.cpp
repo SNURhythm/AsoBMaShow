@@ -1,5 +1,6 @@
 #include "scene/MainMenuPreviewController.h"
 #include "targets.h"
+#include "BmsSearchService.h"
 
 #include <future>
 #include <iostream>

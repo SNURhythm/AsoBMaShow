@@ -1,21 +1,79 @@
-# Retired BMS downloads and embedded browser
+# GingerRush downloads and the retired embedded browser
 
-BMS package search/download and the embedded browser were removed on 2026-11-08
-while the permitted use of external services is reviewed. Neither selector,
-Tasks, Settings, nor the newcomer tutorial offers these actions. The retained
-skin download-site event is a no-op. Provider clients, durable download jobs,
-native browser hosts and mobile transfer services are no longer packaged.
+BMS downloads were suspended on 2026-11-08. On 2026-11-10, the developer reported
+permission from GingerRush's operator and requested restoration of that source
+only. Missing-chart actions in both selectors now look up a valid MD5 through
+GingerRush, with confirmation, progress, cancellation, archive verification and
+local import. SHA256-only or title-only entries cannot start a lookup.
 
-On upgrade, Android cancels jobs belonging to the retired download service and
-its notification channel. iOS invalidates the legacy background URL session and
-cancels pending background tasks in the downloads namespace. These cleanup
-paths never recreate a transfer or resume saved jobs. Completed chart libraries,
-scores and profiles are preserved; private download staging is left untouched.
+GingerRush is the only packaged lookup driver. Failure, cancellation or access
+rejection never falls through to another source. No embedded browser, HTML
+search, browser-captured downloads or arbitrary-URL admission UI is restored.
+The retained skin download-site event remains a no-op. Normal local folder and
+archive import, difficulty tables, storage tools and Bokutachi IR remain available.
 
-Local folder/archive import, library scanning, difficulty-table import, storage
-tools and Bokutachi IR remain available. Tasks shows local library progress.
-Users can acquire files independently and import them through the existing
-local import workflow.
+Mobile downloads use a fresh private `GingerRushDownloadsV1` job root and new
+native session/job identifiers. Tasks shows their progress and recovery actions.
+On upgrade, Android cancels unscoped legacy jobs and their notification channel;
+iOS invalidates the old background session and cancels old continued-processing
+requests. These paths never resume pre-retirement jobs or read their saved URLs.
+Completed chart libraries, scores, profiles and legacy private staging are preserved.
+
+Android publication keeps temporary commit trees and rollback backups in the
+app's `.asobmashow-download-transactions` directory beside `Documents`, using
+the external-files container or its internal-files fallback. Recovery derives
+that private location from OS-owned paths; a journal cannot authorize another
+transaction root. The destination subtree is reserved against DocumentsProvider
+mutations during publication and recovery. Unsupported library volumes fail
+without placing transaction data in shared Documents. Android only offers
+download destinations within the app's Documents tree; a previously selected
+outside folder is cleared so downloads use an eligible folder or the default BMS
+folder. Cancelled imports reclaim unfinished transaction copies before history
+removal. Extracted staging and its ownership index are flushed before the prepared
+publication marker is saved, so rollback recovery can reuse them after power loss.
+Successful publication flushes staging, transaction and obsolete-variant
+deletions before recording completion, retaining its journal for crash recovery.
+Removing history deletes and flushes retained files before forgetting the job;
+late iOS resume callbacks cannot recreate its private directory. Desktop downloads
+recheck cancellation after copying and before the first publication rename.
+
+On iOS, saved job and publication paths within Documents or the download store
+are relative to the current app container. Legacy absolute paths from those
+same subtrees are rebased when read; publication recovery still checks file
+identities before restoring or accepting a swap. Delete Files durably records
+the decision before removing staging and retained payloads, and an interrupted
+deletion can finish without fetching the package again.
+
+## GingerRush authorization review — 2026-11-10
+
+- **Operator/service:** catizard / GingerRush.
+- **Permission source:** direct Discord authorization, reported by the
+  AsoBMaShow developer in the development conversation on 2026-11-10. The
+  developer reported that permission was granted after asking to integrate
+  GingerRush into AsoBMaShow for finding/downloading BMS packages, then explicitly
+  requested restoration of GingerRush only. This record is a developer-attested
+  summary; it is not a quotation or public copy of the private DM.
+- **Authorized scope:** AsoBMaShow's GingerRush package lookup/download. No
+  authorization is recorded for Konmai, Wriggle, HorieYuuka, BMS Search, IPFS,
+  Google Drive/Dropbox discovery, or embedded browsing.
+- **Access method:** user-initiated HTTPS GET to
+  `https://gingerrush.com/download/package/{md5}` for a validated chart MD5;
+  consume its JSON package URL and filename, then download that package.
+  PixelDrain viewer links returned by this API use the ordinary file/filesystem
+  download endpoints already used by this integration. This is file transport
+  for GingerRush's response, not another package lookup provider. No HTML
+  scraping, browser cookies, CAPTCHA handling or alternative-provider fallback.
+- **Identification/restrictions:** identify as `AsoBMaShow`; preserve HTTPS and
+  normal redirect security. No additional quotas, authentication requirements,
+  or redistribution permission were supplied in the developer's report. Do not
+  infer unrestricted bulk access or redistribution rights. Keep user-initiated
+  acquisition and the existing bounded transfer queue. Access rejection ends
+  the attempt; do not change identity or access method to get around it.
+- **Implementation decision:** restore only GingerRush and shared download,
+  import and progress UI. Use fresh durable-job/session storage so pre-retirement
+  jobs from other sources cannot resume. Keep the existing legacy cancellation
+  paths and the public apology. Verify with synthetic responses and loopback
+  transports; do not contact unapproved services during tests.
 
 ## Public apology
 
@@ -60,9 +118,13 @@ methods to continue using a restricted service while permission is unresolved.
 
 ## Verification
 
-`bms_download_removal_tests` checks retired packaging and all five notice assets,
-including the exact Korean checksum. Intro navigation tests cover the notice
-entry; text-input view tests cover its language switch, scrolling, close actions
-and responsive viewport. Local library/archive and selector tests continue to
-exercise file import, indexing, navigation and task progress independently of
-network package acquisition.
+The `area_downloads` test group covers GingerRush JSON parsing and source isolation,
+invalid MD5, rejection/cancellation, native loopback transport, durable job recovery,
+archive validation/publication and the shared download modal. Selector, library,
+settings and UI groups cover the restored entry points and local import behavior.
+Tests use synthetic packages and loopback servers, without probing live providers.
+
+`bms_download_removal_tests` checks that unapproved drivers and the embedded browser
+remain absent, legacy jobs remain isolated, and all five apology assets include the
+November 10 update. It also preserves the original Korean text's checksum. The
+start-screen notice remains available offline in all five languages.

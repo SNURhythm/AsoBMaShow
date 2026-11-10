@@ -1,0 +1,199 @@
+#include "DownloadImport.h"
+#include "DownloadPublication.h"
+#include "DownloadPublicationPaths.h"
+#include "../AtomicFile.h"
+#include "../bms_search/Internal.h"
+#include "../bms_search/DownloadedArchiveWorkflow.h"
+#include "../bms_search/DownloadStorageIdentity.h"
+#include "../bms_search/DownloadStorageOptimization.h"
+
+namespace downloads {
+namespace {
+using namespace asobmshow::bms_search;
+std::filesystem::path importRoot(const Job &job) {
+  if (job.id.size() != 32 || !std::all_of(job.id.begin(), job.id.end(), [](unsigned char c) { return std::isxdigit(c); }))
+    throw std::runtime_error("Invalid import identity.");
+  auto id = job.id;
+  id[12] = '4'; id[16] = '8';
+  id.insert(20, "-"); id.insert(16, "-"); id.insert(12, "-"); id.insert(8, "-");
+  return findBmsStagingBasePath() / id;
+}
+FindBmsStorageNames storageNames(const Job &job) {
+  const auto extension = archiveExtensionFromName(job.request.archiveName);
+  return findBmsStorageNames(job.request.archiveName,
+      extension.empty() ? ".archive" : extension,
+      job.request.storageIdentity.empty() ? job.request.url : job.request.storageIdentity);
+}
+BmsSearchResult failed(const std::string &message) {
+  return {.status = BmsSearchResult::Status::DownloadFailed, .message = message};
+}
+#if TARGET_OS_ANDROID
+std::shared_ptr<void> reservePublication(const std::filesystem::path &downloadRoot, std::string &error) {
+  // On a first install BMSSEARCH may not exist yet; reserve its existing parent.
+  auto root = std::filesystem::weakly_canonical(downloadRoot);
+  while (!std::filesystem::exists(root) && root != root.parent_path()) root = root.parent_path();
+  return ReserveAndroidStorageSubtrees({root}, error);
+}
+#endif
+bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::path &privateRoot,
+             const BeforePublication &prepare, std::string &error,
+             std::vector<std::filesystem::path> &removed) {
+  const auto transactionRoot = publicationTransactionRoot(artifact.downloadRoot);
+  if (transactionRoot.empty()) { error = "Private publication storage is unavailable on this library volume."; return false; }
+#if TARGET_OS_ANDROID
+  // Protect the installed tree as well as recovery while preparing the swap.
+  const auto reservation = reservePublication(artifact.downloadRoot, error);
+  if (!reservation) return false;
+#endif
+  PublicationJournal journal(privateRoot / "publication.json", artifact.destinationPath);
+  const auto rememberRemovals = [&](const auto &paths, auto &message) { return journal.recordRemovals(paths, message); };
+  const auto finish = [&](bool success) {
+    if (!success) return false;
+    removed = journal.removedPaths();
+    std::error_code cleanupError;
+    std::filesystem::remove_all(artifact.stagingRoot, cleanupError);
+    if (cleanupError) { error = "Could not remove download staging: " + cleanupError.message(); return false; }
+    const auto stagingBase = artifact.stagingRoot.parent_path();
+    if (std::filesystem::exists(stagingBase) && !atomic_file::syncDirectory(stagingBase, error)) return false;
+    return journal.finishPublication(error);
+  };
+  const auto recovery = journal.recover();
+  if (recovery == PublicationRecovery::Conflict) {
+    error = "Downloaded files changed during recovery. Existing files were left untouched.";
+    return false;
+  }
+  if (recovery == PublicationRecovery::Installed) {
+    if (!prepare || !prepare(artifact)) { error = "Import paused during recovery."; return false; }
+    return finish(finishFindBmsPendingArtifactPublication(artifact, error, &removed, rememberRemovals));
+  }
+  const auto transaction = transactionRoot / artifact.stagingRoot.filename();
+  if (!journal.beginCopy(transaction)) { error = "Could not save the import recovery journal."; return false; }
+  bool swapping = false;
+  return finish(commitFindBmsPendingArtifact(artifact, error,
+      [&](const auto &from, const auto &to, auto &failure) {
+        if (!swapping) {
+          std::string message;
+          if (!journal.prepareSource(artifact.stagingRoot, [&] { return prepare && prepare(artifact); }, message)) {
+            failure = std::make_error_code(std::errc::io_error);
+            return;
+          }
+        }
+        swapping = true;
+        journal.rename(from, to, failure);
+      }, &removed, rememberRemovals));
+}
+}
+void cleanupArchiveJob(const Job &job) {
+  // Derive the owned directory from the job ID, never from a persisted path.
+  if (job.publicationPrepared) throw std::runtime_error("Recover the pending installation before removing it.");
+  const auto root = importRoot(job);
+  const auto journalPath = root.parent_path().parent_path() / job.id / "publication.json";
+  if (job.state != State::Complete && std::filesystem::exists(journalPath)) {
+    // A crash while copying precedes preparePublication, and Cancel clears
+    // the artifact. Validate the journal against either request-derived output
+    // before reclaiming its private copy; keep it on any cleanup failure.
+    const auto names = storageNames(job);
+    const auto downloadRoot = makeDownloadDirectory(job.request.libraryRoot);
+    PublicationJournal extracted(journalPath, downloadRoot / names.storageKey);
+    PublicationJournal packed(journalPath, downloadRoot / "_archives" / names.archiveName);
+    if (!extracted.discardUnpublishedCopy() && !packed.discardUnpublishedCopy())
+      throw std::runtime_error("Could not discard the interrupted installation. Retry to recover it.");
+  }
+  std::filesystem::remove_all(root);
+  std::string error;
+  if (std::filesystem::exists(root.parent_path()) && !atomic_file::syncDirectory(root.parent_path(), error))
+    throw std::runtime_error("Could not finish removing download staging: " + error);
+}
+BmsSearchResult importArchiveJob(const Job &job, const std::filesystem::path &archive,
+    const std::filesystem::path &privateJobRoot, std::atomic_bool &cancelled,
+    BmsSearchDownloadProgressCallback progress, BeforePublication beforePublication) {
+  using namespace asobmshow::bms_search;
+  if (cancelled.load()) return failed("Import paused.");
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(archive, error)) || error)
+    return failed("Downloaded archive is no longer available. Retry the download.");
+  const auto names = storageNames(job);
+  const auto root = importRoot(job);
+  std::filesystem::create_directories(root);
+  std::filesystem::permissions(root, std::filesystem::perms::owner_all);
+  const FindBmsDownloadAttempt attempt{root, archive, root / "extracted"};
+  // Only this job owns the attempt. Restart interrupted extraction; retain the
+  // immutable OS-completed archive and never fetch it again for import retries.
+  std::filesystem::remove_all(attempt.extractedPath);
+  std::filesystem::remove(root / "original-files.sqlite");
+  // Read the retained file in place. Android forbids app-created hard links;
+  // copying here would duplicate potentially hundreds of gigabytes before import.
+  std::filesystem::create_directory(attempt.extractedPath);
+  BmsSearchDownloadOptions options;
+  // Virtual archive members require a recognized suffix. Unknown attachment
+  // names still work through content-detected extraction without renaming data.
+  options.skipUnarchivingForNonSolidArchives = job.request.skipUnarchiving &&
+      !archive_file::archiveExtensionFromPath(archive).empty();
+  options.storagePolicy = job.request.storagePolicy;
+  options.storagePauseRequested = [&cancelled] { return cancelled.load(); };
+  const auto reader = defaultArchiveReaderDependencies();
+  DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive = [reader](const auto &path, const auto &hash, bool skip, auto checkpoint) {
+        return decideDownloadedArchive(path, hash, skip, std::move(checkpoint), reader);
+      },
+      .extractArchive = [](const auto &path, const auto &destination, auto &message, auto notify, auto stopped) {
+        return extractDownloadedArchive(path, destination, message, std::move(notify), std::move(stopped));
+      },
+      .decideExtracted = decideExtractedArchive,
+      .optimizeExtracted = optimizeExtractedDownload,
+      .commitArtifact = [&](const auto &artifact, auto &message, auto &removed) {
+        return publish(artifact, privateJobRoot, beforePublication, message, removed);
+      }};
+  BmsSearchResult result;
+  const DownloadedArchiveWorkflowRequest request{attempt, makeDownloadDirectory(job.request.libraryRoot),
+      names.archiveName, names.storageKey, job.request.expectedHash, options, true};
+  processDownloadedArchive(request, cancelled, std::move(progress), result, dependencies);
+  // The attempt stays until publication/decision. It is private durable storage
+  // on mobile, so pending mismatch artifacts survive process termination.
+  return result;
+}
+BmsSearchResult resolveArchiveJob(const Job &job, const std::filesystem::path &privateJobRoot,
+    BmsSearchPendingArtifactDecision decision, std::atomic_bool &cancelled,
+    BeforePublication beforePublication) {
+  if (!job.result || !job.result->pendingArtifact) return failed("No downloaded files need a decision.");
+  if (cancelled.load()) return failed("Import paused.");
+  auto result = *job.result;
+  const auto artifact = *result.pendingArtifact;
+  if (artifact.stagingRoot != importRoot(job)) return failed("Invalid import staging identity.");
+  std::string error;
+  if (decision == BmsSearchPendingArtifactDecision::Keep) {
+    if (!publish(artifact, privateJobRoot, beforePublication, error, result.removedPaths)) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = error;
+      return result;
+    }
+    result.outputPath = artifact.destinationPath;
+    result.status = BmsSearchResult::Status::Downloaded;
+    result.message = "Downloaded files saved.";
+  } else {
+    if (job.publicationPrepared) return failed("Recover the interrupted installation before deleting its staging files.");
+    if (job.decision != BmsSearchPendingArtifactDecision::Delete ||
+        privateJobRoot != asobmshow::bms_search::findBmsStagingBasePath().parent_path() / job.id)
+      return failed("No saved deletion decision exists for this download.");
+    // A previous Keep may have died while copying, before any publication
+    // rename was allowed. Discard only that copy, preserving later library edits.
+    PublicationJournal journal(privateJobRoot / "publication.json", artifact.destinationPath);
+    if (!journal.discardUnpublishedCopy())
+      return failed("Recover the interrupted installation before deleting its staging files.");
+    // decide() durably saves the intent before this worker runs. Derive both
+    // owned roots from the job, so retry also works after either tree is gone.
+    cleanupArchiveJob(job);
+    std::error_code removalError;
+    std::filesystem::remove_all(privateJobRoot, removalError);
+    const auto stagingBase = asobmshow::bms_search::findBmsStagingBasePath();
+    if (removalError || (std::filesystem::exists(stagingBase) && !atomic_file::syncDirectory(stagingBase, error)) ||
+        !atomic_file::syncDirectory(privateJobRoot.parent_path(), error))
+      return failed("Could not finish deleting downloaded files. Retry to complete deletion.");
+    result.outputPath.clear();
+    result.status = BmsSearchResult::Status::HashMismatch;
+    result.message = "Downloaded files deleted.";
+  }
+  result.pendingArtifact.reset();
+  return result;
+}
+} // namespace downloads

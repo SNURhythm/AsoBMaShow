@@ -27,6 +27,7 @@
 #include "../targets.h"
 #if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
+#include "../downloads/DownloadPublicationPaths.h"
 #endif
 
 namespace {
@@ -1795,6 +1796,11 @@ static bool isAndroidTreeVirtualPath(const std::filesystem::path &path) {
 }
 
 static bool isPrimaryStorageEligible(const std::filesystem::path &path) {
+#if TARGET_OS_ANDROID
+  // Match the publisher's private same-volume staging policy before offering
+  // this folder or restoring a previously selected download destination.
+  if (downloads::publicationTransactionRoot(path / "BMSSEARCH").empty()) return false;
+#endif
   return !path.empty() &&
          !ChartRepository::IsDefaultBmsFolderPath(path) &&
          !isAndroidTreeVirtualPath(path) &&

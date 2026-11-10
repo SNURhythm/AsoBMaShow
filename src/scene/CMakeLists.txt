@@ -10,6 +10,10 @@ target_sources(main PRIVATE
     ChartViewerScene.cpp
     CourseGameplaySessionBuilder.cpp
     DecideLoadingOverlay.cpp
+    FindBmsDialogPolicy.cpp
+    FindBmsModal.cpp
+    FindBmsProgressPresentation.cpp
+    FindBmsTask.cpp
     IrUploadsController.cpp
     IrUploadPreparationTask.cpp
     IrCandidateLoadTask.cpp

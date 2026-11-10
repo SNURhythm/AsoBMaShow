@@ -9,7 +9,7 @@
 class Button;
 class TextView;
 
-enum class NewcomerTutorialStep { Language, Tables, Folder, PlayOptions };
+enum class NewcomerTutorialStep { Language, Tables, Download, Folder, PlayOptions };
 
 struct NewcomerTutorialCallbacks {
   std::function<bool(const std::string &)> saveLanguage;

@@ -11,34 +11,16 @@ import java.util.concurrent.*;
 public final class BmsDownloadTransportTest {
     static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }
     public static void main(String[] args) throws Exception {
-        BmsBrowserRequestPolicy policy = new BmsBrowserRequestPolicy();
-        String page = "https://example.test/page", file = "https://example.test/file.zip";
-        check(!policy.consume(file), "unknown request must use external fallback");
-        policy.observed(page, "GET", true);
-        check(!policy.consume(file), "main-page GET cannot authorize an iframe download");
-        policy.pageCommitted();
-        check(BmsBrowserRequestPolicy.navigationHeaders(java.util.Map.of("upgrade-insecure-requests", "1")), "iframe navigation header");
-        check(!BmsBrowserRequestPolicy.navigationHeaders(java.util.Map.of("Accept", "*/*")), "XHR is not navigation evidence");
-        policy.observed("https://example.test/metadata", "POST", false);
-        policy.observed(file, "GET", true);
-        check(policy.consume(file), "iframe GET works after unrelated metadata POST");
-        check(!policy.consume(file), "download evidence is consumed once");
-        policy.observed(file, "GET", true);
-        policy.observed("https://example.test/generate", "POST", true);
-        check(!policy.consume(file), "POST redirect cannot reuse historic GET target");
-        policy.observed(file, "GET", true);
-        check(!policy.consume(file), "concurrent GET cannot authorize older POST attachment");
-        policy.pageCommitted();
-        policy.observed(file, "GET", true);
-        check(policy.consume(file), "committed new page starts a fresh navigation epoch");
         Path root = Paths.get(args[0]);
         byte[] payload = new byte[256 * 1024];
         new Random(42).nextBytes(payload);
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         HttpServer other = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         AtomicBoolean resumed = new AtomicBoolean(), leaked = new AtomicBoolean();
+        AtomicReference<String> userAgent = new AtomicReference<>(), redirectedUserAgent = new AtomicReference<>();
         AtomicReference<String> version = new AtomicReference<>("\"v1\"");
         server.createContext("/archive", exchange -> {
+            userAgent.set(exchange.getRequestHeaders().getFirst("User-Agent"));
             String range = exchange.getRequestHeaders().getFirst("Range");
             String validator = exchange.getRequestHeaders().getFirst("If-Range");
             int offset = 0;
@@ -52,6 +34,7 @@ public final class BmsDownloadTransportTest {
             try (OutputStream out = exchange.getResponseBody()) { out.write(payload, offset, payload.length-offset); }
         });
         other.createContext("/file", exchange -> {
+            redirectedUserAgent.set(exchange.getRequestHeaders().getFirst("User-Agent"));
             leaked.set(exchange.getRequestHeaders().getFirst("Cookie") != null ||
                        exchange.getRequestHeaders().getFirst("Authorization") != null ||
                        exchange.getRequestHeaders().getFirst("Referer") != null);
@@ -73,11 +56,13 @@ public final class BmsDownloadTransportTest {
             };
             try { BmsDownloadTransport.download(url, Map.of(), part, listener); throw new AssertionError("cancellation ignored"); }
             catch (IOException expected) { check(part.length() > 0 && part.length() < payload.length, "partial download retained"); }
+            check("AsoBMaShow".equals(userAgent.get()), "initial download must identify AsoBMaShow");
             BmsDownloadTransport.Listener live = new BmsDownloadTransport.Listener() {
                 public boolean cancelled() { return false; }
                 public void progress(long bytes, long total) {}
             };
             BmsDownloadTransport.download(url, Map.of(), part, live);
+            check("AsoBMaShow".equals(userAgent.get()), "resumed download must identify AsoBMaShow");
             check(resumed.get(), "retry uses validator and range");
             check(BmsDownloadTransport.completed(url, part), "completed receipt permits recovery without network");
             check(Arrays.equals(Files.readAllBytes(part.toPath()), payload), "resumed bytes are exact");
@@ -90,6 +75,7 @@ public final class BmsDownloadTransportTest {
                     Map.of("Cookie", "private=value", "Authorization", "secret", "Referer", url),
                     root.resolve("redirect.part").toFile(), live);
             check(!leaked.get(), "cross-origin redirect leaked credentials");
+            check("AsoBMaShow".equals(redirectedUserAgent.get()), "redirected download must identify AsoBMaShow");
             check(!BmsDownloadTransport.allowedRedirect("https://example.com/a", "http://example.com/a"), "HTTPS downgrade accepted");
             check(!BmsDownloadTransport.allowedRedirect(url, "file:///etc/passwd"), "non-http redirect accepted");
             // A new native attempt can be admitted while the previous worker

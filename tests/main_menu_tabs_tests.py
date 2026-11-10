@@ -863,9 +863,9 @@ struct View {
 };
 constexpr int kRootPadding=8;
 struct MainMenuScene {
-  View root, records, archive, utility;
+  View root, records, finder, archive, utility;
   View *rootLayout=&root, *recordsModal_=&records,
-       *archiveUnzipModal_=&archive, *tasksDialog_=nullptr;
+       *findBmsModal_=&finder, *archiveUnzipModal_=&archive, *tasksDialog_=nullptr;
   View *tabLoadingOverlay_=nullptr, *playOptionsModal=nullptr,
        *overlayPortal=nullptr, *decideOverlay_=nullptr,
        *revealContextMenu=nullptr, *addBmsContextMenu_=nullptr, *parseLogModalRoot=nullptr,
@@ -882,7 +882,7 @@ RENDER
 int main() {
   MainMenuScene menu;
   menu.renderScene(); // Establish the viewport, including hidden dialogs.
-  for (auto *modal : {&menu.records, &menu.archive}) {
+  for (auto *modal : {&menu.records, &menu.finder, &menu.archive}) {
     assert(modal->resizes==1);
     modal->resizes=0;
   }
@@ -890,7 +890,7 @@ int main() {
   menu.musicTab=true;
   for (int i=0; i<120; ++i) menu.renderScene();
   assert(menu.utility.renders==120);
-  for (auto *modal : {&menu.records, &menu.archive}) {
+  for (auto *modal : {&menu.records, &menu.finder, &menu.archive}) {
     if (modal->resizes) std::fprintf(stderr,"hidden dialog resized %d times\n",modal->resizes);
     assert(modal->resizes==0);
   }
@@ -898,12 +898,12 @@ int main() {
   menu.renderScene();
   ++safeArea.top;
   menu.renderScene();
-  for (auto *modal : {&menu.records, &menu.archive}) {
+  for (auto *modal : {&menu.records, &menu.finder, &menu.archive}) {
     assert(modal->resizes==2);
     modal->visible=true;
   }
   menu.renderScene();
-  for (auto *modal : {&menu.records, &menu.archive})
+  for (auto *modal : {&menu.records, &menu.finder, &menu.archive})
     assert(modal->resizes==3);
 }
 '''

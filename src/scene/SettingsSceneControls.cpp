@@ -552,6 +552,9 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
                                          : i18n::message("settings.controls.hispeed_auto_adjust.hi_speed_auto_adjust_off.label");
   const i18n::Text archiveChartPreviewLabel =
       context.settings.archiveChartPreviewEnabled ? i18n::message("settings.controls.archive_chart_preview.enabled.label") : i18n::message("settings.controls.archive_chart_preview.disabled.label");
+  const i18n::Text findBmsSkipUnarchivingLabel =
+      context.settings.findBmsSkipUnarchivingForNonSolidArchives ? i18n::message("settings.controls.find_bms_skip_unarchiving.on.label")
+                                                                 : i18n::message("settings.controls.find_bms_skip_unarchiving.off.label");
   const i18n::Text judgementIndicatorLabel =
       context.settings.presentation().judgementIndicatorEnabled ? i18n::message("settings.controls.judgement_indicator.enabled.label") : i18n::message("settings.controls.judgement_indicator.disabled.label");
   const i18n::Text judgementIndicatorRenderModeLabel =
@@ -712,7 +715,9 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   if (archiveChartPreviewModeText != nullptr) {
     archiveChartPreviewModeText->setLocalizedText(archiveChartPreviewLabel);
   }
-
+  if (findBmsSkipUnarchivingModeText != nullptr) {
+    findBmsSkipUnarchivingModeText->setLocalizedText(findBmsSkipUnarchivingLabel);
+  }
   if (judgementIndicatorModeText != nullptr) {
     judgementIndicatorModeText->setLocalizedText(judgementIndicatorLabel);
   }
@@ -771,6 +776,7 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   toggle_button::style(touchVisualizationModeButton, context.settings.touchVisualizationEnabled);
   toggle_button::style(hispeedAutoAdjustModeButton, context.settings.hispeedAutoAdjust);
   toggle_button::style(archiveChartPreviewModeButton, context.settings.archiveChartPreviewEnabled);
+  toggle_button::style(findBmsSkipUnarchivingModeButton, context.settings.findBmsSkipUnarchivingForNonSolidArchives);
   toggle_button::style(judgementIndicatorModeButton, context.settings.presentation().judgementIndicatorEnabled);
   applySemanticButtonStyle(
       judgementIndicatorRenderModeButton, judgementIndicatorRenderModeText,
