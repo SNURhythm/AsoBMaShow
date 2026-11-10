@@ -27,6 +27,9 @@ std::string sanitizeStorageBase(std::string_view value,
   std::string result;
   result.reserve(std::min(value.size(), maximumBytes));
   for (unsigned char character : value) {
+    // Reserve the complete UTF-8 character before appending its leading byte.
+    const std::size_t width = character < 0x80 ? 1 : character < 0xe0 ? 2 : character < 0xf0 ? 3 : 4;
+    if ((character & 0xc0) != 0x80 && result.size() + width > maximumBytes) break;
     if (character >= 0x80 || std::isalnum(character) || character == '-' ||
         character == '_' || character == '.' || character == ' ' ||
         character == '[' || character == ']' || character == '(' ||

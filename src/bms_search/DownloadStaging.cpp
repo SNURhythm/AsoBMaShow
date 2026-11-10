@@ -1,5 +1,6 @@
 #include "DownloadStaging.h"
 #include "DownloadStorageIdentity.h"
+#include "../downloads/DownloadPublicationPaths.h"
 
 #include "../ArchiveFile.h"
 #include "../Uuid.h"
@@ -542,8 +543,11 @@ bool commitFindBmsPendingArtifact(
                    error.message();
     return false;
   }
-  const auto transactionRoot =
-      artifact.downloadRoot / kFindBmsTransactionDirectoryName;
+  const auto transactionRoot = downloads::publicationTransactionRoot(artifact.downloadRoot);
+  if (transactionRoot.empty()) {
+    errorMessage = "Private publication storage is unavailable on this library volume.";
+    return false;
+  }
   const auto transactionPath = transactionRoot / artifact.stagingRoot.filename();
   const auto commitPath = transactionPath / "commit";
   const auto backupPath = transactionPath / "backup";

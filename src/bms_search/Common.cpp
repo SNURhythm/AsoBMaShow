@@ -332,6 +332,8 @@ std::string safeStorageKey(const std::string &value) {
   std::string result;
   result.reserve(std::min<size_t>(value.size(), 128));
   for (unsigned char c : value) {
+    const std::size_t width = c < 0x80 ? 1 : c < 0xe0 ? 2 : c < 0xf0 ? 3 : 4;
+    if ((c & 0xc0) != 0x80 && result.size() + width > 128) break;
     if (c >= 0x80 || std::isalnum(c) || c == '-' || c == '_' || c == '.' ||
         c == ' ' || c == '[' || c == ']' || c == '(' || c == ')') {
       result.push_back(static_cast<char>(c));

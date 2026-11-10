@@ -2,6 +2,8 @@
 #include "bms_search/DownloadedArchiveWorkflow.h"
 #include "bms_search/DownloadStaging.h"
 #include "bms_search/DownloadStorageIdentity.h"
+#include "bms_search/Internal.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 #include "bms_search/DownloadStorageOptimization.h"
 #include "bms_search/PackageDownloadCandidate.h"
 #include "scene/FindBmsDialogPolicy.h"
@@ -173,6 +175,22 @@ void testStorageNamesPreserveLongAndCompoundExtensions() {
       std::string(180, 'b') + ".tar.gz", ".zip", "tar-id");
   assert(tar.archiveName.ends_with(".tar.gz"));
   assert(tar.archiveName.size() <= 128);
+  for (const std::string character : {"é", "あ", "😀"}) {
+    for (const auto &extension : {".zip", ".tar.gz"}) {
+      std::string basename;
+      for (int i = 0; i < 70; ++i) basename += character;
+      const auto names = asobmshow::bms_search::findBmsStorageNames(
+          basename + extension, extension, "unicode-package");
+      const auto delimiter = names.storageKey.rfind("--");
+      assert(delimiter % character.size() == 0);
+      assert(names.storageKey.substr(0, delimiter) == basename.substr(0, delimiter));
+      assert(names.archiveName.size() <= 128);
+      assert(names.archiveName.ends_with(extension));
+      // Publication journals serialize these paths with strict UTF-8 JSON.
+      assert(!nlohmann::json(names.archiveName).dump().empty());
+      assert(!nlohmann::json(asobmshow::bms_search::safeStorageKey(basename)).dump().empty());
+    }
+  }
 }
 
 bool rejectPackageArchiveExtension(const std::string &) { return false; }

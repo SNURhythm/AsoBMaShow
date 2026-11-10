@@ -75,6 +75,11 @@ void finishActivity(const Job &, bool) {}
 void reportProgress(const Job &) {}
 }
 extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_BmsDownloads_nativeShowDownloads(JNIEnv *env, jclass) {
+  try { downloads::requestDownloadsPresentation(); }
+  catch (...) { bridgeFailure(env); }
+}
+extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_BmsDownloads_nativeInitialize(JNIEnv *env, jclass cls, jstring root) {
   try {
     if (!downloadClass) {

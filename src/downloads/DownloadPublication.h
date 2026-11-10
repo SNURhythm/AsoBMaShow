@@ -13,7 +13,9 @@ enum class PublicationRecovery { Retry, Installed, Conflict };
 class PublicationJournal {
 public:
   using DirectorySync = std::function<bool(const std::filesystem::path &, std::string &)>;
-  PublicationJournal(std::filesystem::path journal, std::filesystem::path destination, DirectorySync syncDirectory = {});
+  // An explicit root is application-owned recovery authority, never journal data.
+  PublicationJournal(std::filesystem::path journal, std::filesystem::path destination,
+                     DirectorySync syncDirectory = {}, std::filesystem::path transactionRoot = {});
   bool beginCopy(const std::filesystem::path &transaction);
   // Throws after a moved-but-unsynced rename; caller must preserve recovery material.
   void rename(const std::filesystem::path &from, const std::filesystem::path &to,
@@ -22,7 +24,7 @@ public:
   bool recordRemovals(const std::vector<std::filesystem::path> &paths, std::string &error);
   std::vector<std::filesystem::path> removedPaths() const;
 private:
-  std::filesystem::path journal_, destination_;
+  std::filesystem::path journal_, destination_, transactionRoot_;
   DirectorySync syncDirectory_;
 };
 } // namespace downloads

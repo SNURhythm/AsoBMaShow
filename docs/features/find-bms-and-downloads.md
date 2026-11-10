@@ -19,6 +19,14 @@ iOS invalidates the old background session and cancels old continued-processing
 requests. These paths never resume pre-retirement jobs or read their saved URLs.
 Completed chart libraries, scores, profiles and legacy private staging are preserved.
 
+Android publication keeps temporary commit trees and rollback backups in the
+app's `.asobmashow-download-transactions` directory beside `Documents`, using
+the external-files container or its internal-files fallback. Recovery derives
+that private location from OS-owned paths; a journal cannot authorize another
+transaction root. The destination subtree is reserved against DocumentsProvider
+mutations during publication and recovery. Unsupported library volumes fail
+without placing transaction data in shared Documents.
+
 ## GingerRush authorization review — 2026-11-10
 
 - **Operator/service:** catizard / GingerRush.

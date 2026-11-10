@@ -31,6 +31,10 @@ struct Wire {
   long status = 200;
   long post = 0;
   long noProgress = 1;
+  long timeout = 0;
+  long lowSpeedLimit = 0;
+  long lowSpeedTime = 0;
+  bool fileTransfer = false;
   bool overflow = false;
   bool rejected = false;
   bool idleCancel = false;
@@ -69,6 +73,9 @@ CURLcode fixtureSetopt(CURL *, CURLoption option, Value value) {
   } else if constexpr (std::is_integral_v<Value>) {
     if (option == CURLOPT_POST) wire.post = value;
     if (option == CURLOPT_NOPROGRESS) wire.noProgress = value;
+    if (option == CURLOPT_TIMEOUT) wire.timeout = value;
+    if (option == CURLOPT_LOW_SPEED_LIMIT) wire.lowSpeedLimit = value;
+    if (option == CURLOPT_LOW_SPEED_TIME) wire.lowSpeedTime = value;
   }
   return CURLE_OK;
 }
@@ -100,7 +107,8 @@ CURLcode fixturePerform(CURL *) {
     auto &chunk = wire.chunks[index];
     const auto returned = wire.write(chunk.data(), 1, chunk.size(),
                                      wire.writeContext);
-    wire.retained = std::max(wire.retained, retainedBytes(wire.writeContext));
+    if (!wire.fileTransfer)
+      wire.retained = std::max(wire.retained, retainedBytes(wire.writeContext));
     wire.accepted += returned;
     if (returned != chunk.size()) {
       wire.rejected = true;
@@ -121,7 +129,9 @@ CURLcode fixturePerform(CURL *) {
 #define CurlEasyHandle FixtureEasyHandle
 
 namespace asobmshow::bms_search {
+#define FIND_BMS_TEST_CURL_FILE_TRANSPORT
 #include "transport_metadata_methods.inc"
+#undef FIND_BMS_TEST_CURL_FILE_TRANSPORT
 }
 
 #undef curl_easy_init
@@ -177,6 +187,8 @@ void reset() {
   wire.status = 200;
   wire.post = 0;
   wire.noProgress = 1;
+  wire.timeout = wire.lowSpeedLimit = wire.lowSpeedTime = 0;
+  wire.fileTransfer = false;
   wire.overflow = wire.rejected = false;
   wire.idleCancel = false;
   wire.protocols.clear();
@@ -328,6 +340,20 @@ void exerciseFileDownloadStatus(const std::string &origin) {
 int main(int argc, char **argv) {
   exercise(asobmshow::bms_search::fetchUrlText, "GET");
   exercise(asobmshow::bms_search::postUrlText, "POST");
+  {
+    reset();
+    wire.fileTransfer = true;
+    wire.chunks = {"archive bytes"};
+    const auto path = std::filesystem::temp_directory_path() /
+        ("asobms-file-timeout-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::string error;
+    expect(asobmshow::bms_search::downloadUrlToFile("https://fixture.invalid/archive.zip",
+        path, wire.cancelled, error, {}, {}, nullptr), "file transfer writes successfully");
+    expect(wire.timeout == 0, "active archive transfers have no total deadline");
+    expect(wire.lowSpeedLimit == 1 && wire.lowSpeedTime == 180,
+           "archive transfers still abort after three minutes below one byte per second");
+    std::filesystem::remove(path);
+  }
   if (argc == 2) {
     const std::string origin = argv[1];
     if (!origin.starts_with("http://127.0.0.1:")) return 2;

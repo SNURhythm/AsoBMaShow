@@ -1,4 +1,5 @@
 #include "DownloadPublication.h"
+#include "DownloadPublicationPaths.h"
 #include "../AtomicFile.h"
 #include "../../yoga/lib/nlohmann/json.hpp"
 #include <array>
@@ -43,11 +44,8 @@ std::filesystem::path readPath(const json &j, const char *key) {
   const auto value = j.at(key).get<std::string>();
   return std::filesystem::path(std::u8string(value.begin(), value.end()));
 }
-bool safeTransaction(const std::filesystem::path &transaction, const std::filesystem::path &destination) {
-  auto library = destination.parent_path();
-  if (library.filename() == "_archives") library = library.parent_path();
-  const auto parent = library / ".asobmashow-transactions";
-  if (transaction.parent_path() != parent || transaction.filename().string().size() != 36) return false;
+bool safeTransaction(const std::filesystem::path &transaction, const std::filesystem::path &parent) {
+  if (parent.empty() || transaction.parent_path() != parent || transaction.filename().string().size() != 36) return false;
   std::error_code error;
   if (std::filesystem::is_symlink(std::filesystem::symlink_status(parent, error))) return false;
   error.clear();
@@ -100,11 +98,19 @@ bool renameSync(const std::filesystem::path &from, const std::filesystem::path &
       (from.parent_path() == to.parent_path() || syncDirectory(from.parent_path(), error));
 }
 }
-PublicationJournal::PublicationJournal(std::filesystem::path journal, std::filesystem::path destination, DirectorySync syncDirectory)
+PublicationJournal::PublicationJournal(std::filesystem::path journal, std::filesystem::path destination,
+    DirectorySync syncDirectory, std::filesystem::path transactionRoot)
     : journal_(std::move(journal)), destination_(std::move(destination)),
-      syncDirectory_(syncDirectory ? std::move(syncDirectory) : atomic_file::syncDirectory) {}
+      transactionRoot_(std::move(transactionRoot)),
+      syncDirectory_(syncDirectory ? std::move(syncDirectory) : atomic_file::syncDirectory) {
+  if (transactionRoot_.empty()) {
+    auto library = destination_.parent_path();
+    if (library.filename() == "_archives") library = library.parent_path();
+    transactionRoot_ = publicationTransactionRoot(library);
+  }
+}
 bool PublicationJournal::beginCopy(const std::filesystem::path &transaction) {
-  if (!safeTransaction(transaction, destination_)) return false;
+  if (!safeTransaction(transaction, transactionRoot_)) return false;
   const auto old = identity(destination_);
   return save(journal_, {{"version", 1}, {"destination", utf8(destination_)},
       {"transaction", utf8(transaction)}, {"phase", "copy"}, {"identity", Identity{}},
@@ -120,20 +126,34 @@ void PublicationJournal::rename(const std::filesystem::path &from, const std::fi
     const bool install = to == destination_ && from.filename() == "commit";
     const bool restore = to == destination_ && from.filename() == "backup";
     const auto transaction = backup ? to.parent_path() : from.parent_path();
-    if (!sourceIdentity || !(backup || install || restore) || !safeTransaction(transaction, destination_)) {
+    if (!sourceIdentity || !(backup || install || restore) || !safeTransaction(transaction, transactionRoot_)) {
       error = std::make_error_code(std::errc::invalid_argument);
       return;
     }
     if (backup || install) {
-      // The UUID directory and transaction root may both be new. Persist their
-      // entries up through the existing library folder before the old install
-      // can move into this tree (or a first install can become recoverable).
-      const auto libraryFolder = transaction.parent_path().parent_path().parent_path();
+      // The private transaction tree and public destination may both be new.
+      // Persist both branches through their common ancestor before moving data.
+      const auto transactionDirectory = std::filesystem::canonical(transaction);
+      const auto destinationDirectory = std::filesystem::canonical(destination_.parent_path());
+      auto common = transactionDirectory.parent_path();
+      while (common != common.parent_path()) {
+        const auto relative = destinationDirectory.lexically_relative(common);
+        if (!relative.empty() && *relative.begin() != "..") break;
+        common = common.parent_path();
+      }
+      auto library = destinationDirectory;
+      if (library.filename() == "_archives") library = library.parent_path();
+      // With in-library staging, BMSSEARCH itself may have just been created.
+      // Its entry lives in its parent, which must also be durable.
+      if (common == library) common = common.parent_path();
       std::string message;
-      for (auto directory = transaction; !directory.empty(); directory = directory.parent_path()) {
-        if (!syncDirectory_(directory, message))
-          throw std::runtime_error("Could not sync publication ancestry: " + message);
-        if (directory == libraryFolder || directory == directory.parent_path()) break;
+      for (auto directory : {transactionDirectory, destinationDirectory}) {
+        for (;;) {
+          if (!syncDirectory_(directory, message))
+            throw std::runtime_error("Could not sync publication ancestry: " + message);
+          if (directory == common || directory == directory.parent_path()) break;
+          directory = directory.parent_path();
+        }
       }
     }
     json record = {{"version", 1}, {"destination", utf8(destination_)},
@@ -194,7 +214,7 @@ PublicationRecovery PublicationJournal::recover() {
     const auto record = load(journal_);
     const auto transaction = readPath(record, "transaction");
     if (record.at("version") != 1 || readPath(record, "destination") != destination_ ||
-        !safeTransaction(transaction, destination_)) return PublicationRecovery::Conflict;
+        !safeTransaction(transaction, transactionRoot_)) return PublicationRecovery::Conflict;
     const auto phase = record.at("phase").get<std::string>();
     const auto source = record.at("identity").get<Identity>();
     const auto destination = identity(destination_);

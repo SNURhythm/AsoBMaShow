@@ -1,4 +1,5 @@
 #include "downloads/DownloadPublication.h"
+#include "downloads/DownloadPublicationPaths.h"
 #include "AtomicFile.h"
 #include <cassert>
 #include <fstream>
@@ -8,9 +9,81 @@
 #endif
 
 using namespace downloads;
+
+void testAndroidPrivatePublication(const std::filesystem::path &root) {
+  const auto external = root / "external/files";
+  const auto internal = root / "internal/files";
+  std::filesystem::create_directories(external / "Documents/BMS/BMSSEARCH");
+  std::filesystem::create_directories(internal / "Documents/BMS/BMSSEARCH");
+  const std::array roots{external, internal};
+  for (const auto &appRoot : roots) {
+    const auto canonicalRoot = std::filesystem::canonical(appRoot);
+    const auto library = canonicalRoot / "Documents/BMS/BMSSEARCH";
+    const auto privateRoot = androidPublicationTransactionRoot(library, roots);
+    assert(privateRoot == canonicalRoot / ".asobmashow-download-transactions");
+    for (const bool installed : {false, true}) {
+      const auto destination = library / (installed ? "installed" : "rollback");
+      const auto journalPath = canonicalRoot / "publication.json";
+      const auto transaction = privateRoot / "41b74c17-434d-423a-a40f-9399b2f0382c";
+      std::filesystem::create_directories(transaction);
+      std::ofstream(destination) << "old";
+      std::ofstream(transaction / "commit") << "new";
+      PublicationJournal journal(journalPath, destination, {}, privateRoot);
+      assert(!journal.beginCopy(library / ".asobmashow-transactions" / transaction.filename()));
+      assert(journal.beginCopy(transaction));
+      std::error_code error;
+      journal.rename(destination, transaction / "backup", error);
+      assert(!error);
+      if (installed) {
+        journal.rename(transaction / "commit", destination, error);
+        assert(!error);
+      }
+      // A persisted path cannot grant recovery authority over another root.
+      PublicationJournal wrongRoot(journalPath, destination, {}, canonicalRoot / "elsewhere");
+      assert(wrongRoot.recover() == PublicationRecovery::Conflict);
+      assert(std::filesystem::exists(transaction / "backup"));
+      PublicationJournal restarted(journalPath, destination, {}, privateRoot);
+      assert(restarted.recover() == (installed ? PublicationRecovery::Installed : PublicationRecovery::Retry));
+      std::string content;
+      std::ifstream(destination) >> content;
+      assert(content == (installed ? "new" : "old"));
+      assert(!std::filesystem::exists(transaction));
+    }
+  }
+  assert(androidPublicationTransactionRoot(root / "unowned/BMSSEARCH", roots).empty());
+  assert(androidPublicationTransactionRoot(external / "Documents/../outside/BMSSEARCH", roots).empty());
+#ifndef _WIN32
+  const auto privateRoot = std::filesystem::canonical(external) / ".asobmashow-download-transactions";
+  std::filesystem::remove_all(privateRoot);
+  std::filesystem::create_directory_symlink(external / "Documents", privateRoot);
+  assert(androidPublicationTransactionRoot(external / "Documents/BMS/BMSSEARCH", roots).empty());
+#endif
+}
+
 int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobms-publication-" + std::to_string(std::random_device{}()));
+  testAndroidPrivatePublication(root / "android");
+  for (const bool archive : {false, true}) {
+    const auto existing = root / (archive ? "first-archive" : "first-directory");
+    std::filesystem::create_directories(existing);
+    const auto library = std::filesystem::canonical(existing) / "BMSSEARCH";
+    const auto destination = archive ? library / "_archives/package.zip" : library / "package";
+    const auto transaction = library / ".asobmashow-transactions/41b74c17-434d-423a-a40f-9399b2f0382c";
+    std::filesystem::create_directories(transaction);
+    std::filesystem::create_directories(destination.parent_path());
+    std::ofstream(transaction / "commit") << "new";
+    bool parentSyncedBeforeInstall = false;
+    PublicationJournal journal(existing / "publication.json", destination, [&](const auto &directory, auto &error) {
+      if (directory == library.parent_path() && !std::filesystem::exists(destination)) parentSyncedBeforeInstall = true;
+      return atomic_file::syncDirectory(directory, error);
+    });
+    assert(journal.beginCopy(transaction));
+    std::error_code error;
+    journal.rename(transaction / "commit", destination, error);
+    assert(!error);
+    assert(parentSyncedBeforeInstall && "persist the newly created BMSSEARCH entry before installing");
+  }
   const auto target = root / "BMSSEARCH/package";
   const auto transaction = root / "BMSSEARCH/.asobmashow-transactions/41b74c17-434d-423a-a40f-9399b2f0382c";
   std::filesystem::create_directories(transaction);

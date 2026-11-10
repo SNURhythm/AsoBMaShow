@@ -579,7 +579,8 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
   curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
   curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
-  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 180L);
+  curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_LIMIT, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_TIME, 180L);
   curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, writeCurlFile);
   curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
   curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlProgress);

@@ -37,6 +37,15 @@ public final class DocumentsProviderTests {
             File sibling = Files.createDirectory(temporary.resolve("root-other")).toFile();
             Files.createFile(sibling.toPath().resolve("secret"));
             denied(() -> policy.documentId(sibling));
+            // Download publication scratch and rollback data are siblings of
+            // Documents and cannot be addressed, even with a forged ID/link.
+            File transactions = Files.createDirectories(temporary.resolve(
+                    ".asobmashow-download-transactions/job/commit")).toFile();
+            File payload = Files.createFile(transactions.toPath().resolve("payload")).toFile();
+            denied(() -> policy.documentId(payload));
+            denied(() -> policy.resolve("documents:../.asobmashow-download-transactions/job/commit/payload"));
+            Files.createSymbolicLink(root.toPath().resolve("transaction-link"), transactions.toPath());
+            denied(() -> policy.resolve("documents:transaction-link/payload"));
             Files.createSymbolicLink(root.toPath().resolve("link"), sibling.toPath());
             denied(() -> new DocumentsPathPolicy(new File(root, "link")));
             denied(() -> policy.resolve("documents:link/secret"));

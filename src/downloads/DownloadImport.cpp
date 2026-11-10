@@ -1,5 +1,6 @@
 #include "DownloadImport.h"
 #include "DownloadPublication.h"
+#include "DownloadPublicationPaths.h"
 #include "../bms_search/Internal.h"
 #include "../bms_search/DownloadedArchiveWorkflow.h"
 #include "../bms_search/DownloadStorageIdentity.h"
@@ -22,6 +23,17 @@ BmsSearchResult failed(const std::string &message) {
 bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::path &privateRoot,
              const BeforePublication &prepare, std::string &error,
              std::vector<std::filesystem::path> &removed) {
+  const auto transactionRoot = publicationTransactionRoot(artifact.downloadRoot);
+  if (transactionRoot.empty()) { error = "Private publication storage is unavailable on this library volume."; return false; }
+#if TARGET_OS_ANDROID
+  // Protect the installed tree as well as recovery while preparing the swap.
+  // On a first install BMSSEARCH may not exist yet; reserve its existing parent.
+  auto reservationRoot = std::filesystem::weakly_canonical(artifact.downloadRoot);
+  while (!std::filesystem::exists(reservationRoot) && reservationRoot != reservationRoot.parent_path())
+    reservationRoot = reservationRoot.parent_path();
+  const auto reservation = ReserveAndroidStorageSubtrees({reservationRoot}, error);
+  if (!reservation) return false;
+#endif
   PublicationJournal journal(privateRoot / "publication.json", artifact.destinationPath);
   const auto rememberRemovals = [&](const auto &paths, auto &message) { return journal.recordRemovals(paths, message); };
   const auto finish = [&](bool success) {
@@ -37,7 +49,7 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
     if (!prepare || !prepare(artifact)) { error = "Import paused during recovery."; return false; }
     return finish(finishFindBmsPendingArtifactPublication(artifact, error, &removed, rememberRemovals));
   }
-  const auto transaction = artifact.downloadRoot / kFindBmsTransactionDirectoryName / artifact.stagingRoot.filename();
+  const auto transaction = transactionRoot / artifact.stagingRoot.filename();
   if (!journal.beginCopy(transaction)) { error = "Could not save the import recovery journal."; return false; }
   bool swapping = false;
   return finish(commitFindBmsPendingArtifact(artifact, error,
