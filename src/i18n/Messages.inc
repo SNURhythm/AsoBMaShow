@@ -964,6 +964,7 @@
 {"menu.tasks.close.label", "Close", "닫기", "閉じる", "关闭", "關閉"},
 {"menu.tasks.count.label", "Tasks ({count})", "작업 ({count})", "タスク ({count})", "任务 ({count})", "工作 ({count})"},
 {"menu.tasks.label", "Tasks", "작업", "タスク", "任务", "工作"},
+{"menu.tasks.library.label", "Library", "라이브러리", "ライブラリ", "曲库", "曲庫"},
 {"menu.untitled.label", "Untitled", "제목 없음", "タイトルなし", "无标题", "無標題"},
 {"menu.unzip.label", "Unzip", "압축 풀기", "展開", "解压", "解壓縮"},
 {"menu.viewer.label", "Viewer", "뷰어", "ビューアー", "查看器", "檢視器"},

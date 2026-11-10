@@ -58,7 +58,7 @@ TasksModal::TasksModal(View *parent, std::function<void()> refreshLibrary,
   label(panel_, i18n::message("menu.tasks.label"), 28);
   auto *tabs = new View();
   tabs->setFlexDirection(FlexDirection::Row)->setGap(8)->setHeight(48)->setFlexShrink(0);
-  const auto tabButton = [&](const char *key, Tab tab, TextView **text, TextView **badge) {
+  const auto tabButton = [&](const i18n::Text &title, Tab tab, TextView **text, TextView **badge) {
     auto *button = new Button();
     button->setName(tab == Tab::Library ? "tasksLibraryTab" : "tasksDownloadsTab");
     button->setWidth(0)->setFlex(1)->setMinWidth(0)->setHeight(48);
@@ -66,7 +66,7 @@ TasksModal::TasksModal(View *parent, std::function<void()> refreshLibrary,
     auto *content = new View();
     content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setPadding(Edge::Left, 30)->setPadding(Edge::Right, 30);
     *text = new TextView(app_theme::font, 18);
-    (*text)->setLocalizedText(i18n::message(key));
+    (*text)->setLocalizedText(title);
     (*text)->setAlign(TextView::CENTER); (*text)->setVAlign(TextView::MIDDLE);
     (*text)->setAutoFitText(true); (*text)->setWidth(0)->setFlex(1)->setMinWidth(0)->setHeight(46);
     content->addView(*text);
@@ -77,9 +77,9 @@ TasksModal::TasksModal(View *parent, std::function<void()> refreshLibrary,
     tabs->addView(button);
     return button;
   };
-  libraryTab_ = tabButton("menu.tasks.library.label", Tab::Library, &libraryTabText_, &libraryBadge_);
+  libraryTab_ = tabButton(i18n::message("menu.tasks.library.label"), Tab::Library, &libraryTabText_, &libraryBadge_);
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
-  downloadsTab_ = tabButton("downloads.ui.title", Tab::Downloads, &downloadsTabText_, &downloadsBadge_);
+  downloadsTab_ = tabButton(i18n::message("downloads.ui.title"), Tab::Downloads, &downloadsTabText_, &downloadsBadge_);
 #endif
   panel_->addView(tabs);
   libraryScroll_ = new ScrollView(); libraryScroll_->setName("tasksLibraryContent");

@@ -100,6 +100,7 @@ class LocalizationCatalogTests(unittest.TestCase):
 
     def test_source_uses_catalog_ids_and_every_message_is_referenced(self):
         referenced = set()
+        namespaces = {key.split(".", 1)[0] for key in self.catalog}
         sources = list((ROOT / "src").rglob("*"))
         sources.extend((ROOT / "android/app/src/main/java").rglob("*.java"))
         for path in sources:
@@ -108,6 +109,9 @@ class LocalizationCatalogTests(unittest.TestCase):
             source = path.read_text()
             for literal in re.findall(LITERAL, source):
                 value = literal[1:-1]
+                # Include IDs passed through helpers, tables, and conditionals.
+                if KEY.fullmatch(value) and value.split(".", 1)[0] in namespaces:
+                    self.assertIn(value, self.catalog, f"{path}: unknown message ID {value!r}")
                 if value in self.catalog:
                     referenced.add(value)
             for match in re.finditer(r"(?:i18n::(?:tr|format|message|plural)|nativeArchiveImportText)\(\s*(" + LITERAL + ")", source):
