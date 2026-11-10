@@ -77,6 +77,7 @@ final class BmsDownloadTransport {
             connection.setInstanceFollowRedirects(false);
             connection.setConnectTimeout(15000); connection.setReadTimeout(15000);
             connection.setRequestProperty("Accept-Encoding", "identity");
+            connection.setRequestProperty("User-Agent", "AsoBMaShow");
             for (Map.Entry<String, String> entry : headers.entrySet()) {
                 String key = entry.getKey();
                 if (scopedHeaders || key.equalsIgnoreCase("User-Agent") || key.equalsIgnoreCase("Accept"))
