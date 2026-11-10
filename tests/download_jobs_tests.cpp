@@ -1,5 +1,6 @@
 #include "downloads/DownloadJobs.h"
 #include "downloads/DownloadUrlPolicy.h"
+#include "downloads/DownloadPathCodec.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -21,6 +22,79 @@ static Request request() {
   return r;
 }
 
+static void testContainerRelocation(const std::filesystem::path &root) {
+  for (const bool legacy : {false, true}) {
+    const auto containers = root / (legacy ? "legacy" : "relative") / "Containers/Data/Application";
+    const auto oldContainer = containers / "11111111-1111-4111-8111-111111111111";
+    const auto newContainer = containers / "22222222-2222-4222-8222-222222222222";
+    const std::filesystem::path suffix = "Library/Application Support/GingerRushDownloadsV1";
+    const auto oldRoot = oldContainer / suffix;
+    std::string id;
+    {
+      JobStore store(oldRoot);
+      auto input = request();
+      input.libraryRoot = oldContainer / "Documents/BMS";
+      id = store.submit(input).id;
+      for (const auto state : {State::Transferring, State::Downloaded, State::Importing}) {
+        auto job = *store.get(id);
+        job.state = state;
+        assert(store.update(job));
+      }
+      const auto staging = oldRoot / "imports/11111111-1111-4111-8111-111111111111";
+      const auto library = input.libraryRoot / "BMSSEARCH";
+      auto job = *store.get(id);
+      job.publicationPrepared = true;
+      job.decision = BmsSearchPendingArtifactDecision::Keep;
+      job.result = BmsSearchResult{.status = BmsSearchResult::Status::HashMismatch,
+          .outputPath = library / "package", .removedPaths = {library / "old.zip", root / "external.zip"},
+          .pendingArtifact = BmsSearchPendingArtifact{.kind = BmsSearchPendingArtifactKind::Archive,
+              .stagingRoot = staging, .sourcePath = store.archivePath(id), .downloadRoot = library,
+              .destinationPath = library / "_archives/package.zip", .archiveName = "package.zip",
+              .storageKey = "package", .alternateDestinationPath = library / "package",
+              .originalFilesIndexPath = staging / "original-files.sqlite"}};
+      assert(store.update(job));
+      std::ofstream(store.archivePath(id)) << "retained";
+    }
+    {
+      std::ifstream file(oldRoot / "jobs.json");
+      auto manifest = nlohmann::json::parse(file);
+      assert(manifest.at("version") == 2);
+      assert(manifest.dump().find(oldContainer.string()) == std::string::npos);
+      if (legacy) {
+        const auto absolute = [&](auto &self, nlohmann::json &value) -> void {
+          if (value.is_object() && value.contains("containerRelative"))
+            value = (oldContainer / value.at("containerRelative").get<std::string>()).string();
+          else if (value.is_structured()) for (auto &child : value) self(self, child);
+        };
+        absolute(absolute, manifest);
+        manifest["version"] = 1;
+        std::ofstream(oldRoot / "jobs.json") << manifest.dump();
+      }
+    }
+    std::filesystem::rename(oldContainer, newContainer);
+    JobStore moved(newContainer / suffix);
+    const auto job = *moved.get(id);
+    const auto &artifact = *job.result->pendingArtifact;
+    const auto library = newContainer / "Documents/BMS/BMSSEARCH";
+    assert(job.publicationPrepared && job.decision == BmsSearchPendingArtifactDecision::Keep);
+    assert(job.request.libraryRoot == library.parent_path());
+    assert(artifact.stagingRoot == newContainer / suffix / "imports/11111111-1111-4111-8111-111111111111");
+    assert(artifact.sourcePath == moved.archivePath(id) && std::filesystem::file_size(artifact.sourcePath) == 8);
+    assert(artifact.downloadRoot == library && artifact.destinationPath == library / "_archives/package.zip");
+    assert(artifact.alternateDestinationPath == library / "package");
+    assert(artifact.originalFilesIndexPath == artifact.stagingRoot / "original-files.sqlite");
+    assert(job.result->outputPath == library / "package");
+    assert(job.result->removedPaths == (std::vector<std::filesystem::path>{library / "old.zip", root / "external.zip"}));
+    assert(!std::filesystem::exists(oldContainer));
+    const DownloadPathCodec codec(newContainer / suffix);
+    for (const auto *unsafe : {"../Documents/escape", "Documents/../Library/private", "Library/OtherApp", "/Documents/escape"}) {
+      bool rejected = false;
+      try { codec.decode(nlohmann::json{{"containerRelative", unsafe}}); } catch (...) { rejected = true; }
+      assert(rejected);
+    }
+  }
+}
+
 int main() {
   {
     Job job;
@@ -39,6 +113,7 @@ int main() {
 
   const auto root = std::filesystem::temp_directory_path() /
       ("asobms-download-jobs-" + std::to_string(std::random_device{}()));
+  testContainerRelocation(root / "relocation");
   {
     JobStore store(root);
     auto retired = request();

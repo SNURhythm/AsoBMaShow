@@ -21,6 +21,9 @@ public:
   void rename(const std::filesystem::path &from, const std::filesystem::path &to,
               std::error_code &error);
   PublicationRecovery recover();
+  // Before publication is prepared, discard only our unfinished copy. Changes
+  // to the installed destination do not authorize restoring or removing it.
+  bool discardUnpublishedCopy();
   bool recordRemovals(const std::vector<std::filesystem::path> &paths, std::string &error);
   std::vector<std::filesystem::path> removedPaths() const;
 private:

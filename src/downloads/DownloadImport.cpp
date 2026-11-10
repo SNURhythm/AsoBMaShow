@@ -1,6 +1,7 @@
 #include "DownloadImport.h"
 #include "DownloadPublication.h"
 #include "DownloadPublicationPaths.h"
+#include "../AtomicFile.h"
 #include "../bms_search/Internal.h"
 #include "../bms_search/DownloadedArchiveWorkflow.h"
 #include "../bms_search/DownloadStorageIdentity.h"
@@ -20,6 +21,14 @@ std::filesystem::path importRoot(const Job &job) {
 BmsSearchResult failed(const std::string &message) {
   return {.status = BmsSearchResult::Status::DownloadFailed, .message = message};
 }
+#if TARGET_OS_ANDROID
+std::shared_ptr<void> reservePublication(const std::filesystem::path &downloadRoot, std::string &error) {
+  // On a first install BMSSEARCH may not exist yet; reserve its existing parent.
+  auto root = std::filesystem::weakly_canonical(downloadRoot);
+  while (!std::filesystem::exists(root) && root != root.parent_path()) root = root.parent_path();
+  return ReserveAndroidStorageSubtrees({root}, error);
+}
+#endif
 bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::path &privateRoot,
              const BeforePublication &prepare, std::string &error,
              std::vector<std::filesystem::path> &removed) {
@@ -27,11 +36,7 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
   if (transactionRoot.empty()) { error = "Private publication storage is unavailable on this library volume."; return false; }
 #if TARGET_OS_ANDROID
   // Protect the installed tree as well as recovery while preparing the swap.
-  // On a first install BMSSEARCH may not exist yet; reserve its existing parent.
-  auto reservationRoot = std::filesystem::weakly_canonical(artifact.downloadRoot);
-  while (!std::filesystem::exists(reservationRoot) && reservationRoot != reservationRoot.parent_path())
-    reservationRoot = reservationRoot.parent_path();
-  const auto reservation = ReserveAndroidStorageSubtrees({reservationRoot}, error);
+  const auto reservation = reservePublication(artifact.downloadRoot, error);
   if (!reservation) return false;
 #endif
   PublicationJournal journal(privateRoot / "publication.json", artifact.destinationPath);
@@ -139,7 +144,23 @@ BmsSearchResult resolveArchiveJob(const Job &job, const std::filesystem::path &p
     result.message = "Downloaded files saved.";
   } else {
     if (job.publicationPrepared) return failed("Recover the interrupted installation before deleting its staging files.");
-    if (!asobmshow::bms_search::deleteFindBmsPendingArtifact(artifact, error)) return failed(error);
+    if (job.decision != BmsSearchPendingArtifactDecision::Delete ||
+        privateJobRoot != asobmshow::bms_search::findBmsStagingBasePath().parent_path() / job.id)
+      return failed("No saved deletion decision exists for this download.");
+    // A previous Keep may have died while copying, before any publication
+    // rename was allowed. Discard only that copy, preserving later library edits.
+    PublicationJournal journal(privateJobRoot / "publication.json", artifact.destinationPath);
+    if (!journal.discardUnpublishedCopy())
+      return failed("Recover the interrupted installation before deleting its staging files.");
+    // decide() durably saves the intent before this worker runs. Derive both
+    // owned roots from the job, so retry also works after either tree is gone.
+    cleanupArchiveJob(job);
+    std::error_code removalError;
+    std::filesystem::remove_all(privateJobRoot, removalError);
+    const auto stagingBase = asobmshow::bms_search::findBmsStagingBasePath();
+    if (removalError || (std::filesystem::exists(stagingBase) && !atomic_file::syncDirectory(stagingBase, error)) ||
+        !atomic_file::syncDirectory(privateJobRoot.parent_path(), error))
+      return failed("Could not finish deleting downloaded files. Retry to complete deletion.");
     result.outputPath.clear();
     result.status = BmsSearchResult::Status::HashMismatch;
     result.message = "Downloaded files deleted.";

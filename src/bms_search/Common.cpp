@@ -328,19 +328,19 @@ std::string stripArchiveExtension(std::string name) {
   return trimCopy(name);
 }
 
-std::string safeStorageKey(const std::string &value) {
+std::string safeStorageKey(const std::string &value, std::size_t maximumBytes) {
   std::string result;
-  result.reserve(std::min<size_t>(value.size(), 128));
+  result.reserve(std::min(value.size(), maximumBytes));
   for (unsigned char c : value) {
     const std::size_t width = c < 0x80 ? 1 : c < 0xe0 ? 2 : c < 0xf0 ? 3 : 4;
-    if ((c & 0xc0) != 0x80 && result.size() + width > 128) break;
+    if ((c & 0xc0) != 0x80 && result.size() + width > maximumBytes) break;
     if (c >= 0x80 || std::isalnum(c) || c == '-' || c == '_' || c == '.' ||
         c == ' ' || c == '[' || c == ']' || c == '(' || c == ')') {
       result.push_back(static_cast<char>(c));
     } else if (!result.empty() && result.back() != '_') {
       result.push_back('_');
     }
-    if (result.size() >= 128) {
+    if (result.size() >= maximumBytes) {
       break;
     }
   }
@@ -370,7 +370,9 @@ std::string preferredArchiveName(const std::string &suggestedArchiveName,
   }
 
   if (!name.empty()) {
-    return safeStorageKey(name);
+    const auto extension = archiveExtensionFromName(name);
+    return safeStorageKey(name.substr(0, name.size() - extension.size()),
+                          128 - extension.size()) + extension;
   }
 
   std::string fallback =
@@ -378,8 +380,9 @@ std::string preferredArchiveName(const std::string &suggestedArchiveName,
           ? std::to_string(
                 std::chrono::steady_clock::now().time_since_epoch().count())
           : archiveKey;
-  fallback = safeStorageKey(fallback);
-  return fallback + (archiveExtension.empty() ? ".archive" : archiveExtension);
+  const auto extension = archive_file::isRecognizedArchiveExtension(archiveExtension)
+      ? archiveExtension : ".archive";
+  return safeStorageKey(fallback, 128 - extension.size()) + extension;
 }
 
 std::string storageKeyFromArchiveName(const std::string &archiveName) {

@@ -164,6 +164,7 @@ void DownloadCoordinator::interrupt(const std::string &id, const std::string &me
     finishActivity(*interrupted, false);
   }
   changed_.notify_all();
+  pumpTransfers();
 }
 bool DownloadCoordinator::retry(const std::string &id) {
   {
@@ -176,7 +177,12 @@ bool DownloadCoordinator::retry(const std::string &id) {
     if (!foreground_ || !job || activeImport_ == id ||
         (!failedHandoffs_.contains(id) && job->state != State::Failed && job->state != State::NeedsAttention &&
          !(!persistenceError_.empty() && (job->state == State::Downloaded || job->state == State::Importing)))) return false;
-    if (job->publicationPrepared && job->result && job->result->pendingArtifact) {
+    if (job->decision == BmsSearchPendingArtifactDecision::Delete && !job->publicationPrepared &&
+        job->result && job->result->pendingArtifact) {
+      // A crash may have occurred after unlinking the retained archive. Finish
+      // the saved deletion instead of fetching or importing the package again.
+      job->state = State::Downloaded;
+    } else if (job->publicationPrepared && job->result && job->result->pendingArtifact) {
       job->decision = BmsSearchPendingArtifactDecision::Keep;
       job->state = State::Downloaded;
     } else if (completeFile(store_.archivePath(id, job->attempt))) {
@@ -444,6 +450,9 @@ void DownloadCoordinator::importLoop() {
           current->publicationPrepared = false;
           current->result = result;
           current->libraryAcknowledged = result.outputPath.empty();
+        } else if (job.decision == BmsSearchPendingArtifactDecision::Delete) {
+          current->state = State::NeedsAttention;
+          current->result = job.result;
         } else if (current->publicationPrepared) {
           // Keep the prepared artifact so retry can reconcile a file swap.
           current->state = State::NeedsAttention;
@@ -455,7 +464,7 @@ void DownloadCoordinator::importLoop() {
           current->result.reset();
         }
         current->message = interrupted_ && !success ? "Import paused. Retry when ready." : result.message;
-        current->decision.reset();
+        if (success || job.decision != BmsSearchPendingArtifactDecision::Delete) current->decision.reset();
         try { store_.update(*current); } catch (...) {
           // The persisted Importing/prepare record and retained archive remain
           // the recovery authority; do not falsely report success to the OS.

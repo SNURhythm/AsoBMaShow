@@ -1,5 +1,6 @@
 #include "downloads/DownloadPublication.h"
 #include "downloads/DownloadPublicationPaths.h"
+#include "downloads/DownloadPathCodec.h"
 #include "AtomicFile.h"
 #include <cassert>
 #include <fstream>
@@ -9,6 +10,61 @@
 #endif
 
 using namespace downloads;
+
+void testIOSPublicationRelocation(const std::filesystem::path &root) {
+  for (const bool legacy : {false, true}) for (const bool installed : {false, true}) {
+    const auto containers = root / (legacy ? "legacy" : "relative") /
+        (installed ? "installed" : "backup") / "Containers/Data/Application";
+    const auto oldContainer = containers / "11111111-1111-4111-8111-111111111111";
+    const auto newContainer = containers / "22222222-2222-4222-8222-222222222222";
+    const std::filesystem::path storeSuffix = "Library/Application Support/GingerRushDownloadsV1";
+    const std::filesystem::path journalSuffix = storeSuffix / "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/publication.json";
+    const std::filesystem::path destinationSuffix = "Documents/BMS/BMSSEARCH/package";
+    const auto transactionSuffix = destinationSuffix.parent_path() /
+        ".asobmashow-transactions/41b74c17-434d-423a-a40f-9399b2f0382c";
+    const auto transaction = oldContainer / transactionSuffix;
+    const auto destination = oldContainer / destinationSuffix;
+    std::filesystem::create_directories(transaction);
+    std::filesystem::create_directories((oldContainer / journalSuffix).parent_path());
+    std::ofstream(destination) << "old";
+    std::ofstream(transaction / "commit") << "new";
+    {
+      PublicationJournal journal(oldContainer / journalSuffix, destination);
+      assert(journal.beginCopy(transaction));
+      std::error_code error;
+      journal.rename(destination, transaction / "backup", error);
+      assert(!error);
+      if (installed) {
+        journal.rename(transaction / "commit", destination, error);
+        assert(!error);
+        std::string message;
+        assert(journal.recordRemovals({destination.parent_path() / "old.zip"}, message));
+      }
+    }
+    {
+      std::ifstream file(oldContainer / journalSuffix);
+      auto record = nlohmann::json::parse(file);
+      assert(record.at("version") == 2 && record.dump().find(oldContainer.string()) == std::string::npos);
+      if (legacy) {
+        const DownloadPathCodec codec(oldContainer / storeSuffix);
+        for (const auto *key : {"destination", "transaction"}) record.at(key) = codec.decode(record.at(key));
+        if (record.contains("removedPaths")) for (auto &path : record.at("removedPaths")) path = codec.decode(path);
+        record["version"] = 1;
+        std::ofstream(oldContainer / journalSuffix) << record.dump();
+      }
+    }
+    std::filesystem::rename(oldContainer, newContainer);
+    PublicationJournal recovered(newContainer / journalSuffix, newContainer / destinationSuffix);
+    assert(recovered.recover() == (installed ? PublicationRecovery::Installed : PublicationRecovery::Retry));
+    std::string content;
+    std::ifstream(newContainer / destinationSuffix) >> content;
+    assert(content == (installed ? "new" : "old"));
+    assert(!std::filesystem::exists(newContainer / transactionSuffix));
+    if (installed) assert(recovered.removedPaths() ==
+        std::vector<std::filesystem::path>{newContainer / destinationSuffix.parent_path() / "old.zip"});
+    assert(!std::filesystem::exists(oldContainer));
+  }
+}
 
 void testAndroidPrivatePublication(const std::filesystem::path &root) {
   const auto external = root / "external/files";
@@ -64,6 +120,30 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobms-publication-" + std::to_string(std::random_device{}()));
   testAndroidPrivatePublication(root / "android");
+  testIOSPublicationRelocation(root / "ios");
+  {
+    const auto base = root / "durable-cleanup";
+    const auto destination = base / "BMSSEARCH/package";
+    const auto transaction = base / "BMSSEARCH/.asobmashow-transactions/41b74c17-434d-423a-a40f-9399b2f0382c";
+    std::filesystem::create_directories(transaction / "commit");
+    std::ofstream(destination) << "old";
+    std::ofstream(transaction / "commit/payload") << "unfinished copy";
+    bool fail = true, removalSynced = false;
+    PublicationJournal journal(base / "publication.json", destination, [&](const auto &directory, auto &error) {
+      if (directory == transaction.parent_path() && !std::filesystem::exists(transaction)) {
+        if (fail) { error = "injected cleanup fsync failure"; return false; }
+        removalSynced = true;
+      }
+      return atomic_file::syncDirectory(directory, error);
+    });
+    assert(journal.beginCopy(transaction));
+    assert(journal.recover() == PublicationRecovery::Conflict);
+    assert(std::filesystem::exists(base / "publication.json"));
+    fail = false;
+    assert(journal.recover() == PublicationRecovery::Retry && removalSynced);
+    assert(!std::filesystem::exists(base / "publication.json"));
+    assert(std::filesystem::exists(destination));
+  }
   for (const bool archive : {false, true}) {
     const auto existing = root / (archive ? "first-archive" : "first-directory");
     std::filesystem::create_directories(existing);

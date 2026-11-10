@@ -3,6 +3,7 @@
 #include "bms_search/ArchiveExtraction.h"
 #include "downloads/DownloadJobs.h"
 #include "downloads/DownloadImport.h"
+#include "downloads/DownloadPublication.h"
 #include "RAII.h"
 #include "../third_party/miniz/miniz.h"
 
@@ -337,7 +338,8 @@ void testDownloadAttemptExtractionCleanup() {
 
 void testDurableDownloadImportsExistingFileWithoutTransport() {
   using namespace asobmshow::bms_search;
-  for (const auto &name : {"song.zip", "download", "download.bin", "download.archive", "mismatch.zip"}) {
+  for (const std::string &name : std::vector<std::string>{"song.zip", "download", "download.bin", "download.archive",
+      "mismatch.zip", "packed-mismatch.zip", std::string(130, 'a') + ".zip"}) {
     CleanupPaths cleanup;
     std::string error;
     const auto fixture = createFindBmsDownloadAttempt("fixture.zip", error);
@@ -351,12 +353,13 @@ void testDurableDownloadImportsExistingFileWithoutTransport() {
     job.id = stagingId;
     std::erase(job.id, '-');
     job.request.url = job.request.displayUrl = "https://fixture.invalid/package.zip";
-    job.request.archiveName = name;
-    const bool mismatch = job.request.archiveName == "mismatch.zip";
+    job.request.archiveName = name.size() > 128 ? preferredArchiveName(name, "", "", "", ".zip") : name;
+    job.attempt = 1;
+    const bool mismatch = job.request.archiveName.ends_with("mismatch.zip");
     if (mismatch) job.request.expectedHash = std::string(64, 'a');
     job.request.libraryRoot = testDownloadRoot(*fixture).parent_path();
     cleanup.add(job.request.libraryRoot);
-    job.request.skipUnarchiving = !mismatch;
+    job.request.skipUnarchiving = !mismatch || job.request.archiveName == "packed-mismatch.zip";
     const auto privateJobRoot = findBmsStagingBasePath().parent_path() / job.id;
     std::filesystem::create_directories(privateJobRoot);
     cleanup.add(privateJobRoot);
@@ -392,7 +395,30 @@ void testDurableDownloadImportsExistingFileWithoutTransport() {
       const auto retried = downloads::importArchiveJob(job, retained, privateJobRoot, cancelled, {}, {});
       assert(retried.status == BmsSearchResult::Status::HashMismatch && retried.pendingArtifact);
       assert(observedDownloadAttempt.empty());
-      downloads::cleanupArchiveJob(job);
+      job.result = retried;
+      job.decision = BmsSearchPendingArtifactDecision::Delete;
+      // A crashed Keep can leave a copied commit tree before publication was
+      // prepared. Delete must reclaim it along with the retained download.
+      const auto transaction = retried.pendingArtifact->downloadRoot / kFindBmsTransactionDirectoryName /
+          retried.pendingArtifact->stagingRoot.filename();
+      downloads::PublicationJournal journal(privateJobRoot / "publication.json", retried.pendingArtifact->destinationPath);
+      assert(journal.beginCopy(transaction));
+      writeText(transaction / "commit/partial", "partial copy");
+      const auto userPath = retried.pendingArtifact->kind == BmsSearchPendingArtifactKind::Archive
+          ? retried.pendingArtifact->destinationPath : retried.pendingArtifact->destinationPath / "user.bms";
+      writeText(userPath, "subsequent library edit");
+      const auto deleted = downloads::resolveArchiveJob(job, privateJobRoot,
+          BmsSearchPendingArtifactDecision::Delete, cancelled, {});
+      assert(deleted.status != BmsSearchResult::Status::DownloadFailed && !deleted.pendingArtifact);
+      assert(!std::filesystem::exists(retained));
+      assert(!std::filesystem::exists(transaction));
+      assert(readText(userPath) == "subsequent library edit");
+      assert(!std::filesystem::exists(retried.pendingArtifact->stagingRoot));
+      // Crash after unlinking but before saving completion: the persisted
+      // decision must finish idempotently without its archive or staging tree.
+      const auto recoveredDelete = downloads::resolveArchiveJob(job, privateJobRoot,
+          BmsSearchPendingArtifactDecision::Delete, cancelled, {});
+      assert(recoveredDelete.status != BmsSearchResult::Status::DownloadFailed && !recoveredDelete.pendingArtifact);
       continue;
     }
     if (result.status != BmsSearchResult::Status::Downloaded) std::cerr << result.message << '\n';

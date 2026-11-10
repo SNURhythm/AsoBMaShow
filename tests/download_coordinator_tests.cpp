@@ -89,9 +89,15 @@ int main() {
     DownloadCoordinator service(root, hooks);
     service.setForeground(true);
     const auto job = service.submit(request(root));
+    const auto queued = service.submit(request(root));
+    assert(service.get(queued.id)->state == State::Queued);
     service.interrupt(job.id, "Runtime expired");
     assert(service.get(job.id)->state == State::Failed);
     assert(!service.isCurrentTransfer(job.id, job.attempt));
+    assert(service.get(queued.id)->state == State::Transferring);
+    service.transferFailed(job.id, job.attempt, "Late cancellation callback");
+    assert(service.get(queued.id)->state == State::Transferring);
+    service.cancel(queued.id);
     assert(service.retry(job.id));
     assert(service.get(job.id)->attempt == job.attempt + 1);
     service.cancel(job.id);
@@ -298,6 +304,50 @@ int main() {
     assert(admitted);
     assert(finished.get_future().wait_for(5s) == std::future_status::ready);
     assert(admissions == 2 && transfers == 1);
+  }
+  {
+    const auto directory = root / "interrupted-delete";
+    std::string id;
+    {
+      JobStore store(directory);
+      id = store.submit(request(root)).id;
+      for (const auto state : {State::Transferring, State::Downloaded, State::Importing}) {
+        auto job = *store.get(id);
+        job.state = state;
+        job.decision = BmsSearchPendingArtifactDecision::Delete;
+        job.result = BmsSearchResult{.status = BmsSearchResult::Status::HashMismatch,
+            .pendingArtifact = BmsSearchPendingArtifact{}};
+        assert(store.update(job));
+      }
+      // The delete intent is durable, but the process died after removing the
+      // retained payload and before saving the completion record.
+    }
+    std::atomic<int> resolutions = 0, transfers = 0;
+    std::promise<void> completed;
+    CoordinatorHooks deletion;
+    deletion.startTransfer = [&](const auto &, const auto &) { ++transfers; return std::string{}; };
+    deletion.importArchive = [](const auto &, const auto &, auto &, auto, auto) {
+      assert(false && "a saved deletion must never re-import or re-download");
+      return BmsSearchResult{};
+    };
+    deletion.resolveArtifact = [&](const Job &job, auto decision, auto &, auto) {
+      assert(job.result->pendingArtifact && decision == BmsSearchPendingArtifactDecision::Delete);
+      if (++resolutions == 1) return BmsSearchResult{.status = BmsSearchResult::Status::DownloadFailed};
+      return BmsSearchResult{.status = BmsSearchResult::Status::HashMismatch, .message = "Downloaded files deleted."};
+    };
+    deletion.finishActivity = [&](const auto &, bool success) { if (success) completed.set_value(); };
+    DownloadCoordinator service(directory, deletion);
+    service.setForeground(true); service.enableImports(true);
+    assert(service.retry(id));
+    auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (service.get(id)->state != State::NeedsAttention && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    assert(service.get(id)->decision == BmsSearchPendingArtifactDecision::Delete);
+    assert(service.get(id)->result->pendingArtifact);
+    while (!service.retry(id) && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    assert(completed.get_future().wait_for(5s) == std::future_status::ready);
+    assert(service.get(id)->state == State::Complete && service.get(id)->libraryAcknowledged);
+    assert(transfers == 0 && resolutions == 2);
   }
   std::filesystem::remove_all(root);
 }

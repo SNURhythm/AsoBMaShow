@@ -1,5 +1,6 @@
 #include "DownloadPublication.h"
 #include "DownloadPublicationPaths.h"
+#include "DownloadPathCodec.h"
 #include "../AtomicFile.h"
 #include "../../yoga/lib/nlohmann/json.hpp"
 #include <array>
@@ -52,7 +53,12 @@ bool safeTransaction(const std::filesystem::path &transaction, const std::filesy
   return !std::filesystem::is_symlink(std::filesystem::symlink_status(transaction, error));
 }
 bool save(const std::filesystem::path &path, const json &record) {
-  const auto text = record.dump();
+  const DownloadPathCodec codec(path.parent_path().parent_path());
+  auto stored = record;
+  for (const auto *key : {"destination", "transaction"}) stored.at(key) = codec.encode(stored.at(key));
+  if (stored.contains("removedPaths")) for (auto &removed : stored.at("removedPaths")) removed = codec.encode(removed);
+  stored["version"] = codec.portable() ? 2 : 1;
+  const auto text = stored.dump();
   if (text.size() > 16384) return false;
   const auto operations = atomic_file::privateFileOperations();
   std::string error;
@@ -62,7 +68,11 @@ json load(const std::filesystem::path &path) {
   if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path)) || std::filesystem::file_size(path) > 16384)
     throw std::runtime_error("Invalid publication journal.");
   std::ifstream input(path, std::ios::binary);
-  return json::parse(input);
+  auto record = json::parse(input);
+  const DownloadPathCodec codec(path.parent_path().parent_path());
+  for (const auto *key : {"destination", "transaction"}) record.at(key) = codec.decode(record.at(key));
+  if (record.contains("removedPaths")) for (auto &removed : record.at("removedPaths")) removed = codec.decode(removed);
+  return record;
 }
 // Flush copied payloads and directory entries without reading file contents.
 // Do not follow preserved symlinks into unrelated library data.
@@ -96,6 +106,21 @@ bool renameSync(const std::filesystem::path &from, const std::filesystem::path &
   return atomic_file::renameDurably(from, to, error) &&
       syncDirectory(to.parent_path(), error) &&
       (from.parent_path() == to.parent_path() || syncDirectory(from.parent_path(), error));
+}
+bool removeTransaction(const std::filesystem::path &transaction,
+                       const PublicationJournal::DirectorySync &syncDirectory) {
+  std::error_code error;
+  std::filesystem::remove_all(transaction, error);
+  if (error) return false;
+  auto parent = transaction.parent_path();
+  while (!std::filesystem::exists(parent, error)) {
+    if (error || parent.empty() || parent == parent.parent_path()) return false;
+    parent = parent.parent_path();
+  }
+  std::string message;
+  // Keep the journal until removal of the copied/backup tree is durable. Its
+  // separate storage volume is not covered by syncing the private job folder.
+  return !error && syncDirectory(parent, message);
 }
 }
 PublicationJournal::PublicationJournal(std::filesystem::path journal, std::filesystem::path destination,
@@ -208,12 +233,29 @@ std::vector<std::filesystem::path> PublicationJournal::removedPaths() const {
   if (readPath(record, "destination") != destination_) throw std::runtime_error("Publication identity changed.");
   return readRemovals(record, destination_);
 }
+bool PublicationJournal::discardUnpublishedCopy() {
+  try {
+    if (!std::filesystem::exists(journal_)) return true;
+    const auto record = load(journal_);
+    const auto transaction = readPath(record, "transaction");
+    if ((record.at("version") != 1 && record.at("version") != 2) ||
+        record.at("phase") != "copy" || readPath(record, "destination") != destination_ ||
+        !safeTransaction(transaction, transactionRoot_)) return false;
+    std::error_code error;
+    const auto backup = std::filesystem::symlink_status(transaction / "backup", error);
+    if ((error && error != std::errc::no_such_file_or_directory) || std::filesystem::exists(backup)) return false;
+    if (!removeTransaction(transaction, syncDirectory_)) return false;
+    error.clear();
+    std::filesystem::remove(journal_, error);
+    return !error;
+  } catch (...) { return false; }
+}
 PublicationRecovery PublicationJournal::recover() {
   try {
     if (!std::filesystem::exists(journal_)) return PublicationRecovery::Retry;
     const auto record = load(journal_);
     const auto transaction = readPath(record, "transaction");
-    if (record.at("version") != 1 || readPath(record, "destination") != destination_ ||
+    if ((record.at("version") != 1 && record.at("version") != 2) || readPath(record, "destination") != destination_ ||
         !safeTransaction(transaction, transactionRoot_)) return PublicationRecovery::Conflict;
     const auto phase = record.at("phase").get<std::string>();
     const auto source = record.at("identity").get<Identity>();
@@ -223,9 +265,7 @@ PublicationRecovery PublicationJournal::recover() {
       if (!syncDirectory_(destination_.parent_path(), message) ||
           (std::filesystem::exists(transaction) && !syncDirectory_(transaction, message)))
         return PublicationRecovery::Conflict;
-      std::error_code error;
-      std::filesystem::remove_all(transaction, error);
-      return error ? PublicationRecovery::Conflict : PublicationRecovery::Installed;
+      return removeTransaction(transaction, syncDirectory_) ? PublicationRecovery::Installed : PublicationRecovery::Conflict;
     }
     const auto old = record.at("oldIdentity").is_null()
         ? std::optional<Identity>{} : std::optional(record.at("oldIdentity").get<Identity>());
@@ -238,9 +278,8 @@ PublicationRecovery PublicationJournal::recover() {
       if (!syncDirectory_(destination_.parent_path(), message)) return PublicationRecovery::Conflict;
     } else if (destination) return PublicationRecovery::Conflict;
     if (phase != "copy" && phase != "backup" && phase != "install" && phase != "restore") return PublicationRecovery::Conflict;
+    if (!removeTransaction(transaction, syncDirectory_)) return PublicationRecovery::Conflict;
     std::error_code error;
-    std::filesystem::remove_all(transaction, error);
-    if (error) return PublicationRecovery::Conflict;
     std::filesystem::remove(journal_, error);
     return error ? PublicationRecovery::Conflict : PublicationRecovery::Retry;
   } catch (...) { return PublicationRecovery::Conflict; }

@@ -27,6 +27,13 @@ transaction root. The destination subtree is reserved against DocumentsProvider
 mutations during publication and recovery. Unsupported library volumes fail
 without placing transaction data in shared Documents.
 
+On iOS, saved job and publication paths within Documents or the download store
+are relative to the current app container. Legacy absolute paths from those
+same subtrees are rebased when read; publication recovery still checks file
+identities before restoring or accepting a swap. Delete Files durably records
+the decision before removing staging and retained payloads, and an interrupted
+deletion can finish without fetching the package again.
+
 ## GingerRush authorization review — 2026-11-10
 
 - **Operator/service:** catizard / GingerRush.

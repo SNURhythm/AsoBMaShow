@@ -117,7 +117,7 @@ std::string fileNameFromUrl(const std::string &url);
 std::string displayFileNameFromUrl(const std::string &url);
 std::string archiveExtensionFromName(std::string name);
 std::string stripArchiveExtension(std::string name);
-std::string safeStorageKey(const std::string &value);
+std::string safeStorageKey(const std::string &value, std::size_t maximumBytes = 128);
 std::string archiveNameFromUrl(const std::string &url);
 std::string preferredArchiveName(const std::string &suggestedArchiveName,
                                  const std::string &displayUrl,

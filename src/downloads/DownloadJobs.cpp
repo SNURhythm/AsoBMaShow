@@ -1,5 +1,6 @@
 #include "DownloadJobs.h"
 #include "DownloadUrlPolicy.h"
+#include "DownloadPathCodec.h"
 #include "../AtomicFile.h"
 #include "../ArchiveFile.h"
 #include "../../yoga/lib/nlohmann/json.hpp"
@@ -12,6 +13,18 @@
 namespace downloads {
 namespace {
 using json = nlohmann::json;
+void mapJobPaths(json &record, const DownloadPathCodec &codec, bool encode) {
+  const auto map = [&](json &path) { path = encode ? codec.encode(path) : codec.decode(path); };
+  map(record.at("request").at("libraryRoot"));
+  auto &result = record.at("result");
+  if (result.is_null()) return;
+  map(result.at("outputPath"));
+  for (auto &path : result.at("removedPaths")) map(path);
+  auto &artifact = result.at("artifact");
+  if (!artifact.is_null())
+    for (const auto *key : {"stagingRoot", "sourcePath", "downloadRoot", "destinationPath",
+                           "alternateDestinationPath", "originalFilesIndexPath"}) map(artifact.at(key));
+}
 constexpr std::uintmax_t maxManifestBytes = 4 * 1024 * 1024;
 constexpr std::size_t maxJobs = 256;
 bool validId(const std::string &id) {
@@ -237,9 +250,12 @@ JobStore::JobStore(std::filesystem::path root) : root_(std::move(root)) {
     throw std::runtime_error("Download manifest is invalid or too large.");
   std::ifstream input(manifest, std::ios::binary);
   const json document = json::parse(input);
-  if (document.at("version") != 1 || !document.at("jobs").is_array() || document.at("jobs").size() > maxJobs)
+  if ((document.at("version") != 1 && document.at("version") != 2) ||
+      !document.at("jobs").is_array() || document.at("jobs").size() > maxJobs)
     throw std::runtime_error("Unsupported download manifest.");
-  for (const auto &record : document.at("jobs")) {
+  const DownloadPathCodec codec(root_);
+  for (auto record : document.at("jobs")) {
+    mapJobPaths(record, codec, false);
     auto job = readJob(record);
     if (std::any_of(jobs_.begin(), jobs_.end(), [&](const auto &other) { return job.id == other.id || job.order == other.order; }))
       throw std::runtime_error("Duplicate saved download identity.");
@@ -259,8 +275,13 @@ JobStore::JobStore(std::filesystem::path root) : root_(std::move(root)) {
 }
 void JobStore::save(const std::vector<Job> &jobs) const {
   json records = json::array();
-  for (const auto &j : jobs) records.push_back(jobJson(j));
-  const auto text = json{{"version", 1}, {"jobs", records}}.dump();
+  const DownloadPathCodec codec(root_);
+  for (const auto &j : jobs) {
+    auto record = jobJson(j);
+    mapJobPaths(record, codec, true);
+    records.push_back(std::move(record));
+  }
+  const auto text = json{{"version", codec.portable() ? 2 : 1}, {"jobs", records}}.dump();
   if (text.size() > maxManifestBytes) throw std::runtime_error("Download history is full; remove completed entries.");
   const auto operations = atomic_file::privateFileOperations();
   std::string error;

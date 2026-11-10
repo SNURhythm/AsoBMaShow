@@ -189,7 +189,16 @@ void testStorageNamesPreserveLongAndCompoundExtensions() {
       // Publication journals serialize these paths with strict UTF-8 JSON.
       assert(!nlohmann::json(names.archiveName).dump().empty());
       assert(!nlohmann::json(asobmshow::bms_search::safeStorageKey(basename)).dump().empty());
+      const auto preferred = asobmshow::bms_search::preferredArchiveName(
+          basename + extension, "", "", "", extension);
+      assert(preferred.size() <= 128 && preferred.ends_with(extension));
+      assert(!nlohmann::json(preferred).dump().empty());
     }
+  }
+  for (const std::string extension : {".zip", ".tar.gz"}) {
+    const auto preferred = asobmshow::bms_search::preferredArchiveName(
+        std::string(130, 'a') + extension, "", "", "", extension);
+    assert(preferred.size() <= 128 && preferred.ends_with(extension));
   }
 }
 
