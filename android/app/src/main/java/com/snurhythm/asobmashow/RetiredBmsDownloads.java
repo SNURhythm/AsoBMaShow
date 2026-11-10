@@ -16,7 +16,8 @@ final class RetiredBmsDownloads {
             for (JobInfo job : scheduler.getAllPendingJobs()) {
                 if (job.getService().getPackageName().equals(context.getPackageName()) &&
                         job.getService().getClassName().equals(
-                                "com.snurhythm.asobmashow.BmsDownloadJobService")) {
+                                "com.snurhythm.asobmashow.BmsDownloadJobService") &&
+                        !"gingerrush-v1".equals(job.getExtras().getString("source_scope"))) {
                     scheduler.cancel(job.getId());
                 }
             }

@@ -11,26 +11,6 @@ import java.util.concurrent.*;
 public final class BmsDownloadTransportTest {
     static void check(boolean value, String message) { if (!value) throw new AssertionError(message); }
     public static void main(String[] args) throws Exception {
-        BmsBrowserRequestPolicy policy = new BmsBrowserRequestPolicy();
-        String page = "https://example.test/page", file = "https://example.test/file.zip";
-        check(!policy.consume(file), "unknown request must use external fallback");
-        policy.observed(page, "GET", true);
-        check(!policy.consume(file), "main-page GET cannot authorize an iframe download");
-        policy.pageCommitted();
-        check(BmsBrowserRequestPolicy.navigationHeaders(java.util.Map.of("upgrade-insecure-requests", "1")), "iframe navigation header");
-        check(!BmsBrowserRequestPolicy.navigationHeaders(java.util.Map.of("Accept", "*/*")), "XHR is not navigation evidence");
-        policy.observed("https://example.test/metadata", "POST", false);
-        policy.observed(file, "GET", true);
-        check(policy.consume(file), "iframe GET works after unrelated metadata POST");
-        check(!policy.consume(file), "download evidence is consumed once");
-        policy.observed(file, "GET", true);
-        policy.observed("https://example.test/generate", "POST", true);
-        check(!policy.consume(file), "POST redirect cannot reuse historic GET target");
-        policy.observed(file, "GET", true);
-        check(!policy.consume(file), "concurrent GET cannot authorize older POST attachment");
-        policy.pageCommitted();
-        policy.observed(file, "GET", true);
-        check(policy.consume(file), "committed new page starts a fresh navigation epoch");
         Path root = Paths.get(args[0]);
         byte[] payload = new byte[256 * 1024];
         new Random(42).nextBytes(payload);

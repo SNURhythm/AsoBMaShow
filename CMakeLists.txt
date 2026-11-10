@@ -2740,6 +2740,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(ir_submission_eligibility_test_support PRIVATE
         cxx_std_23
     )
+    add_test(NAME find_bms_archive_flow_audit
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_find_bms_archive_flow.py
+                ${CMAKE_SOURCE_DIR})
+    set_tests_properties(find_bms_archive_flow_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
     add_test(NAME result_persistence_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.py
@@ -4459,6 +4467,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/library/ArchiveUnzipRecovery.cpp
         src/scene/ArchiveUnzipModal.cpp
         src/scene/ArchiveUnzipOperation.cpp
+        src/scene/FindBmsProgressPresentation.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp
         src/rendering/SimpleBatchRenderer.cpp
@@ -6242,6 +6251,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(music_select_toolbar_view_tests
         tests/music_select_toolbar_view_tests.cpp
         tests/tasks_modal_mobile_fixture.cpp
+        src/scene/FindBmsProgressPresentation.cpp
+        src/downloads/DownloadCoordinator.cpp
+        src/downloads/DownloadJobs.cpp
+        src/downloads/DownloadUrlPolicy.cpp
         src/AtomicFile.cpp
         src/storage/StoragePolicy.cpp
         src/view/ScrollView.cpp
@@ -6377,6 +6390,34 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(profile_settings_persistence_tests PRIVATE ${COMMON_LIBS})
 
     set(transport_fixture_dir "${CMAKE_SOURCE_DIR}/tests")
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/transport_metadata_methods.inc
+        COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_extract.py
+                --root ${CMAKE_SOURCE_DIR}
+                --mode metadata
+                --output ${CMAKE_CURRENT_BINARY_DIR}/transport_metadata_methods.inc
+        DEPENDS ${transport_fixture_dir}/find_bms_transport_extract.py src/bms_search/DownloadSupport.cpp
+        VERBATIM
+    )
+    add_executable(find_bms_metadata_transport_tests
+        ${transport_fixture_dir}/find_bms_metadata_transport_tests.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/transport_metadata_methods.inc
+    )
+    target_include_directories(find_bms_metadata_transport_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    target_compile_features(find_bms_metadata_transport_tests PRIVATE cxx_std_23)
+    target_link_libraries(find_bms_metadata_transport_tests PRIVATE CURL::libcurl)
+    add_test(NAME find_bms_metadata_transport_tests
+        COMMAND find_bms_metadata_transport_tests)
+    set_tests_properties(find_bms_metadata_transport_tests PROPERTIES TIMEOUT 20)
+    add_test(NAME find_bms_metadata_loopback_transport_tests
+        COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_server.py
+                $<TARGET_FILE:find_bms_metadata_transport_tests>)
+    set_tests_properties(find_bms_metadata_loopback_transport_tests PROPERTIES
+        TIMEOUT 55)
+    add_test(NAME android_background_download_tests
+        COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_background_download_tests.py)
+    set_tests_properties(android_background_download_tests PROPERTIES TIMEOUT 30)
     add_test(NAME android_metadata_post_cancellation_tests
         COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_metadata_post_cancellation_tests.py)
     set_tests_properties(android_metadata_post_cancellation_tests PROPERTIES TIMEOUT 60)
@@ -6392,6 +6433,107 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME unzip_marker_io_tests
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/unzip_marker_io_tests.py)
         set_tests_properties(unzip_marker_io_tests PROPERTIES TIMEOUT 30)
+        add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
+            COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_extract.py
+                    --root ${CMAKE_SOURCE_DIR}
+                    --mode native
+                    --output ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
+            DEPENDS ${transport_fixture_dir}/find_bms_transport_extract.py
+                    src/iOSNatives.mm src/iOSNatives.hpp
+                    src/bms_search/DownloadSupport.cpp src/bms_search/Internal.h
+            VERBATIM
+        )
+        add_executable(find_bms_ios_file_bridge_tests
+            ${transport_fixture_dir}/find_bms_ios_file_bridge_tests.mm
+            ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
+        )
+        set_source_files_properties(${transport_fixture_dir}/find_bms_ios_file_bridge_tests.mm
+            PROPERTIES LANGUAGE CXX)
+        target_compile_features(find_bms_ios_file_bridge_tests PRIVATE cxx_std_23)
+        target_include_directories(find_bms_ios_file_bridge_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+        target_compile_options(find_bms_ios_file_bridge_tests PRIVATE
+            -x objective-c++ -fobjc-arc)
+        target_link_libraries(find_bms_ios_file_bridge_tests PRIVATE "-framework Foundation")
+        add_test(NAME find_bms_ios_file_bridge_tests
+            COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_server.py
+                    $<TARGET_FILE:find_bms_ios_file_bridge_tests>)
+        set_tests_properties(find_bms_ios_file_bridge_tests PROPERTIES
+            TIMEOUT 55)
+    endif()
+
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/find_bms_download_attempt_extract.py
+                --root ${CMAKE_SOURCE_DIR}
+                --output ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
+        DEPENDS tests/find_bms_download_attempt_extract.py src/bms_search/DownloadSupport.cpp
+        VERBATIM
+    )
+    add_executable(find_bms_download_tests
+        ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
+        tests/find_bms_download_tests.cpp
+        src/bms_search/ArchiveSupport.cpp
+        src/BmsSearchService.cpp
+        src/bms_search/GingerRushDriver.cpp
+        src/downloads/DownloadUrlPolicy.cpp
+        src/bms_search/Common.cpp
+        src/bms_search/ArchiveDecision.cpp
+        src/bms_search/DownloadedArchiveWorkflow.cpp
+        src/downloads/DownloadImport.cpp
+        src/downloads/DownloadPublication.cpp
+        src/storage/StoragePolicy.cpp
+        src/bms_search/DownloadStorageOptimization.cpp
+        src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp src/storage/StorageWorkScheduler.cpp
+        src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
+        src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
+        src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
+        src/storage/StorageVideoEncoder.cpp src/storage/StorageVideoCapabilities.cpp
+        src/storage/VideoCompressionGeometry.cpp src/storage/ChartResourceInventory.cpp
+        src/storage/StorageFileTransaction.cpp src/storage/StoragePlatform.cpp
+        src/audio/ChartVisualAssetResolver.cpp src/AtomicFile.cpp src/FileChecksum.cpp
+        src/bms_search/DownloadStaging.cpp
+        src/bms_search/DownloadStorageIdentity.cpp
+        src/bms_search/PackageDownloadCandidate.cpp
+        src/bms_search/PendingArtifact.cpp
+        src/scene/FindBmsDialogPolicy.cpp
+        src/scene/FindBmsProgressPresentation.cpp
+        src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+    )
+    target_include_directories(find_bms_download_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    target_compile_features(find_bms_download_tests PRIVATE cxx_std_23)
+    add_test(NAME find_bms_verification_guard_tests
+        COMMAND find_bms_download_tests --verification-guard)
+    set_tests_properties(find_bms_verification_guard_tests PROPERTIES TIMEOUT 30)
+    add_test(NAME find_bms_verification_tests
+        COMMAND find_bms_download_tests --verification)
+    set_tests_properties(find_bms_verification_tests PROPERTIES TIMEOUT 60)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(find_bms_download_tests PRIVATE SDL3)
+    endif()
+    target_link_libraries(find_bms_download_tests PRIVATE ${COMMON_LIBS} SQLite3 SndFile::sndfile ${FFMPEG_LIBRARIES})
+    if(APPLE)
+        target_link_libraries(find_bms_download_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(find_bms_download_tests PRIVATE shell32 ole32 advapi32)
     endif()
 
     add_executable(ir_credential_store_tests
@@ -8867,6 +9009,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_details_view_tests
         decide_loading_overlay_tests
         ir_upload_candidate_list_view_tests
+        find_bms_download_tests
         gameplay_bga_target_tests
         play_skin_session_tests
         profile_switch_tests
@@ -9009,6 +9152,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     include(cmake/MusicPlayerTests.cmake)
     include(cmake/JukeboxSchedulerTests.cmake)
     include(cmake/ArchiveStorageTests.cmake)
+    include(cmake/FindBmsTaskTests.cmake)
+    include(cmake/DownloadJobsTests.cmake)
 
     add_executable(main_menu_preview_controller_tests
         tests/main_menu_preview_controller_tests.cpp
@@ -9083,6 +9228,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(skin_archive_importer_tests)
     asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)
+    asobmashow_register_test(find_bms_download_tests)
     asobmashow_register_test(video_frame_layout_tests)
     asobmashow_register_test(font_bitmap_bounds_tests)
     asobmashow_register_test(video_decode_state_tests)
@@ -10040,7 +10186,7 @@ endif()
 if(APPLE)
     foreach(video_target IN ITEMS main jukebox_restore_tests gameplay_bga_target_tests visual_catch_up_tests
             skin_movie_clock_tests storage_video_capability_tests storage_media_tests storage_optimizer_tests
-            storage_scale_benchmark)
+            storage_scale_benchmark find_bms_download_tests)
         if(TARGET ${video_target})
             target_sources(${video_target} PRIVATE src/video/HardwareVideoFrameApple.mm)
             target_link_libraries(${video_target} PRIVATE bgfx "-framework CoreVideo" "-framework Metal"

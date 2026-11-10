@@ -40,6 +40,7 @@ add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
     src/audio/decoder.cpp src/ArchiveFile.cpp src/archive/TemporaryCache.cpp
     src/archive/UnzipOutput.cpp src/archive/IndexBuildCoordinator.cpp
     src/MinizBridge.c src/Utils.cpp src/bms_parser.cpp src/path.cpp
+    src/bms_search/DownloadStorageOptimization.cpp
     src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp src/storage/StorageWorkScheduler.cpp src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
     src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
     src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
@@ -124,7 +125,7 @@ set_tests_properties(storage_work_scheduler_tests PROPERTIES TIMEOUT 30)
 # separately with optimization even in the developer's Debug build directory.
 if(UNIX)
 get_target_property(storage_benchmark_sources storage_optimizer_tests SOURCES)
-list(FILTER storage_benchmark_sources EXCLUDE REGEX "^tests/|src/audio/decoder.cpp")
+list(FILTER storage_benchmark_sources EXCLUDE REGEX "^tests/|src/audio/decoder.cpp|src/bms_search/DownloadStorageOptimization.cpp")
 add_executable(storage_scale_benchmark EXCLUDE_FROM_ALL tests/storage_scale_benchmark.cpp
     ${storage_benchmark_sources} src/storage/StorageMeasurement.cpp src/storage/StorageArchiveMeasurement.cpp)
 target_compile_features(storage_scale_benchmark PRIVATE cxx_std_23)

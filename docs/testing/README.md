@@ -75,6 +75,7 @@ platform's exact membership, including required fixtures.
 | `replay` | `src/replay`, replay repositories, codecs, storage, playback, export | `gameplay`, `results`, `video` |
 | `ir` | `src/ir`, HTTP, Tachi, rankings, submissions, credentials | `results`, `profiles`, `music_select` |
 | `library` | `src/library`, chart repositories/scanning, folder/document import, difficulty tables | `archives`, `music_select` |
+| `downloads` | GingerRush lookup, transfers, archive verification/import, download task UI | `library`, `music_select`, `ui`, mobile platforms |
 | `archives` | `src/archive`, `ArchiveFile`, extraction, indexes, temporary archive cache | `library`, `skin_assets` |
 | `profiles` | `PlayerProfile*`, profile settings/archive/database ownership, provenance | `settings`, `results`, `ir` |
 | `settings` | `src/settings`, settings scene models/controls and initialization | The subsystem whose setting changes |

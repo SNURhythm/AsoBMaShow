@@ -1,0 +1,842 @@
+#include "Internal.h"
+#include "DownloadedArchiveWorkflow.h"
+#include "DownloadStorageIdentity.h"
+#include "DownloadStorageOptimization.h"
+#include "../downloads/DownloadJobs.h"
+
+#include "../RAII.h"
+
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#endif
+#if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
+#include "../CurlRAII.h"
+#endif
+
+namespace asobmshow::bms_search {
+
+bool ensureDownloadDirectory(const std::filesystem::path &path,
+                             const char *failurePrefix,
+                             std::string &errorMessage) {
+  std::error_code fsError;
+  std::filesystem::create_directories(path, fsError);
+  if (fsError) {
+    errorMessage = std::string(failurePrefix) + ": " + fsError.message();
+    return false;
+  }
+  return true;
+}
+
+std::optional<std::filesystem::path> saveIosDebugArtifacts(
+    const std::string &key, const std::string &downloadUrl,
+    const std::string &displayUrl, const std::filesystem::path &archivePath,
+    const std::filesystem::path &extractDirectory, std::string &errorMessage) {
+#if (TARGET_OS_IOS || TARGET_OS_SIMULATOR) && defined(DEBUG)
+  const std::string attemptId =
+      key + "-" +
+      std::to_string(
+          std::chrono::system_clock::now().time_since_epoch().count());
+  const std::filesystem::path debugDirectory =
+      Utils::GetDocumentsPath("BMSSEARCH_DEBUG") / attemptId;
+  std::error_code fsError;
+  if (!ensureDownloadDirectory(debugDirectory, "Could not create debug folder",
+                               errorMessage)) {
+    return std::nullopt;
+  }
+
+  if (!archivePath.empty() && std::filesystem::exists(archivePath, fsError)) {
+    fsError.clear();
+    std::filesystem::copy_file(
+        archivePath, debugDirectory / archivePath.filename(),
+        std::filesystem::copy_options::overwrite_existing, fsError);
+    if (fsError) {
+      errorMessage = "Could not copy downloaded archive: " + fsError.message();
+      return std::nullopt;
+    }
+    writeArchiveEntryDiagnostics(archivePath,
+                                 debugDirectory / "archive_entries.txt");
+  }
+  fsError.clear();
+
+  if (!extractDirectory.empty() &&
+      std::filesystem::exists(extractDirectory, fsError)) {
+    fsError.clear();
+    std::filesystem::copy(
+        extractDirectory, debugDirectory / "extracted",
+        std::filesystem::copy_options::recursive |
+            std::filesystem::copy_options::overwrite_existing,
+        fsError);
+    if (fsError) {
+      errorMessage = "Could not copy extracted files: " + fsError.message();
+      return std::nullopt;
+    }
+  }
+  fsError.clear();
+
+  std::ofstream metadata(debugDirectory / "metadata.txt");
+  if (!metadata) {
+    errorMessage = "Could not create debug metadata.";
+    return std::nullopt;
+  }
+  metadata << "download_url=" << downloadUrl << '\n';
+  metadata << "display_url=" << displayUrl << '\n';
+  metadata << "archive_path=" << fspath_to_utf8(archivePath) << '\n';
+  metadata << "extract_path=" << fspath_to_utf8(extractDirectory) << '\n';
+  metadata.close();
+  if (!metadata) {
+    errorMessage = "Could not write debug metadata.";
+    return std::nullopt;
+  }
+
+  return debugDirectory;
+#else
+  (void)key;
+  (void)downloadUrl;
+  (void)displayUrl;
+  (void)archivePath;
+  (void)extractDirectory;
+  (void)errorMessage;
+  return std::nullopt;
+#endif
+}
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+struct IOSDownloadProgressContext {
+  BmsSearchDownloadProgressCallback *progressCallback = nullptr;
+};
+
+void reportIOSDownloadProgress(void *context, std::uint64_t downloadedBytes,
+                               std::uint64_t totalBytes) {
+  auto *progressContext =
+      static_cast<IOSDownloadProgressContext *>(context);
+  if (progressContext == nullptr ||
+      progressContext->progressCallback == nullptr ||
+      !*progressContext->progressCallback) {
+    return;
+  }
+  (*progressContext->progressCallback)(
+      {.message = "Downloading archive",
+       .downloadedBytes = downloadedBytes,
+       .totalBytes = totalBytes});
+}
+
+bool probeDownloadUrl(const std::string &url, std::string &errorMessage,
+                      const std::atomic_bool *cancelled) {
+  return ProbeDownloadURLIOS(url, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); });
+}
+
+std::optional<std::string> fetchUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  std::string body;
+  const bool success = DownloadURLTextIOS(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); },
+      maximumResponseBytes);
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  if (!success) {
+    return std::nullopt;
+  }
+  return body;
+}
+
+std::optional<std::string> postUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  std::string body;
+  const bool success = PostURLTextIOS(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); },
+      maximumResponseBytes);
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  if (!success) {
+    return std::nullopt;
+  }
+  return body;
+}
+
+bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
+                       std::atomic_bool &cancelled, std::string &errorMessage,
+                       BmsSearchDownloadProgressCallback progressCallback,
+                       BmsSearchDownloadRetryCallback retryCallback,
+                       long *httpStatus) {
+  if (httpStatus != nullptr) *httpStatus = 0;
+  if (cancelled.load()) {
+    errorMessage = "Download cancelled.";
+    return false;
+  }
+  if (progressCallback) {
+    progressCallback({.message = "Downloading archive"});
+  }
+  constexpr auto maximumArchiveBytes = std::numeric_limits<std::uint64_t>::max();
+  IOSDownloadProgressContext progressContext{
+      .progressCallback = &progressCallback};
+  if (!DownloadURLToFileIOS(url, path, cancelled, maximumArchiveBytes,
+                            errorMessage, reportIOSDownloadProgress,
+                            &progressContext, std::move(retryCallback),
+                            httpStatus)) {
+    return false;
+  }
+  if (progressCallback) {
+    std::error_code sizeError;
+    const auto size = std::filesystem::file_size(path, sizeError);
+    const auto byteCount = sizeError ? 0 : static_cast<std::uint64_t>(size);
+    progressCallback({.message = "Download complete",
+                      .downloadedBytes = byteCount,
+                      .totalBytes = byteCount});
+  }
+  return true;
+}
+#else
+std::once_flag curlInitFlag;
+
+enum class CurlTextReceiveError { None, Cancelled, TooLarge, AllocationFailed };
+
+struct CurlTextResponseContext {
+  std::string body;
+  size_t maximumResponseBytes = 0;
+  const std::atomic_bool *cancelled = nullptr;
+  CurlTextReceiveError error = CurlTextReceiveError::None;
+};
+
+size_t appendCurlResponse(char *ptr, size_t size, size_t nmemb,
+                          void *userdata) {
+  auto *context = static_cast<CurlTextResponseContext *>(userdata);
+  if (context->cancelled != nullptr && context->cancelled->load()) {
+    context->error = CurlTextReceiveError::Cancelled;
+    return 0;
+  }
+  if (context->error != CurlTextReceiveError::None) {
+    return 0;
+  }
+  if (size != 0 && nmemb > std::numeric_limits<size_t>::max() / size) {
+    context->error = CurlTextReceiveError::TooLarge;
+    return 0;
+  }
+  const size_t byteCount = size * nmemb;
+  if (context->body.size() > context->maximumResponseBytes ||
+      byteCount > context->maximumResponseBytes - context->body.size()) {
+    context->error = CurlTextReceiveError::TooLarge;
+    return 0;
+  }
+  if (byteCount == 0) {
+    return 0;
+  }
+  try {
+    context->body.append(ptr, byteCount);
+  } catch (const std::exception &) {
+    context->error = CurlTextReceiveError::AllocationFailed;
+    return 0;
+  }
+  return byteCount;
+}
+
+int curlTextProgress(void *userdata, curl_off_t, curl_off_t,
+                      curl_off_t, curl_off_t) {
+  auto *context = static_cast<CurlTextResponseContext *>(userdata);
+  if (context->cancelled != nullptr && context->cancelled->load()) {
+    context->error = CurlTextReceiveError::Cancelled;
+    return 1;
+  }
+  return context->error == CurlTextReceiveError::None ? 0 : 1;
+}
+
+bool curlTextReceiveFailed(const CurlTextResponseContext &context,
+                            std::string &errorMessage) {
+  if ((context.cancelled != nullptr && context.cancelled->load()) ||
+      context.error == CurlTextReceiveError::Cancelled) {
+    errorMessage = "Lookup cancelled.";
+    return true;
+  }
+  if (context.error == CurlTextReceiveError::TooLarge) {
+    errorMessage = "Metadata response exceeds the byte limit (" +
+                   std::to_string(context.maximumResponseBytes) + " bytes).";
+    return true;
+  }
+  if (context.error == CurlTextReceiveError::AllocationFailed) {
+    errorMessage = "Could not retain the metadata response.";
+    return true;
+  }
+  return false;
+}
+
+bool probeDownloadUrl(const std::string &url, std::string &errorMessage,
+                      const std::atomic_bool *cancelled) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return false;
+  }
+  std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  CurlEasyHandle curl(curl_easy_init());
+  if (curl == nullptr) {
+    errorMessage = "Failed to initialize HTTP client.";
+    return false;
+  }
+  CurlTextResponseContext context{.maximumResponseBytes = 0,
+                                  .cancelled = cancelled};
+  char curlError[CURL_ERROR_SIZE] = {};
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlTextProgress);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    errorMessage = "HTTP certificate trust store could not be configured";
+    return false;
+  }
+  const CURLcode result = curl_easy_perform(curl.get());
+  long statusCode = 0;
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
+  if (curlTextReceiveFailed(context, errorMessage)) return false;
+  if (result != CURLE_OK) {
+    errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    errorMessage = "HTTP " + std::to_string(statusCode) + " while checking " + url;
+    return false;
+  }
+  return true;
+}
+
+std::optional<std::string> fetchUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+#if TARGET_OS_ANDROID
+  (void)maximumResponseBytes;
+  std::string body;
+  const bool success = DownloadURLTextAndroid(url, body, errorMessage, [&] { return cancelled == nullptr || !cancelled->load(); });
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  if (!success) {
+    if (errorMessage.empty()) {
+      errorMessage = "Failed to download " + url;
+    }
+    return std::nullopt;
+  }
+  return body;
+#else
+  std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  CurlEasyHandle curl(curl_easy_init());
+  if (curl == nullptr) {
+    errorMessage = "Failed to initialize HTTP client.";
+    return std::nullopt;
+  }
+
+  CurlTextResponseContext context{.maximumResponseBytes = maximumResponseBytes,
+                                  .cancelled = cancelled};
+  char curlError[CURL_ERROR_SIZE] = {};
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlTextProgress);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    errorMessage = "HTTP certificate trust store could not be configured";
+    return std::nullopt;
+  }
+
+  const CURLcode result = curl_easy_perform(curl.get());
+  long statusCode = 0;
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
+
+  if (curlTextReceiveFailed(context, errorMessage)) {
+    return std::nullopt;
+  }
+  if (result != CURLE_OK) {
+    errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
+    return std::nullopt;
+  }
+  if (statusCode >= 400) {
+    errorMessage = "HTTP " + std::to_string(statusCode) + " while downloading " +
+                   url;
+    return std::nullopt;
+  }
+  return std::move(context.body);
+#endif
+}
+
+std::optional<std::string> postUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+#if TARGET_OS_ANDROID
+  (void)maximumResponseBytes;
+  std::string body;
+  const bool success = PostURLTextAndroid(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); });
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  if (!success) {
+    if (errorMessage.empty()) {
+      errorMessage = "Failed to post " + url;
+    }
+    return std::nullopt;
+  }
+  return body;
+#else
+  std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  CurlEasyHandle curl(curl_easy_init());
+  if (curl == nullptr) {
+    errorMessage = "Failed to initialize HTTP client.";
+    return std::nullopt;
+  }
+
+  CurlTextResponseContext context{.maximumResponseBytes = maximumResponseBytes,
+                                  .cancelled = cancelled};
+  char curlError[CURL_ERROR_SIZE] = {};
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
+  // A null POSTFIELDS source makes libcurl read the request body from stdin.
+  curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, "");
+  curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlTextProgress);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    errorMessage = "HTTP certificate trust store could not be configured";
+    return std::nullopt;
+  }
+
+  const CURLcode result = curl_easy_perform(curl.get());
+  long statusCode = 0;
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
+
+  if (curlTextReceiveFailed(context, errorMessage)) {
+    return std::nullopt;
+  }
+  if (result != CURLE_OK) {
+    errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
+    return std::nullopt;
+  }
+  if (statusCode >= 400) {
+    errorMessage = "HTTP " + std::to_string(statusCode) + " while posting " +
+                   url;
+    return std::nullopt;
+  }
+  return std::move(context.body);
+#endif
+}
+
+struct CurlDownloadContext {
+  std::ofstream *file = nullptr;
+  std::atomic_bool *cancelled = nullptr;
+  BmsSearchDownloadProgressCallback *progressCallback = nullptr;
+};
+
+size_t writeCurlFile(char *ptr, size_t size, size_t nmemb, void *userdata) {
+  const size_t byteCount = size * nmemb;
+  auto *context = static_cast<CurlDownloadContext *>(userdata);
+  if (context->cancelled != nullptr && context->cancelled->load()) {
+    return 0;
+  }
+  context->file->write(ptr, static_cast<std::streamsize>(byteCount));
+  return *context->file ? byteCount : 0;
+}
+
+int curlProgress(void *userdata, curl_off_t downloadTotal,
+                 curl_off_t downloadNow, curl_off_t, curl_off_t) {
+  auto *context = static_cast<CurlDownloadContext *>(userdata);
+  if (context->cancelled != nullptr && context->cancelled->load()) {
+    return 1;
+  }
+  if (context->progressCallback != nullptr && *context->progressCallback) {
+    (*context->progressCallback)(
+        {.message = "Downloading archive",
+         .downloadedBytes = static_cast<std::uint64_t>(downloadNow),
+         .totalBytes = static_cast<std::uint64_t>(downloadTotal)});
+  }
+  return 0;
+}
+
+bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
+                       std::atomic_bool &cancelled, std::string &errorMessage,
+                       BmsSearchDownloadProgressCallback progressCallback,
+                       BmsSearchDownloadRetryCallback retryCallback,
+                       long *httpStatus) {
+  if (httpStatus != nullptr) *httpStatus = 0;
+  (void)retryCallback; // Nonresumable transports retry the complete archive attempt.
+#if TARGET_OS_ANDROID
+  if (cancelled.load()) {
+    errorMessage = "Download cancelled.";
+    return false;
+  }
+  if (progressCallback) {
+    progressCallback({.message = "Downloading archive"});
+  }
+  auto androidProgressCallback = [&progressCallback](
+                                     std::uint64_t downloadedBytes,
+                                     std::uint64_t totalBytes) {
+    if (progressCallback) {
+      progressCallback({.message = "Downloading archive",
+                        .downloadedBytes = downloadedBytes,
+                        .totalBytes = totalBytes});
+    }
+  };
+  if (!DownloadURLToFileAndroid(url, path, cancelled, androidProgressCallback,
+                                errorMessage, httpStatus)) {
+    if (errorMessage.empty()) {
+      errorMessage = "Download failed.";
+    }
+    return false;
+  }
+  if (cancelled.load()) {
+    errorMessage = "Download cancelled.";
+    return false;
+  }
+  if (progressCallback) {
+    std::error_code fsError;
+    const auto size = std::filesystem::file_size(path, fsError);
+    const auto byteCount = fsError ? 0 : static_cast<std::uint64_t>(size);
+    progressCallback({.message = "Download complete",
+                      .downloadedBytes = byteCount,
+                      .totalBytes = byteCount});
+  }
+  return true;
+#else
+  std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+  CurlEasyHandle curl(curl_easy_init());
+  if (curl == nullptr) {
+    errorMessage = "Failed to initialize HTTP client.";
+    return false;
+  }
+
+  std::ofstream file(path, std::ios::binary);
+  if (!file) {
+    errorMessage = "Could not create downloaded archive.";
+    return false;
+  }
+
+  CurlDownloadContext context{.file = &file,
+                              .cancelled = &cancelled,
+                              .progressCallback = &progressCallback};
+  char curlError[CURL_ERROR_SIZE] = {};
+  curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 8L);
+  curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "AsoBMaShow");
+  curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 180L);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, writeCurlFile);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlProgress);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
+  curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    errorMessage = "HTTP certificate trust store could not be configured";
+    return false;
+  }
+
+  const CURLcode result = curl_easy_perform(curl.get());
+  long statusCode = 0;
+  curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
+  file.close();
+  if (httpStatus != nullptr) *httpStatus = statusCode;
+
+  if (cancelled.load()) {
+    errorMessage = "Download cancelled.";
+    return false;
+  }
+  if (result != CURLE_OK) {
+    errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
+    return false;
+  }
+  if (statusCode >= 400) {
+    errorMessage = "HTTP " + std::to_string(statusCode) + " while downloading " +
+                   url;
+    return false;
+  }
+  return true;
+#endif
+}
+#endif
+
+std::filesystem::path makeDownloadDirectory(
+    const std::filesystem::path &libraryRoot) {
+  if (!libraryRoot.empty()) {
+    return libraryRoot / "BMSSEARCH";
+  }
+  return Utils::GetDocumentsPath("BMS") / "BMSSEARCH";
+}
+
+static bool downloadAndExtractArchiveAttempt(
+    const std::string &downloadUrl, const std::string &displayUrl,
+    const std::string &archiveKey, const std::filesystem::path &libraryRoot,
+    std::atomic_bool &cancelled,
+    BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
+    BmsSearchResult &result, const std::string &suggestedArchiveName,
+    const std::string &storageIdentity,
+    bool *downloadedArchive) {
+  result.presentationMessage = {};
+  result.downloadHttpStatus = 0;
+  if (downloadedArchive != nullptr) {
+    *downloadedArchive = false;
+  }
+  result.downloadUrl = displayUrl.empty() ? downloadUrl : displayUrl;
+  std::string archiveExtension = archiveExtensionFromUrl(result.downloadUrl);
+  if (archiveExtension.empty()) {
+    archiveExtension = archiveExtensionFromUrl(downloadUrl);
+  }
+  if (archiveExtension.empty()) {
+    archiveExtension = archiveExtensionFromName(suggestedArchiveName);
+  }
+  if (archiveExtension.empty()) {
+    archiveExtension = ".archive";
+  }
+  const std::string preferredName = preferredArchiveName(
+      suggestedArchiveName, result.downloadUrl, downloadUrl, archiveKey,
+      archiveExtension);
+  const std::string identitySeed =
+      !storageIdentity.empty()
+          ? storageIdentity
+          : (!archiveKey.empty()
+                 ? archiveKey
+                 : (!result.downloadUrl.empty() ? result.downloadUrl
+                                                 : downloadUrl));
+  const auto storageNames =
+      findBmsStorageNames(preferredName, archiveExtension, identitySeed);
+  if (options.enqueueDownload) {
+    if (cancelled.load()) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Download cancelled.";
+      return false;
+    }
+    downloads::Request request;
+    request.url = downloadUrl;
+    request.displayUrl = result.downloadUrl;
+    request.title = preferredName;
+    request.archiveName = preferredName;
+    request.expectedHash = archiveKey;
+    request.storageIdentity = identitySeed;
+    request.libraryRoot = libraryRoot;
+    request.skipUnarchiving = options.skipUnarchivingForNonSolidArchives;
+    request.storagePolicy = options.storagePolicy;
+    try {
+      result.queuedDownloadId = options.enqueueDownload(request);
+    } catch (const std::exception &) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Could not save the download. Check available storage and retry.";
+      return false;
+    }
+    if (result.queuedDownloadId.empty()) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "The download could not be queued.";
+      return false;
+    }
+    result.status = BmsSearchResult::Status::Downloaded;
+    result.outputPath.clear();
+    result.message = "Download queued.";
+    if (downloadedArchive != nullptr) *downloadedArchive = true;
+    return true;
+  }
+  const std::string &archiveName = storageNames.archiveName;
+  const std::string &key = storageNames.storageKey;
+  const std::filesystem::path baseDirectory = makeDownloadDirectory(libraryRoot);
+  std::string stagingError;
+  const auto attempt = createFindBmsDownloadAttempt(archiveName, stagingError);
+  if (!attempt) {
+    result.status = BmsSearchResult::Status::DownloadFailed;
+    result.message = stagingError.empty()
+                         ? "Could not prepare the archive download."
+                         : stagingError;
+    if (stagingError.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.prepare_failed");
+    }
+    return false;
+  }
+  auto attemptCleanup = makeScopeExit([root = attempt->root] {
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+  });
+  const auto &archivePath = attempt->archivePath;
+  const auto &extractDirectory = attempt->extractedPath;
+  auto saveDebugArtifacts = [&] {
+    std::string debugError;
+    if (const auto debugPath = saveIosDebugArtifacts(
+            key, downloadUrl, result.downloadUrl, archivePath, extractDirectory,
+            debugError)) {
+      result.debugPath = *debugPath;
+    } else if (!debugError.empty()) {
+      SDL_Log("Failed to save BMS Search debug artifacts: %s",
+              debugError.c_str());
+    }
+  };
+  if (progressCallback) {
+    progressCallback({.message = "Downloading archive"});
+  }
+
+  std::string downloadError;
+  if (!downloadUrlToFile(downloadUrl, archivePath, cancelled, downloadError,
+                         progressCallback, options.requestRetry,
+                         &result.downloadHttpStatus)) {
+    result.status = BmsSearchResult::Status::DownloadFailed;
+    result.message =
+        downloadError.empty() ? "Download failed." : downloadError;
+    if (downloadError.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.download_failed");
+    }
+    return false;
+  }
+  if (downloadedArchive != nullptr) {
+    *downloadedArchive = true;
+  }
+
+  if (htmlBodyFromDownloadedFile(archivePath)) {
+    saveDebugArtifacts();
+    result.status = BmsSearchResult::Status::DownloadFailed;
+    result.message =
+        "Downloaded response was an HTML page instead of an archive.";
+    result.presentationMessage = i18n::message("library.find_bms.result.html_response");
+    return false;
+  }
+
+  const auto archiveReader = defaultArchiveReaderDependencies();
+  DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive =
+          [archiveReader](const std::filesystem::path &path,
+                          const std::string &keyValue, bool skipUnarchiving,
+                          archive_file::PauseCallback pauseCallback) {
+            return decideDownloadedArchive(path, keyValue, skipUnarchiving,
+                                           std::move(pauseCallback),
+                                           archiveReader);
+          },
+      .extractArchive =
+          [](const std::filesystem::path &path,
+             const std::filesystem::path &destination,
+             std::string &errorMessage,
+             BmsSearchDownloadProgressCallback callback,
+             ArchiveExtractionCancelled extractionCancelled) {
+            return extractDownloadedArchive(path, destination, errorMessage,
+                                            std::move(callback),
+                                            std::move(extractionCancelled));
+          },
+      .decideExtracted = decideExtractedArchive,
+      .optimizeExtracted = optimizeExtractedDownload,
+      .commitArtifact =
+          [](const BmsSearchPendingArtifact &artifact,
+             std::string &errorMessage,
+             std::vector<std::filesystem::path> &removedPaths) {
+            return commitFindBmsPendingArtifact(artifact, errorMessage, {},
+                                                &removedPaths);
+          }};
+  const DownloadedArchiveWorkflowRequest request{
+      .attempt = *attempt,
+      .downloadRoot = baseDirectory,
+      .archiveName = archiveName,
+      .storageKey = key,
+      .archiveKey = archiveKey,
+      .options = options};
+  const bool processed = processDownloadedArchive(
+      request, cancelled, progressCallback, result, dependencies);
+  if (!processed && !cancelled.load()) {
+    saveDebugArtifacts();
+  }
+  if (result.pendingArtifact) {
+    attemptCleanup.dismiss();
+  }
+  return processed;
+}
+
+bool downloadAndExtractArchive(
+    const std::string &downloadUrl, const std::string &displayUrl,
+    const std::string &archiveKey, const std::filesystem::path &libraryRoot,
+    std::atomic_bool &cancelled,
+    BmsSearchDownloadProgressCallback progressCallback,
+    const BmsSearchDownloadOptions &options,
+    BmsSearchResult &result, const std::string &suggestedArchiveName,
+    const std::string &storageIdentity, bool *downloadedArchive) {
+  const BmsSearchResult lookupContext = result;
+  for (;;) {
+    const bool finished = downloadAndExtractArchiveAttempt(
+        downloadUrl, displayUrl, archiveKey, libraryRoot, cancelled,
+        progressCallback, options, result, suggestedArchiveName,
+        storageIdentity, downloadedArchive);
+    if (finished || cancelled.load() || result.pendingArtifact ||
+        (result.downloadHttpStatus >= 400 && result.downloadHttpStatus < 500) ||
+        !options.requestRetry) {
+      return finished;
+    }
+    // Keep the chosen URL and provider. Platforms without a retained native
+    // resume token restart this file only after an explicit user decision.
+    if (!options.requestRetry(result.message, false)) {
+      cancelled = true;
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Download cancelled.";
+      result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
+      return false;
+    }
+    if (cancelled.load()) return false;
+    result = lookupContext;
+  }
+}
+
+
+} // namespace asobmshow::bms_search

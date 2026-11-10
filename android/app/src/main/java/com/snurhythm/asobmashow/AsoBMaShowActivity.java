@@ -419,6 +419,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             });
         }
         KomboNotifications.acceptTap(getIntent());
+        BmsDownloads.acceptTap(getIntent());
         handleArchiveImportIntent(getIntent());
     }
 
@@ -494,6 +495,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         KomboNotifications.acceptTap(intent);
+        BmsDownloads.acceptTap(intent);
         handleArchiveImportIntent(intent);
     }
 
@@ -590,6 +592,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     public void loadLibraries() {
         super.loadLibraries();
         RetiredBmsDownloads.cancel(this);
+        BmsDownloads.initialize(this);
         if (!AndroidTextRasterizer.initializeNative()) {
             throw new IllegalStateException("Could not initialize Android text rendering");
         }

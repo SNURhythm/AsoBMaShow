@@ -1,0 +1,69 @@
+#pragma once
+
+#include "ArchiveDecision.h"
+#include "ArchiveExtraction.h"
+#include "DownloadStaging.h"
+
+#include <atomic>
+#include <functional>
+#include <string>
+
+namespace asobmshow::bms_search {
+
+enum class ExtractedArchiveDisposition { Match, HashMismatch, Inconclusive };
+
+struct ExtractedArchiveDecision {
+  ExtractedArchiveDisposition disposition =
+      ExtractedArchiveDisposition::Inconclusive;
+  bool foundBmsFile = false;
+  std::string message;
+};
+
+ExtractedArchiveDecision
+decideExtractedArchive(const std::filesystem::path &root,
+                       const std::string &archiveKey,
+                       archive_file::PauseCallback pauseCallback = {},
+                       ArchiveVerificationLimits limits = {});
+
+struct DownloadedArchiveWorkflowRequest {
+  FindBmsDownloadAttempt attempt;
+  std::filesystem::path downloadRoot;
+  std::string archiveName;
+  std::string storageKey;
+  std::string archiveKey;
+  BmsSearchDownloadOptions options;
+  bool retainArchive = false; // Durable jobs own the completed file outside this attempt.
+};
+
+struct DownloadedArchiveWorkflowDependencies {
+  std::function<DirectArchiveDecision(
+      const std::filesystem::path &, const std::string &, bool,
+      archive_file::PauseCallback)>
+      decideArchive;
+  std::function<bool(const std::filesystem::path &,
+                     const std::filesystem::path &, std::string &,
+                     BmsSearchDownloadProgressCallback,
+                     ArchiveExtractionCancelled)>
+      extractArchive;
+  std::function<ExtractedArchiveDecision(const std::filesystem::path &,
+                                         const std::string &,
+                                         archive_file::PauseCallback,
+                                         ArchiveVerificationLimits)>
+      decideExtracted;
+  std::function<storage_management::StorageReport(
+      const std::filesystem::path &, const storage_management::StoragePolicy &,
+      storage_management::Checkpoint, storage_management::ProgressCallback)>
+      optimizeExtracted;
+  std::function<bool(const BmsSearchPendingArtifact &, std::string &,
+                     std::vector<std::filesystem::path> &)>
+      commitArtifact;
+};
+
+bool processDownloadedArchive(
+    const DownloadedArchiveWorkflowRequest &request,
+    std::atomic_bool &cancelled,
+    BmsSearchDownloadProgressCallback progressCallback,
+    BmsSearchResult &result,
+    const DownloadedArchiveWorkflowDependencies &dependencies);
+
+} // namespace asobmshow::bms_search

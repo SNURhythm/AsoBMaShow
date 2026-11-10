@@ -2,6 +2,7 @@
 #include "../src/storage/StorageMeasurement.h"
 #include "../src/storage/StorageMeasurementState.h"
 #include "StorageTestSupport.h"
+#include "../src/bms_search/DownloadStorageOptimization.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -329,6 +330,24 @@ void subsetRefreshNeverEnumeratesAncestorSiblings() {
     require(MeasureStorageGroups(followup, {}, {}, nullptr, scan).complete, "scoped uncertain rows can be remeasured");
     require(rows.at("other").totalBytes == 100, "unrelated completed row remains cached");
   }
+}
+void extractedDownloadUsesWholePackage() {
+  TempDirectory temp;
+  temp.write("attempt/extracted/chart.bms", "#TITLE Original\n");
+  temp.write("attempt/extracted/nested/sabun.bme", "#TITLE Sabun\n");
+  temp.write("attempt/extracted/nested/unused.mpg", "video");
+  temp.write("attempt/extracted/other.wav", "unsupported audio");
+  temp.write("attempt/extracted/banner.png", "image");
+  std::string error;
+  const auto chart = temp.root / "attempt/extracted/chart.bms";
+  const auto before = HashStorageFile(chart, {}, error);
+  auto report = asobmshow::bms_search::optimizeExtractedDownload(temp.root / "attempt/extracted",
+      {.audio = AudioAction::LosslessFlac, .bga = BgaAction::Delete}, {}, {});
+  require(report.deleted == 1 && report.failed + report.skipped >= 1, "nested unreferenced video optimized; unsupported audio retained");
+  require(!report.recoveryRequired && !report.cleanupPending && !report.cancelled, "staging journals are settled before promotion");
+  require(fs::exists(temp.root / "attempt/extracted/other.wav") && fs::exists(temp.root / "attempt/extracted/banner.png"), "failed audio and images retained");
+  require(HashStorageFile(chart, {}, error) == before && fs::exists(temp.root / "attempt/extracted/nested/sabun.bme"), "all chart paths and content preserved");
+  require(!fs::exists(temp.root / "attempt/extracted/storage-management"), "private journals stay outside promoted package");
 }
 void wholeFolderOrchestration() {
   TempDirectory temp;
@@ -1014,7 +1033,7 @@ int main(int argc, char **argv) {
     slowVideoDoesNotBlockFollowingFiles();
     recoveryStopsAnAlreadyEncodedPeerBeforeCommit();
     storageLibraryIntegration();
-    wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();
+    extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();
     changedDirectoryIsSkippedWithoutAcceptingNewAssets(); unrelatedFoldersDoNotMultiplyCommitChecks();
     subsetRefreshNeverEnumeratesAncestorSiblings();
     ancestorChartsStayProtectedWithoutBlockingIndependentRoots(); descendantChartsStayProtectedWithoutBlockingIndependentRoots();
