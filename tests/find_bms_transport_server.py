@@ -1,6 +1,7 @@
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import subprocess
+import sys
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -10,9 +11,21 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     retry_requests = {}
     retry_lock = threading.Lock()
+    identity_lock = threading.Lock()
+    identity_requests = 0
+    identity_failures = set()
 
     def log_message(self, *_args):
         pass
+
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        with self.identity_lock:
+            Handler.identity_requests += 1
+            if self.headers.get("User-Agent") != "AsoBMaShow":
+                Handler.identity_failures.add((self.command, urlsplit(self.path).path))
+        return True
 
     def do_HEAD(self):
         route = urlsplit(self.path).path
@@ -260,6 +273,14 @@ def main():
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+    if Handler.identity_failures:
+        print("FAIL: requests missing AsoBMaShow User-Agent:",
+              sorted(Handler.identity_failures), file=sys.stderr)
+        raise SystemExit(1)
+    if not Handler.identity_requests:
+        print("FAIL: no HTTP requests exercised User-Agent identity", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"Verified AsoBMaShow User-Agent on {Handler.identity_requests} HTTP requests")
     raise SystemExit(result.returncode)
 
 

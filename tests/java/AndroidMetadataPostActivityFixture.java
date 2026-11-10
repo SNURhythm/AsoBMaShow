@@ -91,6 +91,7 @@ class AsoBMaShowActivity {
         }
 
         @Override public OutputStream getOutputStream() throws IOException {
+            require("AsoBMaShow".equals(getRequestProperty("User-Agent")), "POST must identify AsoBMaShow");
             require(getRequestMethod().equals("POST"), "POST method was not preserved");
             require(getDoOutput() && fixedContentLength == 0, "Expected explicit empty POST");
             if (scenario.equals("preconnect")) {
@@ -109,6 +110,7 @@ class AsoBMaShowActivity {
         }
 
         @Override public int getResponseCode() throws IOException {
+            require("AsoBMaShow".equals(getRequestProperty("User-Agent")), "Request must identify AsoBMaShow");
             require(!getInstanceFollowRedirects(), "Automatic redirects bypass security checks");
             engineStarted.set(true);
             stall("headers");
