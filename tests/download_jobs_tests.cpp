@@ -7,6 +7,7 @@
 #include <random>
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 using namespace downloads;
@@ -114,6 +115,34 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobms-download-jobs-" + std::to_string(std::random_device{}()));
   testContainerRelocation(root / "relocation");
+  {
+    const auto removalRoot = root / "removal";
+    JobStore store(removalRoot);
+    auto job = store.submit(request());
+    job.state = State::Cancelled;
+    assert(store.update(job));
+    const auto directory = store.jobPath(job.id);
+    std::ofstream(directory / "archive.zip") << "retained payload";
+#ifndef _WIN32
+    if (geteuid() != 0) {
+      std::filesystem::permissions(directory, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+      bool forgotten = false;
+      try { forgotten = store.forget(job.id); } catch (...) {}
+      std::filesystem::permissions(directory, std::filesystem::perms::owner_all);
+      assert(!forgotten && store.get(job.id));
+      JobStore restarted(removalRoot);
+      assert(restarted.get(job.id) && std::filesystem::exists(directory / "archive.zip"));
+    }
+#endif
+    // A crash after physical deletion but before the manifest commit must
+    // leave a visible, idempotently removable history row.
+    std::filesystem::remove_all(directory);
+    JobStore restarted(removalRoot);
+    assert(restarted.get(job.id));
+    assert(restarted.forget(job.id));
+    assert(!restarted.get(job.id));
+    assert(!JobStore(removalRoot).get(job.id));
+  }
   {
     JobStore store(root);
     auto retired = request();

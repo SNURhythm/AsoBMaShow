@@ -30,7 +30,8 @@ bool commitFindBmsPendingArtifact(
     const BmsSearchPendingArtifact &artifact, std::string &errorMessage,
     FindBmsRenameOperation renameOperation = {},
     std::vector<std::filesystem::path> *removedPaths = nullptr,
-    FindBmsPrepareVariantRemoval prepareRemoval = {});
+    FindBmsPrepareVariantRemoval prepareRemoval = {},
+    std::function<bool()> beforePublication = {});
 
 bool deleteFindBmsPendingArtifact(const BmsSearchPendingArtifact &artifact,
                                   std::string &errorMessage);

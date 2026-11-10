@@ -292,6 +292,18 @@ bool DownloadCoordinator::acceptFile(const std::string &id, std::uint64_t attemp
   changed_.notify_all();
   return true;
 }
+bool DownloadCoordinator::saveResumeData(const std::string &id, std::uint64_t attempt,
+                                         std::span<const std::byte> data) {
+  if (data.empty() || data.size() > 4 * 1024 * 1024) return false;
+  // Foundation's cancellation callback can outlive Remove. Serialize its
+  // identity check and atomic write with forget so it cannot recreate the job.
+  std::lock_guard lock(mutex_);
+  const auto job = store_.get(id);
+  if (!job || job->attempt != attempt || job->state == State::Cancelled || job->state == State::Complete) return false;
+  const auto operations = atomic_file::privateFileOperations();
+  std::string error;
+  return atomic_file::writeWithoutBackup(store_.jobPath(id) / "resume.data", data, error, &operations);
+}
 void DownloadCoordinator::transferFailed(const std::string &id, std::uint64_t attempt,
                                          const std::string &message, long httpStatus) {
   std::optional<Job> failed;

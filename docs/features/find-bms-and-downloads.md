@@ -25,7 +25,17 @@ the external-files container or its internal-files fallback. Recovery derives
 that private location from OS-owned paths; a journal cannot authorize another
 transaction root. The destination subtree is reserved against DocumentsProvider
 mutations during publication and recovery. Unsupported library volumes fail
-without placing transaction data in shared Documents.
+without placing transaction data in shared Documents. Android only offers
+download destinations within the app's Documents tree; a previously selected
+outside folder is cleared so downloads use an eligible folder or the default BMS
+folder. Cancelled imports reclaim unfinished transaction copies before history
+removal. Extracted staging and its ownership index are flushed before the prepared
+publication marker is saved, so rollback recovery can reuse them after power loss.
+Successful publication flushes staging, transaction and obsolete-variant
+deletions before recording completion, retaining its journal for crash recovery.
+Removing history deletes and flushes retained files before forgetting the job;
+late iOS resume callbacks cannot recreate its private directory. Desktop downloads
+recheck cancellation after copying and before the first publication rename.
 
 On iOS, saved job and publication paths within Documents or the download store
 are relative to the current app container. Legacy absolute paths from those

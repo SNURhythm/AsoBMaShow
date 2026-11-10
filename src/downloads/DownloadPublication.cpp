@@ -141,6 +141,15 @@ bool PublicationJournal::beginCopy(const std::filesystem::path &transaction) {
       {"transaction", utf8(transaction)}, {"phase", "copy"}, {"identity", Identity{}},
       {"oldIdentity", old ? json(*old) : json(nullptr)}});
 }
+bool PublicationJournal::prepareSource(const std::filesystem::path &staging,
+    const std::function<bool()> &prepare, std::string &error) {
+  // Extraction and its ownership index may have used buffered writes. Recovery
+  // after a failed swap reuses both, so neither may disappear after power loss.
+  if (!syncTree(staging, error) || !syncDirectory_(staging.parent_path(), error) ||
+      !syncDirectory_(staging.parent_path().parent_path(), error)) return false;
+  if (!prepare || !prepare()) { error = "Import paused before publication."; return false; }
+  return true;
+}
 void PublicationJournal::rename(const std::filesystem::path &from, const std::filesystem::path &to,
                                  std::error_code &error) {
   error.clear();
@@ -232,6 +241,34 @@ std::vector<std::filesystem::path> PublicationJournal::removedPaths() const {
   const auto record = load(journal_);
   if (readPath(record, "destination") != destination_) throw std::runtime_error("Publication identity changed.");
   return readRemovals(record, destination_);
+}
+bool PublicationJournal::finishPublication(std::string &error) {
+  try {
+    const auto record = load(journal_);
+    const auto transaction = readPath(record, "transaction");
+    if (readPath(record, "destination") != destination_ || record.at("phase") != "install" ||
+        identity(destination_) != record.at("identity").get<Identity>() ||
+        !safeTransaction(transaction, transactionRoot_))
+      throw std::runtime_error("Publication identity changed.");
+    std::vector<std::filesystem::path> parents;
+    for (const auto &path : readRemovals(record, destination_)) {
+      auto parent = path.parent_path();
+      while (!std::filesystem::exists(parent)) {
+        if (parent.empty() || parent == parent.parent_path())
+          throw std::runtime_error("Removed download parent is unavailable.");
+        parent = parent.parent_path();
+      }
+      parents.push_back(std::move(parent));
+    }
+    std::sort(parents.begin(), parents.end());
+    parents.erase(std::unique(parents.begin(), parents.end()), parents.end());
+    // Use the persisted set, including names already absent after a failed
+    // fsync. The internal job manifest cannot flush Android's external volume.
+    for (const auto &parent : parents) if (!syncDirectory_(parent, error)) return false;
+    if (!removeTransaction(transaction, syncDirectory_))
+      throw std::runtime_error("Could not flush publication transaction cleanup.");
+    return true;
+  } catch (const std::exception &failure) { error = failure.what(); return false; }
 }
 bool PublicationJournal::discardUnpublishedCopy() {
   try {

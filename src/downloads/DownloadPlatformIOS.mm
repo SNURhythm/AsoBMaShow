@@ -7,7 +7,6 @@
 #include "DownloadService.h"
 #include "DownloadIOSDispatch.h"
 #include "DownloadUrlPolicy.h"
-#include "../AtomicFile.h"
 #include <charconv>
 #include <algorithm>
 #include <map>
@@ -43,14 +42,8 @@ bool persistentTransfer(const downloads::Request &request) {
 }
 void saveResume(const Identity &key, NSData *data) {
   if (!data || data.length > 4 * 1024 * 1024) return;
-  auto owner = downloads::service();
-  const auto job = owner->get(key.first);
-  if (!job || job->attempt != key.second || job->state == downloads::State::Cancelled) return;
-  const auto path = owner->jobPath(key.first) / "resume.data";
-  std::string error;
-  const auto operations = atomic_file::privateFileOperations();
-  atomic_file::writeWithoutBackup(path,
-      {static_cast<const std::byte *>(data.bytes), data.length}, error, &operations);
+  downloads::service()->saveResumeData(key.first, key.second,
+      {static_cast<const std::byte *>(data.bytes), data.length});
 }
 void failTransfer(const Identity &key, const char *message) {
   downloads::service()->transferFailed(key.first, key.second, message);
@@ -277,6 +270,7 @@ AsoDownloadHost *host() {
     if (!key || !owner->isCurrentTransfer(key->first, key->second)) return;
     auto response = [task.response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)task.response : nil;
     const auto job = owner->get(key->first);
+    if (!job) return; // Cancel + Remove may run after the current-transfer check.
     if (!response || response.statusCode < 200 || response.statusCode >= 300 ||
         !downloads::allowedRedirect(downloads::transferRequest(*job).url, response.URL.absoluteString.UTF8String)) {
       owner->transferFailed(key->first, key->second, "Download did not return an archive response.", response ? response.statusCode : 0); return;

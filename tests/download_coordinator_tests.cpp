@@ -26,6 +26,29 @@ int main() {
   };
   hooks.cancelTransfer = [&](const Job &job) { stopped.push_back(job.id); };
   {
+    std::promise<void> removing, release;
+    auto released = release.get_future();
+    CoordinatorHooks resumeHooks;
+    resumeHooks.startTransfer = [](const Job &, const auto &) { return std::string{}; };
+    resumeHooks.cleanup = [&](const Job &) { removing.set_value(); released.wait(); };
+    DownloadCoordinator service(root / "resume-removal", resumeHooks);
+    service.setForeground(true);
+    const auto job = service.submit(request(root));
+    service.transferFailed(job.id, job.attempt, "interrupted");
+    const std::string token = "resume token";
+    const auto data = std::as_bytes(std::span(token.data(), token.size()));
+    assert(service.saveResumeData(job.id, job.attempt, data));
+    assert(!service.saveResumeData(job.id, job.attempt + 1, data));
+    const auto directory = service.jobPath(job.id);
+    assert(std::filesystem::exists(directory / "resume.data"));
+    auto forgotten = std::async(std::launch::async, [&] { return service.forget(job.id); });
+    removing.get_future().wait();
+    auto lateResume = std::async(std::launch::async, [&] { return service.saveResumeData(job.id, job.attempt, data); });
+    release.set_value();
+    assert(forgotten.get() && !lateResume.get());
+    assert(!std::filesystem::exists(directory));
+  }
+  {
     DownloadCoordinator service(root, hooks);
     const auto a = service.submit(request(root));
     const auto b = service.submit(request(root));

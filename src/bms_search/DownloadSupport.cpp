@@ -782,11 +782,11 @@ static bool downloadAndExtractArchiveAttempt(
       .decideExtracted = decideExtractedArchive,
       .optimizeExtracted = optimizeExtractedDownload,
       .commitArtifact =
-          [](const BmsSearchPendingArtifact &artifact,
+          [&cancelled](const BmsSearchPendingArtifact &artifact,
              std::string &errorMessage,
              std::vector<std::filesystem::path> &removedPaths) {
             return commitFindBmsPendingArtifact(artifact, errorMessage, {},
-                                                &removedPaths);
+                                                &removedPaths, {}, [&cancelled] { return !cancelled.load(); });
           }};
   const DownloadedArchiveWorkflowRequest request{
       .attempt = *attempt,

@@ -329,15 +329,21 @@ bool JobStore::forget(const std::string &id) {
   std::lock_guard lock(mutex_);
   const auto found = std::find_if(jobs_.begin(), jobs_.end(), [&](const auto &j) { return j.id == id; });
   if (found == jobs_.end() || !terminal(found->state) ||
+      found->publicationPrepared ||
       (found->result && found->result->pendingArtifact) ||
       (found->state == State::Complete && !found->libraryAcknowledged)) return false;
+  // Keep the visible row until archive deletion is durable. After a crash or
+  // cleanup failure, Remove can retry even if the directory is already gone.
+  std::error_code removalError;
+  std::filesystem::remove_all(jobPath(id), removalError);
+  std::string error;
+  if (removalError || !atomic_file::syncDirectory(root_, error))
+    throw std::runtime_error("Could not remove retained download: " +
+        (removalError ? removalError.message() : error));
   auto next = jobs_;
   next.erase(next.begin() + (found - jobs_.begin()));
   save(next);
   jobs_.swap(next);
-  // The manifest is authoritative before discarding private remnants.
-  std::error_code ignored;
-  std::filesystem::remove_all(jobPath(id), ignored);
   return true;
 }
 std::filesystem::path JobStore::jobPath(const std::string &id) const {

@@ -17,6 +17,10 @@ public:
   PublicationJournal(std::filesystem::path journal, std::filesystem::path destination,
                      DirectorySync syncDirectory = {}, std::filesystem::path transactionRoot = {});
   bool beginCopy(const std::filesystem::path &transaction);
+  // The coordinator's prepared marker makes this staging the retry source.
+  // Persist it, including its directory entries, before saving that marker.
+  bool prepareSource(const std::filesystem::path &staging,
+                     const std::function<bool()> &prepare, std::string &error);
   // Throws after a moved-but-unsynced rename; caller must preserve recovery material.
   void rename(const std::filesystem::path &from, const std::filesystem::path &to,
               std::error_code &error);
@@ -25,6 +29,9 @@ public:
   // to the installed destination do not authorize restoring or removing it.
   bool discardUnpublishedCopy();
   bool recordRemovals(const std::vector<std::filesystem::path> &paths, std::string &error);
+  // Flush cleanup before the coordinator durably marks the job Complete. Keep
+  // the install journal until that manifest write has succeeded.
+  bool finishPublication(std::string &error);
   std::vector<std::filesystem::path> removedPaths() const;
 private:
   std::filesystem::path journal_, destination_, transactionRoot_;

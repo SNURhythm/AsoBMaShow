@@ -190,15 +190,30 @@ bool copyDirectoryContents(const std::filesystem::path &source,
   if (error) {
     return false;
   }
-  for (std::filesystem::directory_iterator iterator(source, error), end;
+  for (std::filesystem::recursive_directory_iterator iterator(source, error), end;
        !error && iterator != end; iterator.increment(error)) {
-    const auto target = destination / iterator->path().filename();
-    std::filesystem::copy(
-        iterator->path(), target,
-        std::filesystem::copy_options::recursive |
-            std::filesystem::copy_options::overwrite_existing |
-            std::filesystem::copy_options::copy_symlinks,
-        error);
+    const auto target = destination / iterator->path().lexically_relative(source);
+    const auto sourceStatus = iterator->symlink_status(error);
+    if (error) break;
+    const auto targetStatus = std::filesystem::symlink_status(target, error);
+    if (error == std::errc::no_such_file_or_directory) error.clear();
+    if (error) break;
+    // copy_symlinks only controls source links. An overwrite would still
+    // follow a preserved destination link, including a dangling one. Visit
+    // directories before their children so no parent link can redirect writes.
+    if (std::filesystem::is_symlink(targetStatus)) {
+      std::filesystem::remove(target, error);
+      if (error) break;
+    }
+    if (std::filesystem::is_directory(sourceStatus))
+      std::filesystem::create_directories(target, error);
+    else if (std::filesystem::is_regular_file(sourceStatus))
+      std::filesystem::copy_file(iterator->path(), target,
+          std::filesystem::copy_options::overwrite_existing, error);
+    else if (std::filesystem::is_symlink(sourceStatus))
+      std::filesystem::copy_symlink(iterator->path(), target, error);
+    else
+      error = std::make_error_code(std::errc::operation_not_supported);
   }
   return !error;
 }
@@ -489,7 +504,8 @@ bool commitFindBmsPendingArtifact(
     const BmsSearchPendingArtifact &artifact, std::string &errorMessage,
     FindBmsRenameOperation renameOperation,
     std::vector<std::filesystem::path> *removedPaths,
-    FindBmsPrepareVariantRemoval prepareRemoval) {
+    FindBmsPrepareVariantRemoval prepareRemoval,
+    std::function<bool()> beforePublication) {
   if (removedPaths != nullptr) {
     removedPaths->clear();
   }
@@ -613,6 +629,14 @@ bool commitFindBmsPendingArtifact(
     cleanupTransaction();
     errorMessage = "Could not inspect the Find BMS destination: " +
                    error.message();
+    return false;
+  }
+  // Preparation may copy a large package. Honor a cancellation that arrived
+  // during that work before the first rename; once swapping starts, finish or
+  // restore the original destination without another cancellation boundary.
+  if (beforePublication && !beforePublication()) {
+    cleanupTransaction();
+    errorMessage = "Download cancelled.";
     return false;
   }
   if (hadDestination) {

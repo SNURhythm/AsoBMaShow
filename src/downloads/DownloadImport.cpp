@@ -18,6 +18,12 @@ std::filesystem::path importRoot(const Job &job) {
   id.insert(20, "-"); id.insert(16, "-"); id.insert(12, "-"); id.insert(8, "-");
   return findBmsStagingBasePath() / id;
 }
+FindBmsStorageNames storageNames(const Job &job) {
+  const auto extension = archiveExtensionFromName(job.request.archiveName);
+  return findBmsStorageNames(job.request.archiveName,
+      extension.empty() ? ".archive" : extension,
+      job.request.storageIdentity.empty() ? job.request.url : job.request.storageIdentity);
+}
 BmsSearchResult failed(const std::string &message) {
   return {.status = BmsSearchResult::Status::DownloadFailed, .message = message};
 }
@@ -42,8 +48,14 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
   PublicationJournal journal(privateRoot / "publication.json", artifact.destinationPath);
   const auto rememberRemovals = [&](const auto &paths, auto &message) { return journal.recordRemovals(paths, message); };
   const auto finish = [&](bool success) {
-    if (success) removed = journal.removedPaths();
-    return success;
+    if (!success) return false;
+    removed = journal.removedPaths();
+    std::error_code cleanupError;
+    std::filesystem::remove_all(artifact.stagingRoot, cleanupError);
+    if (cleanupError) { error = "Could not remove download staging: " + cleanupError.message(); return false; }
+    const auto stagingBase = artifact.stagingRoot.parent_path();
+    if (std::filesystem::exists(stagingBase) && !atomic_file::syncDirectory(stagingBase, error)) return false;
+    return journal.finishPublication(error);
   };
   const auto recovery = journal.recover();
   if (recovery == PublicationRecovery::Conflict) {
@@ -59,9 +71,12 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
   bool swapping = false;
   return finish(commitFindBmsPendingArtifact(artifact, error,
       [&](const auto &from, const auto &to, auto &failure) {
-        if (!swapping && (!prepare || !prepare(artifact))) {
-          failure = std::make_error_code(std::errc::operation_canceled);
-          return;
+        if (!swapping) {
+          std::string message;
+          if (!journal.prepareSource(artifact.stagingRoot, [&] { return prepare && prepare(artifact); }, message)) {
+            failure = std::make_error_code(std::errc::io_error);
+            return;
+          }
         }
         swapping = true;
         journal.rename(from, to, failure);
@@ -71,7 +86,23 @@ bool publish(const BmsSearchPendingArtifact &artifact, const std::filesystem::pa
 void cleanupArchiveJob(const Job &job) {
   // Derive the owned directory from the job ID, never from a persisted path.
   if (job.publicationPrepared) throw std::runtime_error("Recover the pending installation before removing it.");
-  std::filesystem::remove_all(importRoot(job));
+  const auto root = importRoot(job);
+  const auto journalPath = root.parent_path().parent_path() / job.id / "publication.json";
+  if (job.state != State::Complete && std::filesystem::exists(journalPath)) {
+    // A crash while copying precedes preparePublication, and Cancel clears
+    // the artifact. Validate the journal against either request-derived output
+    // before reclaiming its private copy; keep it on any cleanup failure.
+    const auto names = storageNames(job);
+    const auto downloadRoot = makeDownloadDirectory(job.request.libraryRoot);
+    PublicationJournal extracted(journalPath, downloadRoot / names.storageKey);
+    PublicationJournal packed(journalPath, downloadRoot / "_archives" / names.archiveName);
+    if (!extracted.discardUnpublishedCopy() && !packed.discardUnpublishedCopy())
+      throw std::runtime_error("Could not discard the interrupted installation. Retry to recover it.");
+  }
+  std::filesystem::remove_all(root);
+  std::string error;
+  if (std::filesystem::exists(root.parent_path()) && !atomic_file::syncDirectory(root.parent_path(), error))
+    throw std::runtime_error("Could not finish removing download staging: " + error);
 }
 BmsSearchResult importArchiveJob(const Job &job, const std::filesystem::path &archive,
     const std::filesystem::path &privateJobRoot, std::atomic_bool &cancelled,
@@ -81,10 +112,7 @@ BmsSearchResult importArchiveJob(const Job &job, const std::filesystem::path &ar
   std::error_code error;
   if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(archive, error)) || error)
     return failed("Downloaded archive is no longer available. Retry the download.");
-  const auto extension = archiveExtensionFromName(job.request.archiveName);
-  const auto names = findBmsStorageNames(job.request.archiveName,
-      extension.empty() ? ".archive" : extension,
-      job.request.storageIdentity.empty() ? job.request.url : job.request.storageIdentity);
+  const auto names = storageNames(job);
   const auto root = importRoot(job);
   std::filesystem::create_directories(root);
   std::filesystem::permissions(root, std::filesystem::perms::owner_all);

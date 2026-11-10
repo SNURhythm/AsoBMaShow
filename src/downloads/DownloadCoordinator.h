@@ -7,6 +7,7 @@
 #include <set>
 #include <map>
 #include <thread>
+#include <span>
 
 namespace downloads {
 using BeforePublication = std::function<bool(const BmsSearchPendingArtifact &)>;
@@ -54,6 +55,8 @@ public:
                         std::uint64_t bytes, std::uint64_t total);
   bool acceptFile(const std::string &id, std::uint64_t attempt,
                   const std::filesystem::path &completedFile);
+  bool saveResumeData(const std::string &id, std::uint64_t attempt,
+                      std::span<const std::byte> data);
   void transferFailed(const std::string &id, std::uint64_t attempt,
                       const std::string &message, long httpStatus = 0);
   std::vector<Job> readyForLibrary() const;

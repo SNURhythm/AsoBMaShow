@@ -338,6 +338,88 @@ void testExtractedCommitMergesTransactionally() {
   assert(!std::filesystem::exists(attempt->root));
 }
 
+#if !defined(_WIN32)
+void testExtractedOverlayDoesNotFollowPreservedSymlinks() {
+  for (const bool cancelSwap : {false, true}) {
+    CleanupPaths cleanup;
+    std::string error;
+    const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt("package.zip", error);
+    assert(attempt);
+    cleanup.add(attempt->root);
+    const auto downloadRoot = testDownloadRoot(*attempt);
+    cleanup.add(downloadRoot.parent_path());
+    const auto artifact = extractedArtifact(*attempt, downloadRoot);
+    const auto outside = downloadRoot.parent_path() / "unrelated";
+    writeText(outside / "chart.bms", "outside chart");
+    writeText(outside / "media/sound.wav", "outside sound");
+    std::filesystem::create_directories(artifact.destinationPath);
+    std::filesystem::create_symlink(outside / "chart.bms", artifact.destinationPath / "chart.bms");
+    std::filesystem::create_directory_symlink(outside / "media", artifact.destinationPath / "media");
+    std::filesystem::create_symlink(outside / "missing", artifact.destinationPath / "new.bms");
+    std::filesystem::create_symlink(outside / "chart.bms", artifact.destinationPath / "preserved-link");
+    writeText(attempt->extractedPath / "chart.bms", "downloaded chart");
+    writeText(attempt->extractedPath / "media/sound.wav", "downloaded sound");
+    writeText(attempt->extractedPath / "new.bms", "downloaded new chart");
+    const auto rename = [&](const auto &from, const auto &to, auto &failure) {
+      if (cancelSwap) failure = std::make_error_code(std::errc::operation_canceled);
+      else std::filesystem::rename(from, to, failure);
+    };
+    const auto installed = asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error, rename);
+    assert(readText(outside / "chart.bms") == "outside chart");
+    assert(readText(outside / "media/sound.wav") == "outside sound");
+    assert(!std::filesystem::exists(outside / "missing"));
+    assert(installed == !cancelSwap);
+    assert(std::filesystem::is_symlink(artifact.destinationPath / "preserved-link"));
+    if (installed) {
+      assert(!std::filesystem::is_symlink(artifact.destinationPath / "chart.bms"));
+      assert(!std::filesystem::is_symlink(artifact.destinationPath / "media"));
+      assert(readText(artifact.destinationPath / "chart.bms") == "downloaded chart");
+      assert(readText(artifact.destinationPath / "media/sound.wav") == "downloaded sound");
+      assert(readText(artifact.destinationPath / "new.bms") == "downloaded new chart");
+    } else {
+      assert(std::filesystem::is_symlink(artifact.destinationPath / "chart.bms"));
+      assert(std::filesystem::is_symlink(artifact.destinationPath / "media"));
+      assert(std::filesystem::exists(attempt->root));
+    }
+  }
+}
+#endif
+
+void testCancellationBeforePublicationPreservesDestination() {
+  for (const bool packed : {false, true}) {
+    CleanupPaths cleanup;
+    std::string error;
+    const auto attempt = asobmshow::bms_search::createFindBmsDownloadAttempt("package.zip", error);
+    assert(attempt);
+    cleanup.add(attempt->root);
+    const auto downloadRoot = testDownloadRoot(*attempt);
+    cleanup.add(downloadRoot.parent_path());
+    auto artifact = extractedArtifact(*attempt, downloadRoot);
+    if (packed) {
+      artifact.kind = BmsSearchPendingArtifactKind::Archive;
+      artifact.sourcePath = attempt->archivePath;
+      artifact.destinationPath = downloadRoot / "_archives/package.zip";
+    }
+    const auto source = packed ? artifact.sourcePath : artifact.sourcePath / "chart.bms";
+    const auto destination = packed ? artifact.destinationPath : artifact.destinationPath / "chart.bms";
+    writeText(source, "downloaded");
+    writeText(destination, "original");
+    const auto transaction = downloadRoot / ".asobmashow-transactions" / attempt->root.filename();
+    bool prepared = false;
+    const auto beforePublication = [&] {
+      prepared = true;
+      const auto copy = packed ? transaction / "commit" : transaction / "commit/chart.bms";
+      assert(readText(copy) == "downloaded");
+      return false; // Cancel arrived while preparing the private copy.
+    };
+    assert(!asobmshow::bms_search::commitFindBmsPendingArtifact(artifact, error, {}, nullptr, {}, beforePublication));
+    assert(prepared && error == "Download cancelled.");
+    assert(readText(destination) == "original");
+    assert(readText(source) == "downloaded");
+    assert(!std::filesystem::exists(transaction));
+  }
+}
+
 void testExtractedCommitConflictCleansPrivateTransaction() {
   CleanupPaths cleanup;
   std::string error;
@@ -1627,6 +1709,7 @@ int main(int argc, char **argv) {
 #endif
   testDownloadAttemptExtractionCleanup();
   testResolvedDownloadHandoffDoesNotStartSceneOwnedTransfer();
+  testCancelledImportCleansUnpublishedCopy();
   testDurableDownloadImportsExistingFileWithoutTransport();
   testStorageNamesDistinguishSameNamedPackages();
   testStorageNamesPreserveLongAndCompoundExtensions();
@@ -1634,7 +1717,11 @@ int main(int argc, char **argv) {
   testPixelDrainPackageUsesDownloadApi();
   testPixelDrainPackageLeavesOtherUrlsUnchanged();
   testExtractedCommitMergesTransactionally();
+#if !defined(_WIN32)
+  testExtractedOverlayDoesNotFollowPreservedSymlinks();
+#endif
   testExtractedCommitConflictCleansPrivateTransaction();
+  testCancellationBeforePublicationPreservesDestination();
   testDeleteRemovesOnlyAttempt();
   testUnsafeStagingRootIsRefused();
   testCommitRestoresDestinationWhenSwapFails();

@@ -2,6 +2,7 @@
 #include "downloads/DownloadPublicationPaths.h"
 #include "downloads/DownloadPathCodec.h"
 #include "AtomicFile.h"
+#include <algorithm>
 #include <cassert>
 #include <fstream>
 #include <random>
@@ -116,11 +117,99 @@ void testAndroidPrivatePublication(const std::filesystem::path &root) {
 #endif
 }
 
+void testPublicationCleanupDurability(const std::filesystem::path &root) {
+  for (const bool removedArchiveParent : {false, true}) {
+    const auto base = root / (removedArchiveParent ? "missing-parent" : "present-parent");
+    const auto library = base / "external/Documents/BMS/BMSSEARCH";
+    const auto destination = library / "package";
+    const auto transactionRoot = base / "external/.asobmashow-download-transactions";
+    const auto transaction = transactionRoot / "41b74c17-434d-423a-a40f-9399b2f0382c";
+    const auto journalPath = base / "internal/publication.json";
+    std::filesystem::create_directories(transaction);
+    std::filesystem::create_directories(journalPath.parent_path());
+    std::filesystem::create_directories(library / "_archives");
+    const std::vector<std::filesystem::path> variants{library / "old-package", library / "_archives/old.zip"};
+    for (const auto &path : variants) std::ofstream(path) << "old variant";
+    std::ofstream(destination) << "old package";
+    std::ofstream(transaction / "commit") << "new package";
+    bool fail = false, checkCleanup = false;
+    std::vector<std::filesystem::path> synced;
+    const auto sync = [&](const auto &directory, auto &error) {
+      if (checkCleanup) {
+        synced.push_back(directory);
+        if (fail && directory == (removedArchiveParent ? library : library / "_archives")) {
+          error = "injected variant deletion fsync failure";
+          return false;
+        }
+      }
+      return atomic_file::syncDirectory(directory, error);
+    };
+    PublicationJournal journal(journalPath, destination, sync, transactionRoot);
+    assert(journal.beginCopy(transaction));
+    std::error_code error;
+    journal.rename(destination, transaction / "backup", error);
+    assert(!error);
+    journal.rename(transaction / "commit", destination, error);
+    assert(!error);
+    std::string message;
+    assert(journal.recordRemovals(variants, message));
+    for (const auto &path : variants) std::filesystem::remove(path);
+    if (removedArchiveParent) std::filesystem::remove(library / "_archives");
+    fail = checkCleanup = true;
+    assert(!journal.finishPublication(message));
+    assert(!message.empty() && std::filesystem::exists(journalPath));
+    // Retry still flushes the recorded removals after the names disappeared.
+    fail = false;
+    synced.clear();
+    PublicationJournal restarted(journalPath, destination, sync, transactionRoot);
+    assert(restarted.recover() == PublicationRecovery::Installed);
+    assert(restarted.finishPublication(message));
+    assert(std::find(synced.begin(), synced.end(), library) != synced.end());
+    if (!removedArchiveParent)
+      assert(std::find(synced.begin(), synced.end(), library / "_archives") != synced.end());
+    assert(!std::filesystem::exists(transaction));
+    assert(std::filesystem::exists(journalPath)); // Complete is not durable yet.
+    std::string content;
+    std::ifstream installed(destination);
+    std::getline(installed, content);
+    assert(content == "new package");
+    const auto recorded = restarted.removedPaths();
+    assert(std::is_permutation(recorded.begin(), recorded.end(), variants.begin(), variants.end()));
+  }
+}
+
+void testPreparedSourceDurability(const std::filesystem::path &root) {
+  const auto staging = root / "private/imports/41b74c17-434d-423a-a40f-9399b2f0382c";
+  std::filesystem::create_directories(staging / "extracted");
+  std::ofstream(staging / "extracted/chart.bms") << "#TITLE staged chart";
+  std::ofstream(staging / "original-files.sqlite") << "ownership index";
+  bool fail = true, markerSaved = false;
+  std::vector<std::filesystem::path> synced;
+  PublicationJournal journal(root / "private/publication.json", root / "BMSSEARCH/package",
+      [&](const auto &directory, auto &error) {
+        assert(!markerSaved);
+        synced.push_back(directory);
+        if (fail && directory == staging.parent_path()) { error = "injected staging fsync failure"; return false; }
+        return atomic_file::syncDirectory(directory, error);
+      });
+  std::string message;
+  const auto prepare = [&] { markerSaved = true; return true; };
+  assert(!journal.prepareSource(staging, prepare, message));
+  assert(!markerSaved && !message.empty());
+  fail = false;
+  synced.clear();
+  assert(journal.prepareSource(staging, prepare, message));
+  assert(markerSaved);
+  assert((synced == std::vector<std::filesystem::path>{staging.parent_path(), staging.parent_path().parent_path()}));
+}
+
 int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobms-publication-" + std::to_string(std::random_device{}()));
   testAndroidPrivatePublication(root / "android");
   testIOSPublicationRelocation(root / "ios");
+  testPublicationCleanupDurability(root / "publication-cleanup");
+  testPreparedSourceDurability(root / "prepared-source");
   {
     const auto base = root / "durable-cleanup";
     const auto destination = base / "BMSSEARCH/package";

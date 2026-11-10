@@ -336,6 +336,52 @@ void testDownloadAttemptExtractionCleanup() {
   }
 }
 
+void testCancelledImportCleansUnpublishedCopy() {
+  using namespace asobmshow::bms_search;
+  for (const bool packed : {false, true}) {
+    CleanupPaths cleanup;
+    std::string error;
+    const auto fixture = createFindBmsDownloadAttempt("fixture.zip", error);
+    assert(fixture);
+    cleanup.add(fixture->root);
+    auto stagingId = fixture->root.filename().string();
+    stagingId[19] = '8';
+    const auto staging = findBmsStagingBasePath() / stagingId;
+    cleanup.add(staging);
+    downloads::Job job;
+    job.id = stagingId;
+    std::erase(job.id, '-');
+    job.state = downloads::State::Cancelled;
+    job.request.url = "https://fixture.invalid/package.zip";
+    job.request.archiveName = "package.zip";
+    job.request.libraryRoot = testDownloadRoot(*fixture).parent_path();
+    cleanup.add(job.request.libraryRoot);
+    const auto privateJobRoot = findBmsStagingBasePath().parent_path() / job.id;
+    cleanup.add(privateJobRoot);
+    writeText(privateJobRoot / "archive.1.zip", "retained archive");
+    writeText(staging / "extracted/chart.bms", "staged chart");
+    const auto names = findBmsStorageNames(job.request.archiveName, ".zip", job.request.url);
+    const auto downloadRoot = makeDownloadDirectory(job.request.libraryRoot);
+    const auto destination = packed ? downloadRoot / "_archives" / names.archiveName : downloadRoot / names.storageKey;
+    const auto transaction = downloadRoot / kFindBmsTransactionDirectoryName / stagingId;
+    downloads::PublicationJournal journal(privateJobRoot / "publication.json", destination);
+    assert(journal.beginCopy(transaction));
+    writeText(transaction / "commit/partial", "interrupted copy");
+    // Cancel clears the result, so cleanup must derive both possible publication
+    // destinations from the immutable request rather than a pending artifact.
+    assert(!job.result);
+    const auto userPath = packed ? destination : destination / "user.bms";
+    writeText(userPath, "subsequent library edit");
+    downloads::cleanupArchiveJob(job);
+    assert(!std::filesystem::exists(transaction));
+    assert(!std::filesystem::exists(privateJobRoot / "publication.json"));
+    assert(!std::filesystem::exists(staging));
+    assert(readText(userPath) == "subsequent library edit");
+    assert(readText(privateJobRoot / "archive.1.zip") == "retained archive");
+    downloads::cleanupArchiveJob(job); // Safe to retry before history removal.
+  }
+}
+
 void testDurableDownloadImportsExistingFileWithoutTransport() {
   using namespace asobmshow::bms_search;
   for (const std::string &name : std::vector<std::string>{"song.zip", "download", "download.bin", "download.archive",
