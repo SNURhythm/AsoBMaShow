@@ -891,6 +891,37 @@ void testCompatibleModesSaveIndependentSettings() {
                activation.activation->reconciledSettings.options == settings.options,
            "all mode configurations remain separately available for gameplay");
   }
+  controller->profileChanged(fixture.profileA, fixture.commits.createClient(), PresentationOrientation::Portrait);
+  expect(controller->selectGameplayTrait(-6, entry).accepted && ready(), "portrait target selection commits");
+  ViewportSettings portraitViewport;
+  portraitViewport.scaleX = 1.5F;
+  expect(controller->setViewport(entry, portraitViewport).accepted && ready(), "portrait framing commits");
+  expect(controller->editSection(entry, EntrySettingsSection::Timing, PresentationOrientation::Landscape).accepted && ready(),
+         "copy timing from landscape commits through the controller");
+  auto portrait = fixture.owner.snapshot(fixture.profileA, PresentationOrientation::Portrait).settings;
+  expect(portrait.entriesForTarget(-6).at(entry).millisecondsCriteria ==
+             saved.modeEntries.at(-6).at(entry).millisecondsCriteria &&
+             portrait.entriesForTarget(-6).at(entry).viewport == portraitViewport,
+         "copy uses same mode and skin, preserving framing");
+  expect(controller->editSection(entry, EntrySettingsSection::Options, PresentationOrientation::Landscape).accepted && ready(),
+         "copy catalog configuration validates and activates");
+  portrait = fixture.owner.snapshot(fixture.profileA, PresentationOrientation::Portrait).settings;
+  expect(portrait.entriesForTarget(-6).at(entry).options == saved.modeEntries.at(-6).at(entry).options &&
+             portrait.entriesForTarget(-6).at(entry).viewport == portraitViewport,
+         "catalog copy preserves independent viewport");
+  expect(controller->editSection(entry, EntrySettingsSection::Timing).accepted && ready(), "timing reset commits");
+  portrait = fixture.owner.snapshot(fixture.profileA, PresentationOrientation::Portrait).settings;
+  expect(portrait.entriesForTarget(-6).at(entry).millisecondsCriteria == EntryProfileSettings{}.millisecondsCriteria,
+         "timing reset restores the default condition");
+  expect(fixture.owner.snapshot(fixture.profileA).settings == saved,
+         "copy and reset never mutate the source orientation");
+  controller->setActiveTarget(-8);
+  expect(!controller->editSection(entry, EntrySettingsSection::Timing).accepted,
+         "stale section action cannot mutate a different selection");
+  controller->profileChanged(fixture.profileA, fixture.commits.createClient(), PresentationOrientation::Landscape);
+  controller->setActiveTarget(1);
+  expect(!controller->editSection(entry, EntrySettingsSection::Timing).accepted,
+         "incompatible target cannot redirect a stale action to the native target");
   expect(controller->followGameplayTrait(-7).accepted && ready(),
          "scratchless mode can follow its original mode");
   expect(controller->snapshot().follow7K1S &&

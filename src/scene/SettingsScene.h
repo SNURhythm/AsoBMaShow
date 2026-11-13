@@ -1,4 +1,6 @@
 #pragma once
+#include "../settings/AppearanceSections.h"
+#include "SettingsSearch.h"
 #include "../i18n/Localization.h"
 
 #include "../repositories/ChartRepository.h"
@@ -120,6 +122,13 @@ private:
   std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
+  enum class AppearancePage { Skin, BuiltIn, Overlays, Manage };
+  AppearancePage appearancePage = AppearancePage::Skin;
+  bool skinDetailsVisible = false;
+  std::string settingsSearchQuery;
+  bool settingsScrollResetRequested = false;
+  std::string pendingSectionAction;
+  bool pendingSectionCopy = false;
   enum class BuiltInSkinTab { Lane, Notes, Effects, Hud };
   BuiltInSkinTab builtInSkinTab = BuiltInSkinTab::Lane;
   int builtInSkinFallbackMode = 7;
@@ -157,6 +166,19 @@ private:
     Ir,
   };
 
+  bool selectSettingsTab(SettingsTab tab);
+  void openSettingsSearchResult(settings_search::Destination destination);
+  void appendSettingsSearch(View *body, const settings_scene::LayoutMetrics &metrics);
+  void appendAppearanceNavigation(View *body, const settings_scene::LayoutMetrics &metrics);
+  void appendAppearanceShortcut(View *body, const settings_scene::LayoutMetrics &metrics, AppearancePage page);
+  i18n::Text orientationLabel(AppSettings::PresentationOrientation orientation) const;
+  i18n::Text appearanceScope(int mode, bool shared, const i18n::Text &skinName) const;
+  void appendSectionActions(View *body, const settings_scene::LayoutMetrics &metrics,
+      const std::string &key, const i18n::Text &section, const i18n::Text &scope,
+      bool enabled, std::function<void(bool)> apply, bool allowCopy = true);
+  void appendBuiltInSectionActions(View *body, const settings_scene::LayoutMetrics &metrics,
+      settings_edit::AppearanceSection section, int mode, const i18n::Text &label);
+  void appendSharedOverlaySettings(View *body, const settings_scene::LayoutMetrics &metrics);
   View *rootLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
   TextInputBox *offsetInput = nullptr;
@@ -643,6 +665,9 @@ private:
       const settings_scene::LayoutMetrics &metrics, int skinType,
       const skin::GameplaySkinSelection &selection, bool ordinaryActionsEnabled,
       float menuWidth);
+  void appendCustomSectionActions(View *body, const settings_scene::LayoutMetrics &metrics,
+      const skin::GameplaySkinEntryRow &row, skin::EntrySettingsSection section,
+      const i18n::Text &label, bool enabled);
   void appendGameplaySkinTimingSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);

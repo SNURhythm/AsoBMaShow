@@ -11,6 +11,17 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   column->setGap(static_cast<float>(metrics.secondaryGap));
   column->setWidth(static_cast<float>(metrics.cardsWidth));
 
+  appendAppearanceNavigation(column, metrics);
+  if (appearancePage == AppearancePage::Overlays) {
+    appendSharedOverlaySettings(column, metrics);
+    return column;
+  }
+  if (appearancePage == AppearancePage::BuiltIn) {
+    appendBuiltInSkinFallbackSettings(column, metrics);
+    appendScratchlessFallbackSettings(column, metrics);
+    return column;
+  }
+
   auto *body = new View();
   body->setFlexDirection(FlexDirection::Column);
   body->setGap(static_cast<float>(metrics.cardGap));
@@ -24,8 +35,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       metrics.smallTextSize, app_theme::textMuted()));
   column->addView(makeCard(metrics, i18n::message("settings.skins.skins.label"), i18n::message("settings.skins.availability.label"), body,
                            metrics.modeCardHeight, metrics.cardsWidth));
-  appendBuiltInSkinFallbackSettings(column, metrics);
-  appendScratchlessFallbackSettings(column, metrics);
+  appendAppearanceShortcut(column, metrics, AppearancePage::BuiltIn);
   return column;
 }
 

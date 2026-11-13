@@ -249,10 +249,11 @@ void SettingsScene::ensureLayoutUpToDate() {
     return;
   }
 
-  const bool preserveScroll = rootLayout != nullptr &&
+  const bool preserveScroll = !settingsScrollResetRequested && rootLayout != nullptr &&
                               activeTab == lastLaidOutTab &&
                               previewActive == lastLaidOutPreviewActive &&
                               (!previewActive || previewPanelPage == lastLaidOutPreviewPanelPage);
+  settingsScrollResetRequested = false;
   if (!preserveScroll) {
     lastLayoutScrollOffset = 0.0F;
   } else if (scrollView != nullptr) {
@@ -539,7 +540,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
 #endif
 
   const int foldButtonSize = metrics.compact ? 54 : 58;
-  const int previewPanelPageCount = previewHasSelectedSkin ? 3 : 4;
+  const int previewPanelPageCount = 3;
   if (previewPanelPage < 0 || previewPanelPage >= previewPanelPageCount) {
     previewPanelPage = 0;
   }
@@ -728,6 +729,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     auto *labelText =
         makeText(label, metrics.bodyTextSize + 2, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
+    labelText->setAutoFitText(true);
     auto *button = makeControlButton(previewTabWidth, metrics.actionButtonHeight, labelText);
     tab_button::style(button, previewPanelPage == page);
     button->setOnClickListener([this, page]() {
@@ -741,10 +743,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   };
   previewTabs->addView(makePreviewTab(0, i18n::message("settings.preview_layout.scroll.label")));
   previewTabs->addView(makePreviewTab(1, i18n::message(previewHasSelectedSkin
-      ? "settings.skins.skin.label" : "settings.preview_layout.lane.label")));
-  previewTabs->addView(makePreviewTab(2, "HUD"));
-  if (!previewHasSelectedSkin)
-    previewTabs->addView(makePreviewTab(3, i18n::message("settings.notes.title")));
+      ? "settings.clarity.skin_edit" : "settings.clarity.builtin")));
+  previewTabs->addView(makePreviewTab(2, i18n::message("settings.clarity.overlays")));
   previewPanel->addView(previewTabs);
 
   auto *previewScroll = new ScrollView();
@@ -763,7 +763,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->addView(previewScroll);
 
   if (previewPanelPage == 0) {
+    previewControls->addView(makeWrappedText(i18n::message("settings.clarity.layout_scope",
+        {{"layout", orientationLabel(context.settings.activePresentationOrientation())}}),
+        metrics.smallTextSize, app_theme::textSecondary()));
     previewControls->addView(buildPreviewScrollControls(metrics));
+    appendBuiltInSectionActions(previewControls, metrics, settings_edit::AppearanceSection::LaneCovers,
+        previewKeyMode, i18n::message("settings.lane.covers.title"));
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   } else if (previewPanelPage == 1 && previewSkinRow != nullptr) {
     previewControls->addView(makeWrappedText(
@@ -778,22 +783,13 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     appendGameplaySkinViewportSettings(previewControls, metrics,
                                         *previewSkinRow, previewSkinActionsEnabled);
 #endif
-  } else if (previewPanelPage == 1) {
-    if (previewKeyMode == 5 || previewKeyMode == 7 ||
-        previewKeyMode == -5 || previewKeyMode == -7) {
-      previewControls->addView(buildScratchLanePositionControl(metrics));
-    }
-    appendBuiltInLaneGeometryControls(previewControls, metrics, previewKeyMode);
-    appendBuiltInLaneOpacityControls(previewControls, metrics, previewKeyMode);
-    appendBuiltInJudgeLineControls(previewControls, metrics, previewKeyMode);
-    appendBuiltInMeasureLineControls(previewControls, metrics, previewKeyMode);
-    appendBuiltInBeamLengthControls(previewControls, metrics);
-
-    previewControls->addView(buildKeybombControls(metrics, previewKeyMode, true));
-  } else if (previewPanelPage == 3 && !previewHasSelectedSkin) {
-    appendBuiltInNoteControls(previewControls, metrics, previewKeyMode);
+  } else if (previewPanelPage == 2 || previewHasSelectedSkin) {
+    appendSharedOverlaySettings(previewControls, metrics);
   } else {
-    appendSelectedSkinHudSettings(previewControls, metrics, !previewHasSelectedSkin);
+    const bool followsOriginal =
+        (previewKeyMode == -5 && context.settings.presentation().skin.follow5K1S) ||
+        (previewKeyMode == -7 && context.settings.presentation().skin.follow7K1S);
+    appendBuiltInGameplayTraitSettings(previewControls, metrics, previewKeyMode, followsOriginal);
   }
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -1434,6 +1430,8 @@ View *SettingsScene::buildBackgroundTab(const LayoutMetrics &metrics) {
 
 View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+  cardsColumn->addView(makeWrappedText(i18n::message("settings.clarity.profile_scope"),
+      metrics.smallTextSize, app_theme::textSecondary()));
 
   auto *previewControls = new View();
   previewControls->setFlexDirection(FlexDirection::Column);
@@ -1466,7 +1464,14 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   });
   covers->setWidthPercent(100);
   covers->refresh(context.settings.presentation().laneCoverState());
+  noteStartPanel->addView(makeWrappedText(i18n::message("settings.clarity.layout_scope",
+      {{"layout", orientationLabel(context.settings.activePresentationOrientation())}}),
+      metrics.smallTextSize, app_theme::textSecondary()));
   noteStartPanel->addView(covers);
+  appendBuiltInSectionActions(noteStartPanel, metrics, settings_edit::AppearanceSection::LaneCovers,
+      7, i18n::message("settings.lane.covers.title"));
+  noteStartPanel->addView(makeWrappedText(i18n::message("settings.clarity.profile_scope"),
+      metrics.smallTextSize, app_theme::textSecondary()));
 
   hispeedAutoAdjustModeText =
       makeText(i18n::message("settings.lane.hi_speed_auto_adjust_off.label"), metrics.bodyTextSize + 6,
@@ -2301,6 +2306,12 @@ void SettingsScene::initView() {
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
       makeHeading(i18n::message("settings.navigation.settings.label"), metrics.titleSize));
+  auto *profileScope = makeWrappedText(i18n::message("settings.clarity.profile",
+      {{"profile", context.profileManager.activeProfile().displayName}}),
+      metrics.smallTextSize, app_theme::textSecondary());
+  headerText->addView(profileScope);
+  headerText->setFlexShrink(1);
+  headerText->setMinWidth(0);
   header->addView(headerText);
 
   auto *backLabel =
@@ -2332,6 +2343,7 @@ void SettingsScene::initView() {
   });
   header->addView(backButton);
   rootLayout->addView(header);
+  appendSettingsSearch(rootLayout, metrics);
 
   const bool portrait = rendering::window_height > rendering::window_width;
   const int tabColumnWidth = portrait ? metrics.contentWidth : std::min(
@@ -2363,39 +2375,7 @@ void SettingsScene::initView() {
   tabControls->setGap(0);
   tabControls->setWidth(static_cast<float>(portrait ? metrics.contentWidth : tabColumnWidth));
   tabControls->setFlexShrink(0.0f);
-  auto selectTab = [this](SettingsTab tab) {
-    if (activeTab == tab) {
-      return;
-    }
-    if (activeTab == SettingsTab::Display) {
-      cancelDisplayPreviewForTabExit();
-    }
-    if (activeTab == SettingsTab::Input &&
-        inputCaptureController != nullptr) {
-      inputCaptureController->cancel();
-      inputCaptureAction.reset();
-      inputViewRebuildGate.reset();
-      inputLastViewSignature.clear();
-    }
-    if (activeTab == SettingsTab::Profile && profileController != nullptr) {
-      const auto phase = profileController->phase();
-      if (phase == ProfileSettingsPhase::PickingImport ||
-          phase == ProfileSettingsPhase::Importing ||
-          phase == ProfileSettingsPhase::PreparingExport ||
-          phase == ProfileSettingsPhase::PickingExport) {
-        return;
-      }
-      profileInlineEditor.clear();
-      profileController->cancelConfirmation();
-    }
-    activeTab = tab;
-    if (activeTab == SettingsTab::GameplaySkins) {
-#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-      ensureGameplaySkinSettingsController();
-#endif
-    }
-    lastLayoutWidth = -1;
-  };
+  auto selectTab = [this](SettingsTab tab) { selectSettingsTab(tab); };
   const int tabHeight = metrics.compact ? metrics.actionButtonHeight : 72;
   const auto tabIcon = [](SettingsTab tab) -> uint32_t {
     switch (tab) {
@@ -2427,6 +2407,9 @@ void SettingsScene::initView() {
     }
     auto *button = new Button(0, 0, tabColumnWidth, tabHeight);
     button->setFlexShrink(0);
+    labelText->setWrap(true);
+    labelText->setMinWidth(0);
+    labelText->setFlexShrink(1);
     auto *tabContent = action_button::makeInlineContent(labelText, tabIcon(tab));
     tabContent->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
     button->setContentView(tabContent);
@@ -2773,14 +2756,14 @@ void SettingsScene::appendSelectedSkinHudSettings(
         return choices;
       };
   appendChoices(
-      "FAST/SLOW",
+      i18n::message("settings.clarity.fastslow_condition"),
       timingChoices(
           context.settings.presentation().judgementTimingFastSlowCriteria,
           [this](AppSettings::JudgementTimingDisplayCriteria criteria) {
             context.settings.presentation().judgementTimingFastSlowCriteria = criteria;
           }));
   appendChoices(
-      "+/- ms",
+      i18n::message("settings.clarity.ms_condition"),
       timingChoices(
           context.settings.presentation().judgementTimingMillisecondsCriteria,
           [this](AppSettings::JudgementTimingDisplayCriteria criteria) {
@@ -2789,53 +2772,93 @@ void SettingsScene::appendSelectedSkinHudSettings(
 
   }
 
-  appendHeading(i18n::message("settings.skins.application_judgement_hud.label"));
-  appendToggle(i18n::message("settings.skins.judgement_indicator.label"),
-               context.settings.presentation().judgementIndicatorEnabled,
-               [this](bool enabled) {
-                 context.settings.presentation().judgementIndicatorEnabled = enabled;
-                 persistSettings();
-               });
-  appendNumeric(
-      i18n::message("settings.skins.indicator_y.percent_label"),
-      [this] { return std::to_string(
-          judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY)); },
-      std::to_string(judgementIndicatorYToPercent(AppSettings::kDefaultJudgementIndicatorY)),
-      [this](const std::string &text) {
-        context.settings.presentation().judgementIndicatorY = judgementIndicatorPercentToY(
-            std::clamp(sanitizeOffsetComponent(
-                           text, judgementIndicatorYToPercent(
-                                     context.settings.presentation().judgementIndicatorY)),
-                       0, 100));
-        persistSettings();
-      });
-  appendNumeric(i18n::message("settings.skins.indicator_width.percent_label"),
-                [this] { return std::to_string(judgementIndicatorWidthScaleToPercent(
-                    context.settings.presentation().judgementIndicatorWidthScale)); },
-                std::to_string(judgementIndicatorWidthScaleToPercent(
-                    AppSettings::kDefaultJudgementIndicatorWidthScale)),
-                [this](const std::string &text) {
-                  const int current = judgementIndicatorWidthScaleToPercent(
-                      context.settings.presentation().judgementIndicatorWidthScale);
-                  context.settings.presentation().judgementIndicatorWidthScale =
-                      judgementIndicatorWidthPercentToScale(std::clamp(
-                          sanitizeOffsetComponent(text, current), 50, 200));
-                  persistSettings();
-                });
-  appendJudgementIndicatorDimensionSettings(body, metrics);
-  appendJudgementIndicatorColorizationSettings(body, metrics);
-  appendNumeric(
-      i18n::message("settings.skins.indicator_range_ms.label"),
-      [this] { return std::to_string(context.settings.presentation().judgementIndicatorRangeMilliseconds); },
-      std::to_string(AppSettings::kDefaultJudgementIndicatorRangeMilliseconds),
-      [this](const std::string &text) {
-        context.settings.presentation().judgementIndicatorRangeMilliseconds =
-            clampJudgementIndicatorRangeMilliseconds(sanitizeOffsetComponent(
-                text, context.settings.presentation().judgementIndicatorRangeMilliseconds));
-        persistSettings();
-      });
+  if (!includeBuiltInOnlySettings) {
+    appendHeading(i18n::message("settings.clarity.overlays"));
+    appendToggle(i18n::message("settings.skins.judgement_indicator.label"),
+                 context.settings.presentation().judgementIndicatorEnabled,
+                 [this](bool enabled) {
+                   context.settings.presentation().judgementIndicatorEnabled = enabled;
+                   persistSettings();
+                 });
+    appendNumeric(
+        i18n::message("settings.skins.indicator_y.percent_label"),
+        [this] { return std::to_string(
+            judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY)); },
+        std::to_string(judgementIndicatorYToPercent(AppSettings::kDefaultJudgementIndicatorY)),
+        [this](const std::string &text) {
+          context.settings.presentation().judgementIndicatorY = judgementIndicatorPercentToY(
+              std::clamp(sanitizeOffsetComponent(
+                             text, judgementIndicatorYToPercent(
+                                       context.settings.presentation().judgementIndicatorY)),
+                         0, 100));
+          persistSettings();
+        });
+    appendNumeric(i18n::message("settings.skins.indicator_width.percent_label"),
+                  [this] { return std::to_string(judgementIndicatorWidthScaleToPercent(
+                      context.settings.presentation().judgementIndicatorWidthScale)); },
+                  std::to_string(judgementIndicatorWidthScaleToPercent(
+                      AppSettings::kDefaultJudgementIndicatorWidthScale)),
+                  [this](const std::string &text) {
+                    const int current = judgementIndicatorWidthScaleToPercent(
+                        context.settings.presentation().judgementIndicatorWidthScale);
+                    context.settings.presentation().judgementIndicatorWidthScale =
+                        judgementIndicatorWidthPercentToScale(std::clamp(
+                            sanitizeOffsetComponent(text, current), 50, 200));
+                    persistSettings();
+                  });
+    appendJudgementIndicatorDimensionSettings(body, metrics);
+    appendJudgementIndicatorColorizationSettings(body, metrics);
+    appendNumeric(
+        i18n::message("settings.skins.indicator_range_ms.label"),
+        [this] { return std::to_string(context.settings.presentation().judgementIndicatorRangeMilliseconds); },
+        std::to_string(AppSettings::kDefaultJudgementIndicatorRangeMilliseconds),
+        [this](const std::string &text) {
+          context.settings.presentation().judgementIndicatorRangeMilliseconds =
+              clampJudgementIndicatorRangeMilliseconds(sanitizeOffsetComponent(
+                  text, context.settings.presentation().judgementIndicatorRangeMilliseconds));
+          persistSettings();
+        });
 
-  if (includeBuiltInOnlySettings) {
+    appendToggle(i18n::message("settings.skins.judgement_counter.label"), context.settings.presentation().judgementCounterEnabled,
+                 [this](bool enabled) {
+                   context.settings.presentation().judgementCounterEnabled = enabled;
+                   persistSettings();
+                 });
+    appendChoices(i18n::message("settings.skins.counter_position.label"),
+                  {{.label = i18n::message("settings.skins.top.label"),
+                    .selected = context.settings.presentation().judgementCounterPosition ==
+                                AppSettings::JudgementCounterPosition::Top,
+                    .action =
+                        [this]() {
+                          context.settings.presentation().judgementCounterPosition =
+                              AppSettings::JudgementCounterPosition::Top;
+                          persistSettings();
+                          lastLayoutWidth = -1;
+                        }},
+                   {.label = i18n::message("settings.skins.left.label"),
+                    .selected = context.settings.presentation().judgementCounterPosition ==
+                                AppSettings::JudgementCounterPosition::Left,
+                    .action =
+                        [this]() {
+                          context.settings.presentation().judgementCounterPosition =
+                              AppSettings::JudgementCounterPosition::Left;
+                          persistSettings();
+                          lastLayoutWidth = -1;
+                        }},
+                   {.label = i18n::message("settings.skins.right.label"),
+                    .selected = context.settings.presentation().judgementCounterPosition ==
+                                AppSettings::JudgementCounterPosition::Right,
+                    .action = [this]() {
+                      context.settings.presentation().judgementCounterPosition =
+                          AppSettings::JudgementCounterPosition::Right;
+                      persistSettings();
+                      lastLayoutWidth = -1;
+                    }}});
+
+    return;
+  }
+
+  {
     appendChoices(
         i18n::message("settings.skins.indicator_layout.label"),
         {{.label = i18n::message("settings.skins.hud.position.world.label"),
@@ -2857,46 +2880,6 @@ void SettingsScene::appendSelectedSkinHudSettings(
             persistSettings();
             lastLayoutWidth = -1;
           }}});
-  }
-
-  appendToggle(i18n::message("settings.skins.judgement_counter.label"), context.settings.presentation().judgementCounterEnabled,
-               [this](bool enabled) {
-                 context.settings.presentation().judgementCounterEnabled = enabled;
-                 persistSettings();
-               });
-  appendChoices(i18n::message("settings.skins.counter_position.label"),
-                {{.label = i18n::message("settings.skins.top.label"),
-                  .selected = context.settings.presentation().judgementCounterPosition ==
-                              AppSettings::JudgementCounterPosition::Top,
-                  .action =
-                      [this]() {
-                        context.settings.presentation().judgementCounterPosition =
-                            AppSettings::JudgementCounterPosition::Top;
-                        persistSettings();
-                        lastLayoutWidth = -1;
-                      }},
-                 {.label = i18n::message("settings.skins.left.label"),
-                  .selected = context.settings.presentation().judgementCounterPosition ==
-                              AppSettings::JudgementCounterPosition::Left,
-                  .action =
-                      [this]() {
-                        context.settings.presentation().judgementCounterPosition =
-                            AppSettings::JudgementCounterPosition::Left;
-                        persistSettings();
-                        lastLayoutWidth = -1;
-                      }},
-                 {.label = i18n::message("settings.skins.right.label"),
-                  .selected = context.settings.presentation().judgementCounterPosition ==
-                              AppSettings::JudgementCounterPosition::Right,
-                  .action = [this]() {
-                    context.settings.presentation().judgementCounterPosition =
-                        AppSettings::JudgementCounterPosition::Right;
-                    persistSettings();
-                    lastLayoutWidth = -1;
-                  }}});
-
-  if (!includeBuiltInOnlySettings) {
-    return;
   }
 
   appendHeading(i18n::message("settings.skins.gauge.label"));

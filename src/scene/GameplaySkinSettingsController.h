@@ -72,6 +72,8 @@ struct GameplaySkinSettingsSnapshot {
   std::string cachedPresentationKey;
 };
 
+enum class EntrySettingsSection { Timing, Options, Framing };
+
 struct ControllerActionResult {
   bool accepted = false;
   bool asynchronous = false;
@@ -154,6 +156,10 @@ public:
   [[nodiscard]] ControllerActionResult
   requestRemoval(const SkinPackageId &package);
   [[nodiscard]] ControllerActionResult resetLayout(const SkinEntryId &entry);
+
+  [[nodiscard]] ControllerActionResult editSection(
+      const SkinEntryId &entry, EntrySettingsSection section,
+      std::optional<PresentationOrientation> copyFrom = std::nullopt);
 
   void cancelRescan() noexcept;
   void close() noexcept;

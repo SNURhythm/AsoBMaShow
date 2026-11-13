@@ -1462,3 +1462,51 @@ void GameplaySkinSettingsController::cancelRescan() noexcept {
 void GameplaySkinSettingsController::close() noexcept { impl_->close(); }
 
 } // namespace skin
+
+namespace skin {
+ControllerActionResult GameplaySkinSettingsController::editSection(
+    const SkinEntryId &entry, EntrySettingsSection section,
+    std::optional<PresentationOrientation> copyFrom) {
+  if (impl_->closed || impl_->hasControllerOperation()) {
+    return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
+  }
+  const auto declared = selectableGameplaySkinType(
+      impl_->findCatalogEntry(entry, impl_->catalog()));
+  if (!declared || (impl_->activeTarget &&
+      skinSourceTypeForTarget(*impl_->activeTarget) != *declared)) {
+    return rejected(i18n::message("settings.skins.validated_skin_required_configuration.message"));
+  }
+  const int target = impl_->configurationTarget(*declared);
+  auto candidate = impl_->dependencies.profileOwner.snapshot(
+      impl_->dependencies.profileId, impl_->dependencies.orientation).settings;
+  const auto selected = candidate.selectedSkinEntries.find(target);
+  if (selected == candidate.selectedSkinEntries.end() || selected->second != entry ||
+      candidate.effectiveTarget(target) != target) {
+    return rejected(i18n::message("settings.clarity.selection_changed"));
+  }
+  EntryProfileSettings source;
+  if (copyFrom) {
+    const auto sourceProfile = impl_->dependencies.profileOwner.snapshot(
+        impl_->dependencies.profileId, *copyFrom).settings;
+    const auto &entries = sourceProfile.entriesForTarget(target);
+    if (const auto found = entries.find(entry); found != entries.end()) source = found->second;
+  }
+  auto &destination = candidate.entriesForTarget(target)[entry];
+  switch (section) {
+  case EntrySettingsSection::Timing:
+    destination.fastSlowCriteria = source.fastSlowCriteria;
+    destination.millisecondsCriteria = source.millisecondsCriteria;
+    break;
+  case EntrySettingsSection::Framing:
+    destination.viewport = source.viewport;
+    break;
+  case EntrySettingsSection::Options:
+    destination.options = std::move(source.options);
+    destination.filePaths = std::move(source.filePaths);
+    destination.offsets = std::move(source.offsets);
+    return impl_->prepareActivation(entry, std::move(candidate),
+        i18n::message("settings.skins.validating_option.progress"), target);
+  }
+  return impl_->submitProfileOnly(std::move(candidate));
+}
+} // namespace skin

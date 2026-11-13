@@ -151,6 +151,8 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     button->setOnClickListener([this, page]() {
       if (builtInSkinTab == page) return;
       builtInSkinTab = page;
+      pendingSectionAction.clear();
+      settingsScrollResetRequested = true;
       lastLayoutWidth = -1;
     });
     tabs->addView(button);
@@ -158,13 +160,16 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
   appendTab(BuiltInSkinTab::Lane, i18n::message("settings.preview_layout.lane.label"));
   appendTab(BuiltInSkinTab::Notes, i18n::message("settings.notes.title"));
   appendTab(BuiltInSkinTab::Effects, i18n::message("settings.skins.effects.label"));
-  appendTab(BuiltInSkinTab::Hud, "HUD");
+  appendTab(BuiltInSkinTab::Hud, i18n::message("settings.clarity.builtin_hud"));
   body->addView(tabs);
-  body->addView(makeWrappedText(i18n::message("settings.skins.builtin_scope.description"),
-                                metrics.smallTextSize, app_theme::textSecondary()));
+  const bool shared = builtInSkinTab == BuiltInSkinTab::Hud;
+  body->addView(makeWrappedText(appearanceScope(keyMode, shared,
+      i18n::message("settings.clarity.builtin")), metrics.smallTextSize, app_theme::textSecondary()));
 
   switch (builtInSkinTab) {
   case BuiltInSkinTab::Lane: {
+    body->addView(makeWrappedText(i18n::message("settings.clarity.shared_geometry"),
+        metrics.smallTextSize, app_theme::textSecondary()));
     if (keyMode == 5 || keyMode == 7 || keyMode == -5 || keyMode == -7) {
       body->addView(buildScratchLanePositionControl(metrics));
     }
@@ -172,19 +177,30 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     appendBuiltInLaneOpacityControls(body, metrics, keyMode);
     appendBuiltInJudgeLineControls(body, metrics, keyMode);
     appendBuiltInMeasureLineControls(body, metrics, keyMode);
+    appendBuiltInSectionActions(body, metrics, settings_edit::AppearanceSection::Lane,
+        keyMode, i18n::message("settings.clarity.builtin_lane"));
     break;
   }
   case BuiltInSkinTab::Notes:
     appendBuiltInNoteControls(body, metrics, keyMode);
+    appendBuiltInSectionActions(body, metrics, settings_edit::AppearanceSection::Notes,
+        keyMode, i18n::message("settings.notes.title"));
     break;
   case BuiltInSkinTab::Effects:
+    body->addView(makeWrappedText(i18n::message("settings.clarity.shared_effects"),
+        metrics.smallTextSize, app_theme::textSecondary()));
     appendBuiltInBeamLengthControls(body, metrics);
     body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
                                   metrics.bodyTextSize, app_theme::textPrimary()));
     body->addView(buildKeybombControls(metrics, keyMode, false));
+    appendBuiltInSectionActions(body, metrics, settings_edit::AppearanceSection::Effects,
+        keyMode, i18n::message("settings.skins.effects.label"));
     break;
   case BuiltInSkinTab::Hud:
     appendSelectedSkinHudSettings(body, metrics, true);
+    appendBuiltInSectionActions(body, metrics, settings_edit::AppearanceSection::Hud,
+        keyMode, i18n::message("settings.clarity.builtin_hud"));
+    appendAppearanceShortcut(body, metrics, AppearancePage::Overlays);
     break;
   }
 }
@@ -197,6 +213,8 @@ void SettingsScene::appendBuiltInSkinFallbackSettings(
   auto *mode = new DropdownView({
       .onOptionSelected = [this](const std::string &id) {
         builtInSkinFallbackMode = std::stoi(id);
+        pendingSectionAction.clear();
+        settingsScrollResetRequested = true;
         lastLayoutWidth = -1;
       }}, overlayPortal);
   std::vector<DropdownView::Option> options;

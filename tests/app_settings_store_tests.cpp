@@ -1,4 +1,6 @@
 #include "../src/AppSettingsStore.h"
+#include "../src/settings/AppearanceSections.h"
+#include "../src/scene/SettingsSearch.h"
 #include "../src/ScratchlessGameplayPolicy.h"
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
@@ -3162,7 +3164,69 @@ void testAudioTimingProfileValidation() {
          "malformed profile falls back to migrated legacy values");
 }
 
+void testAppearanceSections() {
+  using namespace settings_edit;
+  using Orientation = AppSettings::PresentationOrientation;
+  AppSettings::PresentationSettings source(Orientation::Landscape);
+  AppSettings::PresentationSettings destination(Orientation::Portrait);
+  source.judgementCounterPosition = AppSettings::JudgementCounterPosition::Right;
+  source.judgementIndicatorY = 0.2F;
+  source.judgementTextY = 0.3F;
+  source.builtInNotes[7][0][built_in_notes::Type::Normal].thickness = 200;
+  destination.builtInNotes[5][0][built_in_notes::Type::Normal].thickness = 150;
+  const auto untouched = destination;
+  copyAppearanceSection(destination, source, AppearanceSection::SharedOverlays, 7, Orientation::Portrait);
+  expect(destination.judgementIndicatorY == source.judgementIndicatorY &&
+             destination.judgementCounterPosition == source.judgementCounterPosition,
+         "overlay copy uses the source orientation values");
+  expect(destination.judgementTextY == untouched.judgementTextY &&
+             destination.builtInNotes == untouched.builtInNotes && destination.skin == untouched.skin,
+         "overlay copy preserves built-in appearance and skin selection");
+  copyAppearanceSection(destination, source, AppearanceSection::Notes, 7, Orientation::Portrait);
+  expect(destination.builtInNotes.at(7) == source.builtInNotes.at(7) &&
+             destination.builtInNotes.at(5) == untouched.builtInNotes.at(5),
+         "note copy only replaces the requested mode");
+  resetAppearanceSection(destination, AppearanceSection::Notes, 7, Orientation::Portrait);
+  expect(!destination.builtInNotes.contains(7) && destination.builtInNotes.contains(5),
+         "reset restores implicit defaults without erasing other modes");
+  resetAppearanceSection(destination, AppearanceSection::SharedOverlays, 7, Orientation::Portrait);
+  expect(destination.judgementCounterPosition == untouched.judgementCounterPosition,
+         "reset uses portrait defaults");
+  destination.judgementTimingY = 0.1F;
+  resetAppearanceSection(destination, AppearanceSection::Hud, 7, Orientation::Portrait);
+  expect(destination.judgementTimingY == untouched.judgementTimingY,
+         "HUD reset uses portrait timing position");
+  destination.setLaneCoverState({.laneCoverPercent = 35, .laneCoverEnabled = false});
+  copyAppearanceSection(destination, source, AppearanceSection::LaneCovers, 7, Orientation::Portrait);
+  expect(destination.laneCoverState() == source.laneCoverState() &&
+             source.judgementIndicatorY == 0.2F,
+         "cover copy preserves its source");
+  source.laneAngleDegrees = -90;
+  copyAppearanceSection(destination, source, AppearanceSection::Lane, 7, Orientation::Portrait);
+  expect(destination.laneAngleDegrees >= player_settings::presentationGeometryPolicy(Orientation::Portrait).angle.minimum,
+         "geometry copy clamps to destination orientation limits");
+}
+
+void testSettingsSearch() {
+  using namespace settings_search;
+  const auto resolve = [](std::string_view id) {
+    return id == "settings.clarity.overlays" ? std::string("공유 오버레이") : std::string(id);
+  };
+  const auto timing = search("  +/- MS  ", resolve);
+  expect(!timing.empty() && timing.front().destination == Destination::Skin,
+         "search accepts aliases and routes custom timing to selected skin");
+  expect(!search("FAST/SLOW", resolve).empty() && !search("+-ms", resolve).empty(),
+         "search matches the displayed timing labels exactly");
+  const auto localized = search("공유", resolve);
+  expect(!localized.empty() && localized.front().destination == Destination::Overlays,
+         "search uses localized section titles");
+  expect(search("not-a-setting-xyz", resolve).empty(), "unknown search has no matches");
+  expect(search("   ", resolve).empty(), "empty query does not cover the settings page");
+}
+
 int main() {
+  testAppearanceSections();
+  testSettingsSearch();
   testAudioDeviceTimingProfiles();
   testAudioTimingProfileValidation();
   testMonoAudioRoundTrip();
