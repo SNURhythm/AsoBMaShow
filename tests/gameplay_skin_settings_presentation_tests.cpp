@@ -591,6 +591,11 @@ void testPreviewReloadKeyTracksCommittedSkinSettingsOnly() {
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
           "bottom padding updates the live preview even though the skin digest excludes viewport");
   changed = snapshot;
+  changed.entries.front().settings.fastSlowCriteria =
+      player_settings::JudgementTimingDisplayCriteria::Off;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
+          "FAST/SLOW criteria edits reload the live preview");
+  changed = snapshot;
   changed.entries.front().revisionDigest = "new-revision";
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
           "skin revalidation reloads a changed installed revision");

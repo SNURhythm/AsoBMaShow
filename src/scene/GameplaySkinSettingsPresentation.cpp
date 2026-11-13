@@ -214,6 +214,7 @@ void encodeSettings(PresentationKeyEncoder &encoder,
     encoder.signedNumber(value.a);
   }
   encodeViewport(encoder, settings.viewport);
+  encodeEnum(encoder, settings.fastSlowCriteria);
 }
 
 const char *progressPhaseLabel(SkinProgressPhase phase) {
@@ -341,6 +342,7 @@ std::string gameplaySkinPreviewConfigurationKey(
     encoder.text(row->revisionDigest);
     encoder.text(row->configurationDigest);
     encodeViewport(encoder, row->settings.viewport);
+    encodeEnum(encoder, row->settings.fastSlowCriteria);
   }
   return std::move(encoder).finish();
 }

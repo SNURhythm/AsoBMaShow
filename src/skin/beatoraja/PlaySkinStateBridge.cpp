@@ -2185,7 +2185,8 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 1363: {
     const int region = *id < 1260 ? 0 : *id < 1360 ? 1 : 2;
     const auto &judge = judgeRegions_[region];
-    return {.value = judge.judgement != None &&
+    return {.value = player_settings::judgementMeetsTimingCriteria(
+                         judge.judgement, context_.configuration.fastSlowCriteria) &&
                      (*id % 2 == 0 ? judge.fastSlowMicros < 0
                                    : judge.fastSlowMicros > 0),
             .supported = true};

@@ -382,6 +382,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
                    .keepHudFixed = true,
                    .playAreaZoom = 1.25F,
                    .playAreaBottomPaddingPercent = 12.5F},
+      .fastSlowCriteria = AppSettings::JudgementTimingDisplayCriteria::BadOrBelow,
   };
   expected.sanitize();
   const std::string expectedConfigurationDigest =
@@ -891,6 +892,8 @@ void testCompatibleSkinModesPersistIndependentConfigurations() {
   settings.presentation().skin.modeEntries[-8][entry].viewport.scaleX = 2.0F;
   settings.presentation().skin.modeEntries[-6][entry].viewport.playAreaBottomPaddingPercent = 8.0F;
   settings.presentation().skin.modeEntries[-8][entry].viewport.playAreaBottomPaddingPercent = 16.0F;
+  settings.presentation().skin.modeEntries[-8][entry].fastSlowCriteria =
+      AppSettings::JudgementTimingDisplayCriteria::Off;
   std::string error;
   expect(AppSettingsStore::Save(path, settings, error), "independent mode settings save: " + error);
   const auto loaded = AppSettingsStore::Load(path);
@@ -1055,8 +1058,19 @@ void testSkinPlayAreaBottomPaddingDefaultsAndBounds() {
   auto document = nlohmann::json::parse(readFile(path));
   document["presentations"]["landscape"]["skin"]["entries"][0]
           ["settings"]["viewport"].erase("playAreaBottomPaddingPercent");
+  document["presentations"]["landscape"]["skin"]["entries"][0]
+          ["settings"].erase("fastSlowCriteria");
   writeFile(path, document.dump());
   const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.presentation().skin.entries.at(entry).fastSlowCriteria ==
+             AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
+         "existing skin profiles default FAST/SLOW to GREAT or below");
+  settings.presentation().skin.entries.at(entry).fastSlowCriteria =
+      static_cast<AppSettings::JudgementTimingDisplayCriteria>(99);
+  settings.sanitize();
+  expect(settings.presentation().skin.entries.at(entry).fastSlowCriteria ==
+             AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
+         "invalid FAST/SLOW criteria fall back to GREAT or below");
   const auto &migrated = loaded.settings.presentation().skin.entries.at(entry).viewport;
   expect(migrated.playAreaBottomPaddingPercent == 0.0F &&
              migrated.centerPlayArea && migrated.playAreaZoom == 1.5F,

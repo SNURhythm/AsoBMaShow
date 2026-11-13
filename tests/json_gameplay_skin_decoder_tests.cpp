@@ -486,6 +486,7 @@ void testAllGameplayFieldsPreserveOrderProvenanceAndPayloads() {
   desired.filePaths["Atlas choice"] = "custom.png";
   desired.offsets["Custom move"] =
       {.x = 1, .y = 2, .w = 3, .h = 4, .r = 5, .a = 6};
+  desired.fastSlowCriteria = player_settings::JudgementTimingDisplayCriteria::BadOrBelow;
   desired.viewport = {.mode = ViewportMode::Custom,
                       .customBase = CustomViewportBase::Stretch,
                       .scaleX = 1.25F,
@@ -518,6 +519,9 @@ void testAllGameplayFieldsPreserveOrderProvenanceAndPayloads() {
              decoded.configuration->offsets.at("Custom move") ==
                  ConfigOffset{.x = 1, .y = 0, .w = 3, .h = 0, .r = 5, .a = 0},
          "desired configuration is reconciled by name and offset permissions");
+  expect(decoded.configuration->fastSlowCriteria == desired.fastSlowCriteria &&
+             decoded.reconciledSettings->fastSlowCriteria == desired.fastSlowCriteria,
+         "static skin preserves FAST/SLOW criteria in runtime configuration");
   expect(decoded.reconciledSettings->viewport == desired.viewport &&
              decoded.configuration->lowercaseSha256 ==
                  skinConfigurationDigest(*decoded.reconciledSettings),

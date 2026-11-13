@@ -2022,6 +2022,51 @@ void testDoublePlayLaneEffectsUsePlayerAndKeyOffsets() {
   }
 }
 
+void testFastSlowCriteriaApplyToEveryJudgeRegion() {
+  using Criteria = AppSettings::JudgementTimingDisplayCriteria;
+  PlayfieldChartVisualModel chart;
+  chart.keyCount = 9;
+  chart.laneOrder = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1, .payload = SkinJudgeObject{.player = 2}}};
+  BeatorajaSkinConfiguration configuration;
+  const auto mutations = makePinnedSkinEventMutationTableV1();
+  PlaySkinStateBridge bridge({.chartModel = chart, .model = &model,
+      .configuration = configuration, .mutationTable = mutations});
+  std::uint64_t serial = 0;
+  for (const auto [criteria, visibleGrades] : std::array{
+           std::pair{Criteria::PGreatOrBelow, 0b111111},
+           std::pair{Criteria::GreatOrBelow, 0b111110},
+           std::pair{Criteria::GoodOrBelow, 0b111100},
+           std::pair{Criteria::BadOrBelow, 0b111000},
+           std::pair{Criteria::Off, 0}}) {
+    configuration.fastSlowCriteria = criteria;
+    for (const auto judgement : {PGreat, Great, Good, Bad, Kpoor, Poor, None}) {
+      for (const int timing : {-2'000, 0, 2'000}) {
+        auto state = stateAt(++serial);
+        state.lanes.assign(9, {});
+        for (auto &lane : state.lanes) {
+          lane.lastJudgement = {.judgement = judgement, .combo = 1,
+              .fastSlowMicros = timing, .visualMicros = 100, .sequence = serial};
+        }
+        bridge.beginFrame(state, projectionAt(serial));
+        const bool visible = (visibleGrades & (1 << judgement)) != 0;
+        for (const int early : {1242, 1262, 1362}) {
+          expect(bridge.booleanProperty({early}).value == (visible && timing < 0) &&
+                     bridge.booleanProperty({early + 1}).value == (visible && timing > 0),
+                 "FAST/SLOW criteria gate each region's grade without reversing timing");
+        }
+        expect(bridge.booleanProperty({"judge_1p_early"}).value ==
+                   (visible && timing < 0) &&
+                   bridge.booleanProperty({241}).value == (judgement == PGreat) &&
+                   bridge.integerProperty({525}).value == -timing / 1'000,
+               "named early conditions agree while PGREAT and numeric timing stay independent");
+        bridge.discardFrame();
+      }
+    }
+  }
+}
+
 void testDoublePlayJudgementsRetainEachRegionsLastEvent() {
   PlayfieldChartVisualModel chart;
   chart.keyCount = 10;
@@ -2055,8 +2100,10 @@ void testDoublePlayJudgementsRetainEachRegionsLastEvent() {
          "both DP judgement and combo timers start independently");
   expect(bridge.integerProperty({526}).value == -5 &&
              bridge.booleanProperty({1263}).value &&
-             bridge.booleanProperty({241}).value,
-         "DP timing and judgement predicates read the requested region");
+             bridge.booleanProperty({241}).value &&
+             !bridge.booleanProperty({1242}).value &&
+             !bridge.booleanProperty({1243}).value,
+         "DP timing predicates read each region and hide FAST/SLOW on PGREAT by default");
   bridge.discardFrame();
   state.clock.serial = 2;
   state.lanes[11].lastJudgement = {.judgement = Poor, .combo = 0,
@@ -4860,6 +4907,7 @@ int main() {
   }
   testSparseModeInputTimersUseOriginalChannels();
   testDoublePlayLaneEffectsUsePlayerAndKeyOffsets();
+  testFastSlowCriteriaApplyToEveryJudgeRegion();
   testDoublePlayJudgementsRetainEachRegionsLastEvent();
   testKeyboardDoublePlayRetainsNormalAndExtendedLaneTimers();
   testThreeJudgeRegionsOnlyKeepLatestComboTimer();

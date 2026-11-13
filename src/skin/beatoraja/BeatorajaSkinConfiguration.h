@@ -47,6 +47,8 @@ inline constexpr OffsetPermissionMask kOffsetPermissionR = 1U << 4U;
 inline constexpr OffsetPermissionMask kOffsetPermissionA = 1U << 5U;
 
 struct BeatorajaSkinConfiguration {
+  player_settings::JudgementTimingDisplayCriteria fastSlowCriteria =
+      player_settings::JudgementTimingDisplayCriteria::GreatOrBelow;
   std::vector<ConfiguredOption> orderedOptions;
   std::map<std::string, int> options;
   std::set<int> enabledOptionIds;

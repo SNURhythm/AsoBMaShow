@@ -1380,6 +1380,22 @@ ControllerActionResult GameplaySkinSettingsController::setOffset(
                                   i18n::message("settings.skins.validating_offset.progress"), target);
 }
 
+ControllerActionResult GameplaySkinSettingsController::setFastSlowCriteria(
+    const SkinEntryId &entry,
+    player_settings::JudgementTimingDisplayCriteria criteria) {
+  if (impl_->closed || impl_->hasControllerOperation()) {
+    return rejected(i18n::message("settings.skins.another_gameplay_skin_operation_active.message"));
+  }
+  auto candidate =
+      impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId, impl_->dependencies.orientation)
+          .settings;
+  const auto declared = selectableGameplaySkinType(
+      impl_->findCatalogEntry(entry, impl_->catalog()));
+  const int target = impl_->configurationTarget(declared.value_or(0));
+  candidate.entriesForTarget(target)[entry].fastSlowCriteria = criteria;
+  return impl_->submitProfileOnly(std::move(candidate));
+}
+
 ControllerActionResult
 GameplaySkinSettingsController::setViewport(const SkinEntryId &entry,
                                             ViewportSettings viewport) {

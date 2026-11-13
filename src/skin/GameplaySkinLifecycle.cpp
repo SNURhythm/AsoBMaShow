@@ -1404,6 +1404,10 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
         impl_->deps.dropDecodeCache();
       }
     }
+    // Presentation-only settings are not part of the cached activation's
+    // configuration digest. Use the current profile/mode choice for this session.
+    acquired.activation->reconciledSettings.fastSlowCriteria =
+        selected->second.fastSlowCriteria;
     return {.disposition = GameplaySkinAcquisitionDisposition::Ready,
             .request = GameplaySkinActivationRequest{
                 .sessionSerial = sessionSerial,

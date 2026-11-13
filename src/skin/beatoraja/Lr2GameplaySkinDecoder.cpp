@@ -137,7 +137,11 @@ bool reconcileConfiguration(const BeatorajaSkinHeader &header,
                             Result &result) {
   BeatorajaSkinConfiguration configuration;
   EntryProfileSettings settings;
-  if (desired != nullptr) settings.viewport = desired->viewport;
+  if (desired != nullptr) {
+    settings.viewport = desired->viewport;
+    settings.fastSlowCriteria = configuration.fastSlowCriteria =
+        player_settings::sanitizeJudgementTimingDisplayCriteria(desired->fastSlowCriteria);
+  }
 
   for (const auto &option : header.options) {
     if (option.name.empty()) {

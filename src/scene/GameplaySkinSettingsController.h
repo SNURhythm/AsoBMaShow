@@ -143,6 +143,9 @@ public:
   setFileChoice(const SkinEntryId &entry, std::string name, std::string value);
   [[nodiscard]] ControllerActionResult
   setOffset(const SkinEntryId &entry, std::string name, ConfigOffset value);
+  [[nodiscard]] ControllerActionResult setFastSlowCriteria(
+      const SkinEntryId &entry,
+      player_settings::JudgementTimingDisplayCriteria criteria);
   [[nodiscard]] ControllerActionResult setViewport(const SkinEntryId &entry,
                                                    ViewportSettings viewport);
   [[nodiscard]] ControllerActionResult

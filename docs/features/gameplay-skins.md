@@ -8,6 +8,14 @@ an eligible skin for a chart, and receive an explicit failure page when a
 selected skin cannot safely prepare or render. Android intentionally defaults
 this optional feature off.
 
+Each custom gameplay skin has a **FAST/SLOW** dropdown with the same judgement
+thresholds as the built-in skin: PGREAT or below, GREAT or below, GOOD or below,
+BAD or below, and Off. The default is GREAT or below, including for existing
+profiles, so PGREAT does not show an early/late label. The choice is saved per
+skin, gameplay mode, and presentation orientation. It filters the compatible
+skin's early/late conditions for all three judge regions; the skin's own display
+switch and animation still apply. Numeric millisecond timing is unaffected.
+
 ## Code map
 
 - `src/skin/` owns feature gating, selection, lifecycle, settings, package

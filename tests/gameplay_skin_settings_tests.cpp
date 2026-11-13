@@ -852,12 +852,21 @@ void testCompatibleModesSaveIndependentSettings() {
            "compatible skin selection commits to the chosen mode");
     expect(controller->setOption(entry, "Play Side", target == -6 ? 921 : 920).accepted && ready(),
            "custom options save for the active mode");
+    expect(controller->setFastSlowCriteria(entry, target == -8
+               ? player_settings::JudgementTimingDisplayCriteria::Off
+               : player_settings::JudgementTimingDisplayCriteria::GoodOrBelow).accepted && ready(),
+           "FAST/SLOW criteria save for the active mode");
     ViewportSettings viewport;
     viewport.scaleX = target == -8 ? 2.0F : 1.0F;
     expect(controller->setViewport(entry, viewport).accepted && ready(),
            "viewport saves for the active mode");
   }
   const auto saved = fixture.owner.snapshot(fixture.profileA).settings;
+  expect(saved.modeEntries.at(-8).at(entry).fastSlowCriteria ==
+             player_settings::JudgementTimingDisplayCriteria::Off &&
+             saved.entries.at(entry).fastSlowCriteria ==
+             player_settings::JudgementTimingDisplayCriteria::GoodOrBelow,
+         "FAST/SLOW criteria are independent across compatible modes");
   expect(saved.selectedSkinEntries.size() == 4 &&
              saved.entries.at(entry).options.at("Play Side") == 920 &&
              saved.modeEntries.at(-6).at(entry).options.at("Play Side") == 921 &&
