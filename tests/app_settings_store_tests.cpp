@@ -383,6 +383,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
                    .playAreaZoom = 1.25F,
                    .playAreaBottomPaddingPercent = 12.5F},
       .fastSlowCriteria = AppSettings::JudgementTimingDisplayCriteria::BadOrBelow,
+      .millisecondsCriteria = AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow,
   };
   expected.sanitize();
   const std::string expectedConfigurationDigest =
@@ -1060,17 +1061,27 @@ void testSkinPlayAreaBottomPaddingDefaultsAndBounds() {
           ["settings"]["viewport"].erase("playAreaBottomPaddingPercent");
   document["presentations"]["landscape"]["skin"]["entries"][0]
           ["settings"].erase("fastSlowCriteria");
+  document["presentations"]["landscape"]["skin"]["entries"][0]
+          ["settings"].erase("millisecondsCriteria");
   writeFile(path, document.dump());
   const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.presentation().skin.entries.at(entry).millisecondsCriteria ==
+             AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
+         "existing skins default millisecond timing to GREAT or below");
   expect(loaded.settings.presentation().skin.entries.at(entry).fastSlowCriteria ==
              AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
          "existing skin profiles default FAST/SLOW to GREAT or below");
   settings.presentation().skin.entries.at(entry).fastSlowCriteria =
       static_cast<AppSettings::JudgementTimingDisplayCriteria>(99);
+  settings.presentation().skin.entries.at(entry).millisecondsCriteria =
+      static_cast<AppSettings::JudgementTimingDisplayCriteria>(99);
   settings.sanitize();
   expect(settings.presentation().skin.entries.at(entry).fastSlowCriteria ==
              AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
          "invalid FAST/SLOW criteria fall back to GREAT or below");
+  expect(settings.presentation().skin.entries.at(entry).millisecondsCriteria ==
+             AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
+         "invalid millisecond criteria default to GREAT or below");
   const auto &migrated = loaded.settings.presentation().skin.entries.at(entry).viewport;
   expect(migrated.playAreaBottomPaddingPercent == 0.0F &&
              migrated.centerPlayArea && migrated.playAreaZoom == 1.5F,

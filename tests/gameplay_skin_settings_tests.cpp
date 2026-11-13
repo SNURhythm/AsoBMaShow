@@ -856,6 +856,10 @@ void testCompatibleModesSaveIndependentSettings() {
                ? player_settings::JudgementTimingDisplayCriteria::Off
                : player_settings::JudgementTimingDisplayCriteria::GoodOrBelow).accepted && ready(),
            "FAST/SLOW criteria save for the active mode");
+    expect(controller->setMillisecondsCriteria(entry, target == -6
+               ? player_settings::JudgementTimingDisplayCriteria::BadOrBelow
+               : player_settings::JudgementTimingDisplayCriteria::PGreatOrBelow).accepted && ready(),
+           "millisecond criteria save independently for the active mode");
     ViewportSettings viewport;
     viewport.scaleX = target == -8 ? 2.0F : 1.0F;
     expect(controller->setViewport(entry, viewport).accepted && ready(),
@@ -867,6 +871,11 @@ void testCompatibleModesSaveIndependentSettings() {
              saved.entries.at(entry).fastSlowCriteria ==
              player_settings::JudgementTimingDisplayCriteria::GoodOrBelow,
          "FAST/SLOW criteria are independent across compatible modes");
+  expect(saved.modeEntries.at(-6).at(entry).millisecondsCriteria ==
+             player_settings::JudgementTimingDisplayCriteria::BadOrBelow &&
+             saved.entries.at(entry).millisecondsCriteria ==
+                 player_settings::JudgementTimingDisplayCriteria::PGreatOrBelow,
+         "millisecond criteria are independent across compatible modes");
   expect(saved.selectedSkinEntries.size() == 4 &&
              saved.entries.at(entry).options.at("Play Side") == 920 &&
              saved.modeEntries.at(-6).at(entry).options.at("Play Side") == 921 &&

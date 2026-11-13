@@ -224,6 +224,7 @@ void testAllCommandsDecodeToTypedCanonicalModel() {
   desired.offsets["Move"] = {.x = 7, .y = 8, .w = 9, .h = 10, .r = 11,
                               .a = 12};
   desired.fastSlowCriteria = player_settings::JudgementTimingDisplayCriteria::BadOrBelow;
+  desired.millisecondsCriteria = player_settings::JudgementTimingDisplayCriteria::GoodOrBelow;
   desired.viewport = {.mode = ViewportMode::Stretch,
                       .scaleX = 1.25F,
                       .scaleY = 0.75F,
@@ -240,6 +241,9 @@ void testAllCommandsDecodeToTypedCanonicalModel() {
   if (!decoded.configuration || !decoded.reconciledSettings || !decoded.model) {
     return;
   }
+  expect(decoded.configuration->millisecondsCriteria == desired.millisecondsCriteria &&
+             decoded.reconciledSettings->millisecondsCriteria == desired.millisecondsCriteria,
+         "millisecond criteria reach the decoded skin independently");
   expect(decoded.configuration->fastSlowCriteria == desired.fastSlowCriteria &&
              decoded.reconciledSettings->fastSlowCriteria == desired.fastSlowCriteria,
          "static skin preserves FAST/SLOW criteria in runtime configuration");

@@ -553,28 +553,33 @@ void SettingsScene::appendGameplaySkinTimingSettings(
   if (!target || target->kind != skin::SkinTargetKind::Gameplay) {
     return;
   }
-  entryBody->addView(makeWrappedText(
-      "FAST/SLOW", metrics.smallTextSize, app_theme::textSecondary()));
   using Criteria = AppSettings::JudgementTimingDisplayCriteria;
-  auto *fastSlow = new ChoiceControlView(
-      [this, entry = row.entry](const std::string &id) {
-        return handleGameplaySkinActionResult(
-            gameplaySkinSettingsController->setFastSlowCriteria(
-                entry, static_cast<Criteria>(std::stoi(id))));
-      }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight);
-  std::vector<DropdownView::Option> timingOptions;
-  for (const auto criteria : {Criteria::PGreatOrBelow, Criteria::GreatOrBelow,
-                             Criteria::GoodOrBelow, Criteria::BadOrBelow,
-                             Criteria::Off}) {
-    timingOptions.push_back({.id = std::to_string(static_cast<int>(criteria)),
-                             .label =
-                                 formatJudgementTimingDisplayCriteriaLabel(criteria)});
-  }
-  fastSlow->refresh({
-      .selectedId = std::to_string(static_cast<int>(row.settings.fastSlowCriteria)),
-      .options = std::move(timingOptions),
-      .enabled = ordinaryActionsEnabled});
-  entryBody->addView(fastSlow);
+  const auto appendCriteria = [&](const i18n::Text &label, Criteria selected,
+                                 auto setter) {
+    entryBody->addView(makeWrappedText(
+        label, metrics.smallTextSize, app_theme::textSecondary()));
+    auto *choice = new ChoiceControlView(
+        [this, entry = row.entry, setter](const std::string &id) {
+          return handleGameplaySkinActionResult(
+              (gameplaySkinSettingsController.get()->*setter)(
+                  entry, static_cast<Criteria>(std::stoi(id))));
+        }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight);
+    std::vector<DropdownView::Option> options;
+    for (const auto criteria : {Criteria::PGreatOrBelow, Criteria::GreatOrBelow,
+                               Criteria::GoodOrBelow, Criteria::BadOrBelow,
+                               Criteria::Off}) {
+      options.push_back({.id = std::to_string(static_cast<int>(criteria)),
+                         .label = formatJudgementTimingDisplayCriteriaLabel(criteria)});
+    }
+    choice->refresh({.selectedId = std::to_string(static_cast<int>(selected)),
+                     .options = std::move(options),
+                     .enabled = ordinaryActionsEnabled});
+    entryBody->addView(choice);
+  };
+  appendCriteria("FAST/SLOW", row.settings.fastSlowCriteria,
+                 &skin::GameplaySkinSettingsController::setFastSlowCriteria);
+  appendCriteria("+/- ms", row.settings.millisecondsCriteria,
+                 &skin::GameplaySkinSettingsController::setMillisecondsCriteria);
 }
 
 void SettingsScene::appendGameplaySkinCatalogSettings(

@@ -978,6 +978,8 @@ void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
         mode == 6 ? player_settings::JudgementTimingDisplayCriteria::Off
                   : player_settings::JudgementTimingDisplayCriteria::PGreatOrBelow;
   }
+  fake.owner.settings.modeEntries[-6][fake.entry].millisecondsCriteria =
+      player_settings::JudgementTimingDisplayCriteria::GoodOrBelow;
   fake.setSelectedSkinEntries({{-4, fake.entry}, {-6, fake.entry}, {-8, fake.entry}});
   for (int mode : {4, 6, 8}) {
     const auto acquired = lifecycle.acquireForNextChart(mode);
@@ -987,6 +989,10 @@ void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
                 acquired->activation.reconciledSettings.fastSlowCriteria ==
                     fake.owner.settings.modeEntries.at(-mode).at(fake.entry).fastSlowCriteria,
             "cached activation uses the selected mode's current FAST/SLOW criteria");
+    require(acquired.has_value() &&
+                acquired->activation.reconciledSettings.millisecondsCriteria ==
+                    fake.owner.settings.modeEntries.at(-mode).at(fake.entry).millisecondsCriteria,
+            "cached activation uses the selected mode's current millisecond criteria");
   }
   require(!lifecycle.acquireForNextChart(5).has_value() &&
               !lifecycle.acquireForNextChart(7).has_value(),

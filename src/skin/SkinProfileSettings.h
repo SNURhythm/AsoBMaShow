@@ -62,11 +62,13 @@ struct EntryProfileSettings {
   ViewportSettings viewport;
   player_settings::JudgementTimingDisplayCriteria fastSlowCriteria =
       player_settings::JudgementTimingDisplayCriteria::GreatOrBelow;
+  player_settings::JudgementTimingDisplayCriteria millisecondsCriteria =
+      player_settings::JudgementTimingDisplayCriteria::GreatOrBelow;
   bool operator==(const EntryProfileSettings &) const = default;
 };
 
 // SkinConfigurationDigestV1 covers only the three persisted configuration
-// maps. Viewport, FAST/SLOW criteria and runtime/header-derived fields are
+// maps. Viewport, timing criteria and runtime/header-derived fields are
 // excluded so layout changes do not create a different configured skin.
 [[nodiscard]] std::string
 skinConfigurationDigest(const EntryProfileSettings &settings);

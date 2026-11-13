@@ -593,8 +593,17 @@ void testPreviewReloadKeyTracksCommittedSkinSettingsOnly() {
   changed = snapshot;
   changed.entries.front().settings.fastSlowCriteria =
       player_settings::JudgementTimingDisplayCriteria::Off;
-  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,
-          "FAST/SLOW criteria edits reload the live preview");
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key &&
+              skin::gameplaySkinSettingsLayoutKey(changed) !=
+                  skin::gameplaySkinSettingsLayoutKey(snapshot),
+          "FAST/SLOW criteria edits refresh the editor and live preview");
+  changed = snapshot;
+  changed.entries.front().settings.millisecondsCriteria =
+      player_settings::JudgementTimingDisplayCriteria::GoodOrBelow;
+  require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key &&
+              skin::gameplaySkinSettingsLayoutKey(changed) !=
+                  skin::gameplaySkinSettingsLayoutKey(snapshot),
+          "millisecond criteria refresh both the editor and live preview");
   changed = snapshot;
   changed.entries.front().revisionDigest = "new-revision";
   require(skin::gameplaySkinPreviewConfigurationKey(changed, 7) != key,

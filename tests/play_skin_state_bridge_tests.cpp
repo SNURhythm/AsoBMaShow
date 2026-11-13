@@ -2022,7 +2022,7 @@ void testDoublePlayLaneEffectsUsePlayerAndKeyOffsets() {
   }
 }
 
-void testFastSlowCriteriaApplyToEveryJudgeRegion() {
+void testTimingCriteriaApplyToEveryJudgeRegion() {
   using Criteria = AppSettings::JudgementTimingDisplayCriteria;
   PlayfieldChartVisualModel chart;
   chart.keyCount = 9;
@@ -2041,6 +2041,7 @@ void testFastSlowCriteriaApplyToEveryJudgeRegion() {
            std::pair{Criteria::BadOrBelow, 0b111000},
            std::pair{Criteria::Off, 0}}) {
     configuration.fastSlowCriteria = criteria;
+    configuration.millisecondsCriteria = Criteria::PGreatOrBelow;
     for (const auto judgement : {PGreat, Great, Good, Bad, Kpoor, Poor, None}) {
       for (const int timing : {-2'000, 0, 2'000}) {
         auto state = stateAt(++serial);
@@ -2059,8 +2060,21 @@ void testFastSlowCriteriaApplyToEveryJudgeRegion() {
         expect(bridge.booleanProperty({"judge_1p_early"}).value ==
                    (visible && timing < 0) &&
                    bridge.booleanProperty({241}).value == (judgement == PGreat) &&
-                   bridge.integerProperty({525}).value == -timing / 1'000,
+                   bridge.integerProperty({525}).value ==
+                       (judgement == None ? std::numeric_limits<std::int32_t>::min()
+                                          : -timing / 1'000),
                "named early conditions agree while PGREAT and numeric timing stay independent");
+        configuration.millisecondsCriteria = criteria;
+        for (int region = 0; region < 3; ++region) {
+          const auto milliseconds = bridge.integerProperty({525 + region});
+          const bool show = visible;
+          expect(milliseconds.supported && milliseconds.value ==
+                     (show ? -timing / 1'000 : std::numeric_limits<std::int32_t>::min()),
+                 "millisecond criteria suppress numeric timing independently in every region");
+        }
+        expect(bridge.booleanProperty({1242}).value == (visible && timing < 0),
+               "millisecond criteria do not change FAST/SLOW visibility");
+        configuration.millisecondsCriteria = Criteria::PGreatOrBelow;
         bridge.discardFrame();
       }
     }
@@ -2230,7 +2244,8 @@ void testJudgeRegionsIncludeRemainderAndSparseLanes() {
                        (expected ? 100 : kPlayfieldTimestampOff) &&
                    bridge.timerProperty({comboTimers[region]}) ==
                        (expected ? 100 : kPlayfieldTimestampOff) &&
-                   bridge.integerProperty({525 + region}).value == (expected ? -5 : 0),
+                   bridge.integerProperty({525 + region}).value ==
+                       (expected ? -5 : std::numeric_limits<std::int32_t>::min()),
                "remainder and sparse lanes drive judgement, combo, and timing: " + label);
       }
       bridge.discardFrame();
@@ -4001,6 +4016,7 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
   chart.notes = {{.id = 1, .kind = ChartVisualNoteKind::LongHead}};
   ValidatedBeatorajaSkinModel model;
   BeatorajaSkinConfiguration configuration;
+  configuration.millisecondsCriteria = AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
   configuration.offsetsById = {
       {3, {.x = 3}}, {4, {.x = 4}},
       {30, {.x = 30}}, {32, {.x = 32}}};
@@ -4147,7 +4163,9 @@ void testSelectedScuroMappingsUseOnlyAuthoritativeState() {
            std::pair{418, 12LL}, std::pair{419, 11LL},
            std::pair{420, 6LL}, std::pair{421, 10LL},
            std::pair{422, 9LL}, std::pair{425, 0LL},
-           std::pair{526, 0LL}, std::pair{527, 0LL}}) {
+           // Regions without a judgement have no timing number to display.
+           std::pair{526, static_cast<long long>(std::numeric_limits<std::int32_t>::min())},
+           std::pair{527, static_cast<long long>(std::numeric_limits<std::int32_t>::min())}}) {
     const auto value = bridge.integerProperty({id});
     expect(value.supported && value.value == expected,
            "selected live score, gauge, judgement, and lift number is exact: " +
@@ -4907,7 +4925,7 @@ int main() {
   }
   testSparseModeInputTimersUseOriginalChannels();
   testDoublePlayLaneEffectsUsePlayerAndKeyOffsets();
-  testFastSlowCriteriaApplyToEveryJudgeRegion();
+  testTimingCriteriaApplyToEveryJudgeRegion();
   testDoublePlayJudgementsRetainEachRegionsLastEvent();
   testKeyboardDoublePlayRetainsNormalAndExtendedLaneTimers();
   testThreeJudgeRegionsOnlyKeepLatestComboTimer();

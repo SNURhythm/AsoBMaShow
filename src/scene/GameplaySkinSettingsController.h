@@ -146,6 +146,9 @@ public:
   [[nodiscard]] ControllerActionResult setFastSlowCriteria(
       const SkinEntryId &entry,
       player_settings::JudgementTimingDisplayCriteria criteria);
+  [[nodiscard]] ControllerActionResult setMillisecondsCriteria(
+      const SkinEntryId &entry,
+      player_settings::JudgementTimingDisplayCriteria criteria);
   [[nodiscard]] ControllerActionResult setViewport(const SkinEntryId &entry,
                                                    ViewportSettings viewport);
   [[nodiscard]] ControllerActionResult

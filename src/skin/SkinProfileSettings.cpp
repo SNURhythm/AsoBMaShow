@@ -152,6 +152,8 @@ void sanitizeEntry(EntryProfileSettings &entry) {
   sanitizeViewport(entry.viewport);
   entry.fastSlowCriteria = player_settings::sanitizeJudgementTimingDisplayCriteria(
       entry.fastSlowCriteria);
+  entry.millisecondsCriteria = player_settings::sanitizeJudgementTimingDisplayCriteria(
+      entry.millisecondsCriteria);
 }
 
 } // namespace

@@ -1001,6 +1001,7 @@ void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
       {"Notes offset", {.x = 7, .y = 8, .w = 9, .h = 10, .r = 11, .a = 12}},
       {"Removed", {.x = 99}}};
   saved.fastSlowCriteria = player_settings::JudgementTimingDisplayCriteria::BadOrBelow;
+  saved.millisecondsCriteria = player_settings::JudgementTimingDisplayCriteria::GoodOrBelow;
   saved.viewport.mode = ViewportMode::Stretch;
 
   const auto reconciled =
@@ -1024,6 +1025,9 @@ void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {
              configuration.filePaths.at("Background") == "missing.png",
          "a persisted Beatoraja custom-file value remains selected even when "
          "the current package no longer contains it");
+  expect(reconciled.configuration->millisecondsCriteria == saved.millisecondsCriteria &&
+             reconciled.reconciledSettings.millisecondsCriteria == saved.millisecondsCriteria,
+         "millisecond criteria reach the decoded skin independently");
   expect(reconciled.configuration->fastSlowCriteria == saved.fastSlowCriteria &&
              reconciled.reconciledSettings.fastSlowCriteria == saved.fastSlowCriteria,
          "Lua preserves profile-owned FAST/SLOW criteria in runtime configuration");

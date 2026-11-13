@@ -202,10 +202,10 @@ throughput. Buffer count is not a user setting.
   styling and position, FAST/SLOW and millisecond feedback, timing indicators,
   judgement counts, and gauge placement live in Skins under the built-in HUD
   editor. Custom gameplay skins expose shared application HUD controls
-  separately from skin-authored settings. Their own FAST/SLOW condition appears
-  before the catalog options in both the skin editor and live preview. The
-  per-skin condition defaults to GREAT or below and does not change the built-in
-  skin's setting.
+  separately from skin-authored settings. Their independent FAST/SLOW and +/- ms
+  conditions appear before the catalog options in both the skin editor and live
+  preview. Both default to GREAT or below, hiding timing feedback on PGREAT.
+  Neither changes the built-in skin's settings.
 - Lane contains preview, shared scroll/covers, and visibility aids. Built-in
   appearance has one editor in Skins, with horizontal Lane, Notes, Effects,
   and HUD tabs. Numeric appearance controls consistently use left-aligned
