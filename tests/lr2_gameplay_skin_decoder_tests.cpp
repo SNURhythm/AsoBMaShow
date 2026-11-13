@@ -698,6 +698,24 @@ void testStrictLr2IntegerMatchesJavaParseIntAsciiBoundary() {
          "without trimming, coercion, or overflow");
 }
 
+void testLegacyGaugeWithoutResultTimingKeepsRenderableDefaults() {
+  const BeatorajaSkinHeader header{.type = 0, .width = 640, .height = 480};
+  const std::vector<Lr2SkinCommand> commands{
+      {.name = "IMAGE", .fields = {"gauge.png"}},
+      {.name = "SRC_GROOVEGAUGE",
+       .fields = splitFields("0,0,0,0,28,28,4,1,0,0,6,0,,,,,,,,,,")}};
+  const auto decoded = Lr2GameplaySkinDecoder{}.decode(
+      header, commands, nullptr, gameplaySkinBuiltinCatalog());
+  expect(decoded.model.has_value(), "legacy groove gauge decodes");
+  if (!decoded.model) return;
+  const auto gauges = objectsWith<SkinGaugeObject>(*decoded.model);
+  expect(gauges.size() == 1, "legacy groove gauge is retained");
+  if (gauges.empty()) return;
+  const auto &gauge = std::get<SkinGaugeObject>(gauges.front()->payload);
+  expect(gauge.resultStartMillis == 0 && gauge.resultEndMillis == 500,
+         "omitted LR2 result timing preserves a renderable gauge interval");
+}
+
 void testCancellationStopsMidLr2ModelFold() {
   const BeatorajaSkinHeader header{.type = 0, .width = 640, .height = 480};
   std::vector<Lr2SkinCommand> commands;
@@ -723,6 +741,7 @@ void testCancellationStopsMidLr2ModelFold() {
 int main(int argc, char **argv) {
   testStrictLr2IntegerMatchesJavaParseIntAsciiBoundary();
   testBuiltinReferenceBarGraphsRetainTheirPinnedSource();
+  testLegacyGaugeWithoutResultTimingKeepsRenderableDefaults();
   testCancellationStopsMidLr2ModelFold();
   testAllCommandsDecodeToTypedCanonicalModel();
   return gameplay_skin_ledger_evidence::finish(

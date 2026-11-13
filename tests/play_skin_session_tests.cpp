@@ -2178,6 +2178,29 @@ return skin
            "header admission keeps gameplay and recoverable LR2 entries "
            "selectable while fatal documents remain invalid");
 
+    // Original LR2 downloads retain the game-root paths inside a wrapper.
+    for (const auto &prefix : {"bundle/LR2files/Theme/FixtureTheme",
+                               "FixtureTheme"}) {
+      const fs::path theme = source / prefix;
+      fs::create_directories(theme / "play/parts");
+      fs::copy_file(source / "skin/resources/fixture.png",
+                    theme / "play/parts/default.png");
+      fs::copy(source / "skin/fonts", theme / "font",
+               fs::copy_options::recursive);
+      writeText(theme / "play/main.lr2skin", R"lr2(#INFORMATION,0,Packaged LR2,fixture
+#RESOLUTION,0
+#CUSTOMFILE,Image,.\LR2files\Theme\FixtureTheme\play\parts\*.png,default
+#INCLUDE,LR2files\Theme\FixtureTheme\play\csv\main.csv
+)lr2");
+      writeText(theme / "play/csv/main.csv", R"lr2(#IMAGE,.\LR2files\Theme\FixtureTheme\play\parts\*.png
+#LR2FONT,LR2files/Theme/FixtureTheme/font/fixture.lr2font
+#SRC_IMAGE,0,0,0,0,40,20,1,1,0,0
+#DST_IMAGE,0,0,10,360,40,20,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+#SRC_TEXT,0,0,10,0,0,0
+#DST_TEXT,0,0,100,340,200,40,0,255,255,255,255,0,0,0,0,0,0,0,0,0
+)lr2");
+    }
+
     fs::create_directories(roots_.visiblePackages);
     fs::copy(source, roots_.visiblePackages / package_.directoryName,
              fs::copy_options::recursive | fs::copy_options::overwrite_existing);
@@ -2198,7 +2221,8 @@ return skin
                                      std::uint64_t sessionSerial,
                                      bool chartImagesAvailable = true,
                                      std::shared_ptr<SessionTextureDevice>
-                                         textureDevice = {}) {
+                                         textureDevice = {},
+                                     const EntryProfileSettings *settings = nullptr) {
     PlaySkinSessionCreateResult failed;
     if (!lease_) {
       return failed;
@@ -2210,7 +2234,7 @@ return skin
     }
     GameplaySkinValidator validator(resources_);
     auto validation =
-        validator.validate(lease_->readView(), *entry, nullptr, {});
+        validator.validate(lease_->readView(), *entry, settings, {});
     if (validation.disposition !=
             SkinValidationDisposition::SelectableGameplay ||
         !validation.reconciledSettings ||
@@ -2311,6 +2335,38 @@ void testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects() {
   expect(hasSharedObjects(luaOutput) && luaOutput == jsonOutput &&
              luaOutput == lr2Output,
          "Lua, JSON, and LR2 emit equivalent image, number, and text output");
+}
+
+void testPackagedLr2PathsRenderIncludesImagesAndFonts() {
+  FormatParityFixture fixture;
+  for (const auto &path : {
+           "bundle/LR2files/Theme/FixtureTheme/play/main.lr2skin",
+           "FixtureTheme/play/main.lr2skin"}) {
+    auto result = fixture.create(path, 115);
+    expect(result.session != nullptr, "packaged LR2 session loads");
+    expect(result.diagnostics.empty(), "packaged LR2 paths resolve without warnings");
+    for (const auto &diagnostic : result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << " (" << diagnostic.virtualPath << ")\n";
+    }
+    if (!result.session) continue;
+    const auto frame = result.session->prepareFrame(stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 2,
+           "packaged LR2 include renders its selected image and sibling font");
+  }
+  EntryProfileSettings saved;
+  saved.filePaths["Image"] = "default";
+  auto legacy = fixture.create("FixtureTheme/play/main.lr2skin", 116,
+                               true, {}, &saved);
+  expect(legacy.session && legacy.diagnostics.empty(),
+         "saved extensionless LR2 file selections still load");
+  if (legacy.session) {
+    const auto frame = legacy.session->prepareFrame(stateAt(2), projectionAt(2), {});
+    expect(frame.ready() && frame.evaluation.submitReady &&
+               frame.evaluation.submitReady->commands.size() == 2,
+           "saved LR2 stem selects an existing texture");
+  }
 }
 
 void testLr2ProductionRecoveryAndFatalBoundaries() {
@@ -11522,6 +11578,7 @@ int main(int argc, char **argv) {
   testTempDirectoryRemovesReadOnlySnapshots();
   testResultIrNumericFactoriesReachLiveLua();
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
+  testPackagedLr2PathsRenderIncludesImagesAndFonts();
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
   testLr2DeclaredFalseOptionActivatesNegatedInclude();

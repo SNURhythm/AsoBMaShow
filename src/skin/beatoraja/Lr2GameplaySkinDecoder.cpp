@@ -1211,8 +1211,12 @@ private:
     gauge.animationRange =
         values[13] == 0 ? (mode_ && mode_->popn ? 0 : 3) : values[15];
     gauge.animationCycleMillis = values[13] == 0 ? 33 : values[16];
-    gauge.resultStartMillis = values[17];
-    gauge.resultEndMillis = values[18];
+    if (command.fields.size() >= 17 && !command.fields[16].empty()) {
+      gauge.resultStartMillis = values[17];
+    }
+    if (command.fields.size() >= 18 && !command.fields[17].empty()) {
+      gauge.resultEndMillis = values[18];
+    }
     activeGauge_ = addObject(std::move(gauge), command);
     grooveX_ = values[11];
     grooveY_ = values[12];
