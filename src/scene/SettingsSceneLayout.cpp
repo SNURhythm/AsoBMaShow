@@ -103,9 +103,6 @@ void SettingsScene::resetViewState() {
   summaryGaugeBarPositionValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   summaryUiThemeValueText = nullptr;
-  judgementIndicatorYInput = nullptr;
-  judgementIndicatorWidthInput = nullptr;
-  judgementIndicatorRangeInput = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
@@ -119,11 +116,9 @@ void SettingsScene::resetViewState() {
   archiveChartPreviewModeText = nullptr;
   findBmsSkipUnarchivingModeText = nullptr;
   notePriorityModeText = nullptr;
-  judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
   judgementTimingFastSlowCriteriaText = nullptr;
   judgementTimingMillisecondsCriteriaText = nullptr;
-  judgementCounterModeText = nullptr;
   judgementCounterPositionText = nullptr;
   gaugeBarPositionText = nullptr;
   bgaModeText = nullptr;
@@ -146,11 +141,9 @@ void SettingsScene::resetViewState() {
   archiveChartPreviewModeButton = nullptr;
   findBmsSkipUnarchivingModeButton = nullptr;
   notePriorityModeButton = nullptr;
-  judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
   judgementTimingFastSlowCriteriaButton = nullptr;
   judgementTimingMillisecondsCriteriaButton = nullptr;
-  judgementCounterModeButton = nullptr;
   judgementCounterPositionButton = nullptr;
   gaugeBarPositionButton = nullptr;
   bgaModeButton = nullptr;
@@ -159,7 +152,6 @@ void SettingsScene::resetViewState() {
   archiveCacheCleanupButton = nullptr;
   profileTabButton = nullptr;
   timingTabButton = nullptr;
-  hudTabButton = nullptr;
   backgroundTabButton = nullptr;
   laneTabButton = nullptr;
   inputTabButton = nullptr;
@@ -172,7 +164,6 @@ void SettingsScene::resetViewState() {
   gameplaySkinsTabButton = nullptr;
   irTabButton = nullptr;
   timingTabText = nullptr;
-  hudTabText = nullptr;
   backgroundTabText = nullptr;
   laneTabText = nullptr;
   inputTabText = nullptr;
@@ -780,6 +771,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
             ? previewSkinRow->entry.packageRelativePath
             : previewSkinRow->metadata.displayName,
         metrics.bodyTextSize, app_theme::cyan()));
+    appendGameplaySkinTimingSettings(previewControls, metrics,
+                                      *previewSkinRow, previewSkinActionsEnabled);
     appendGameplaySkinCatalogSettings(previewControls, metrics,
                                        *previewSkinRow, previewSkinActionsEnabled);
     appendGameplaySkinViewportSettings(previewControls, metrics,
@@ -1305,346 +1298,6 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       metrics, i18n::message("settings.timing.visual_offset.label"), i18n::message("settings.timing.move_notes_without_changing_audio_bga.message"),
       visualOffsetControls, metrics.offsetCardHeight, metrics.cardsWidth,
       context.settings.bluetoothAudioTimingActive()));
-
-  return cardsColumn;
-}
-
-View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
-  auto *cardsColumn = makeCardsColumn(metrics);
-  cardsColumn->addView(makeWrappedText(i18n::message("settings.hud.scope_help"),
-      metrics.smallTextSize, app_theme::textSecondary()));
-  auto *judgementFeedbackControls = new View();
-  judgementFeedbackControls->setFlexDirection(FlexDirection::Column);
-  judgementFeedbackControls->setGap(metrics.compact ? 12.0f : 16.0f);
-  judgementFeedbackControls->setAlignItems(YGAlignFlexStart);
-  judgementFeedbackControls->addView(buildJudgementFeedbackStyleControls(metrics));
-  judgementFeedbackControls->addView(buildJudgementFeedbackPositionControls(metrics));
-
-  auto *timingCriteriaControls = new View();
-  timingCriteriaControls->setFlexDirection(FlexDirection::Column);
-  timingCriteriaControls->setWidthPercent(100);
-  timingCriteriaControls->setFlexWrap(YGWrapWrap);
-  timingCriteriaControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  timingCriteriaControls->setAlignItems(YGAlignFlexStart);
-
-  auto *timingFastSlowGroup = new View();
-  timingFastSlowGroup->setFlexDirection(FlexDirection::Column);
-  timingFastSlowGroup->setGap(metrics.compact ? 6.0f : 8.0f);
-  timingFastSlowGroup->addView(
-      makeText("FAST/SLOW", metrics.bodyTextSize, app_theme::textSecondary()));
-  timingFastSlowGroup->setWidthPercent(100);
-  timingFastSlowGroup->addView(makeEnumChoice(metrics, overlayPortal,
-      context.settings.presentation().judgementTimingFastSlowCriteria,
-      {AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow,
-       AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
-       AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow,
-       AppSettings::JudgementTimingDisplayCriteria::BadOrBelow,
-       AppSettings::JudgementTimingDisplayCriteria::Off},
-      formatJudgementTimingDisplayCriteriaLabel,
-      [this](AppSettings::JudgementTimingDisplayCriteria value) {
-        context.settings.presentation().judgementTimingFastSlowCriteria = value;
-        persistSettings();
-      }));
-  timingCriteriaControls->addView(timingFastSlowGroup);
-
-  auto *timingMillisecondsGroup = new View();
-  timingMillisecondsGroup->setFlexDirection(FlexDirection::Column);
-  timingMillisecondsGroup->setGap(metrics.compact ? 6.0f : 8.0f);
-  timingMillisecondsGroup->addView(makeText(
-      i18n::message("settings.timing.milliseconds.label"), metrics.bodyTextSize, app_theme::textSecondary()));
-  timingMillisecondsGroup->setWidthPercent(100);
-  timingMillisecondsGroup->addView(makeEnumChoice(metrics, overlayPortal,
-      context.settings.presentation().judgementTimingMillisecondsCriteria,
-      {AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow,
-       AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow,
-       AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow,
-       AppSettings::JudgementTimingDisplayCriteria::BadOrBelow,
-       AppSettings::JudgementTimingDisplayCriteria::Off},
-      formatJudgementTimingDisplayCriteriaLabel,
-      [this](AppSettings::JudgementTimingDisplayCriteria value) {
-        context.settings.presentation().judgementTimingMillisecondsCriteria = value;
-        persistSettings();
-      }));
-  timingCriteriaControls->addView(timingMillisecondsGroup);
-  judgementFeedbackControls->addView(timingCriteriaControls);
-
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.timing.judgement_feedback.label"), i18n::message("settings.timing.position_text_timing_details.message"),
-      judgementFeedbackControls, metrics.visibleTimeCardHeight,
-      metrics.cardsWidth));
-
-  auto *judgementIndicatorControls = new View();
-  judgementIndicatorControls->setFlexDirection(FlexDirection::Column);
-  judgementIndicatorControls->setGap(metrics.compact ? 12.0f : 16.0f);
-  judgementIndicatorControls->setAlignItems(YGAlignFlexStart);
-
-  auto *judgementIndicatorModeControls = new View();
-  judgementIndicatorModeControls->setFlexDirection(FlexDirection::Row);
-  judgementIndicatorModeControls->setFlexWrap(YGWrapWrap);
-  judgementIndicatorModeControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorModeControls->setAlignItems(YGAlignFlexStart);
-
-  judgementIndicatorModeText =
-      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE);
-  judgementIndicatorModeButton =
-      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                       judgementIndicatorModeText, app_theme::lime(), true);
-  judgementIndicatorModeButton->setOnClickListener([this]() {
-    context.settings.presentation().judgementIndicatorEnabled =
-        !context.settings.presentation().judgementIndicatorEnabled;
-    persistSettings();
-  });
-  judgementIndicatorModeControls->addView(judgementIndicatorModeButton);
-
-  judgementIndicatorModeControls->setWidthPercent(100);
-  judgementIndicatorModeControls->setFlexDirection(FlexDirection::Column);
-  judgementIndicatorModeControls->addView(makeEnumChoice(metrics, overlayPortal,
-      context.settings.presentation().judgementIndicatorRenderMode,
-      {AppSettings::JudgementIndicatorRenderMode::World3D, AppSettings::JudgementIndicatorRenderMode::Hud2D},
-      formatJudgementIndicatorRenderModeLabel, [this](AppSettings::JudgementIndicatorRenderMode value) {
-        context.settings.presentation().judgementIndicatorRenderMode = value;
-        persistSettings();
-      }));
-  judgementIndicatorControls->addView(judgementIndicatorModeControls);
-
-  judgementIndicatorControls->addView(
-      makeText(i18n::message("settings.timing.y_position.label"), metrics.bodyTextSize, app_theme::textSecondary()));
-  auto *judgementIndicatorYControls = new View();
-  judgementIndicatorYControls->setFlexDirection(FlexDirection::Row);
-  judgementIndicatorYControls->setFlexWrap(YGWrapWrap);
-  judgementIndicatorYControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorYControls->setAlignItems(YGAlignFlexStart);
-  auto updateJudgementIndicatorY = [this](int deltaPercent) {
-    const int currentPercent =
-        judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY);
-    const int nextPercent = std::clamp(currentPercent + deltaPercent, 0, 100);
-    context.settings.presentation().judgementIndicatorY =
-        judgementIndicatorPercentToY(nextPercent);
-    persistSettings();
-    syncJudgementIndicatorYInputText(true);
-  };
-
-  auto *minusIndicatorYLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5%");
-  minusIndicatorYLarge->setOnClickListener(
-      [updateJudgementIndicatorY]() { updateJudgementIndicatorY(-5); });
-  judgementIndicatorYControls->addView(minusIndicatorYLarge);
-  auto *minusIndicatorYSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
-  minusIndicatorYSmall->setOnClickListener(
-      [updateJudgementIndicatorY]() { updateJudgementIndicatorY(-1); });
-  judgementIndicatorYControls->addView(minusIndicatorYSmall);
-  judgementIndicatorYInput = makeNumericInput(metrics);
-  judgementIndicatorYInput->onEditingFinished(
-      [this](const std::string &) { commitJudgementIndicatorYInput(); });
-  judgementIndicatorYControls->addView(
-      makeInputFrame(metrics, judgementIndicatorYInput));
-  auto *plusIndicatorYSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
-  plusIndicatorYSmall->setOnClickListener(
-      [updateJudgementIndicatorY]() { updateJudgementIndicatorY(1); });
-  judgementIndicatorYControls->addView(plusIndicatorYSmall);
-  auto *plusIndicatorYLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5%");
-  plusIndicatorYLarge->setOnClickListener(
-      [updateJudgementIndicatorY]() { updateJudgementIndicatorY(5); });
-  judgementIndicatorYControls->addView(plusIndicatorYLarge);
-  auto *resetIndicatorY = makeResetButton(metrics);
-  resetIndicatorY->setOnClickListener([this]() {
-    context.settings.presentation().judgementIndicatorY =
-        AppSettings::kDefaultJudgementIndicatorY;
-    persistSettings();
-    syncJudgementIndicatorYInputText(true);
-  });
-  judgementIndicatorYControls->addView(resetIndicatorY);
-  judgementIndicatorControls->addView(judgementIndicatorYControls);
-
-  judgementIndicatorControls->addView(
-      makeText(i18n::message("settings.timing.width.label"), metrics.bodyTextSize, app_theme::textSecondary()));
-  auto *judgementIndicatorWidthControls = new View();
-  judgementIndicatorWidthControls->setFlexDirection(FlexDirection::Row);
-  judgementIndicatorWidthControls->setFlexWrap(YGWrapWrap);
-  judgementIndicatorWidthControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorWidthControls->setAlignItems(YGAlignFlexStart);
-  auto updateJudgementIndicatorWidth = [this](int deltaPercent) {
-    const int currentPercent = judgementIndicatorWidthScaleToPercent(
-        context.settings.presentation().judgementIndicatorWidthScale);
-    const int minPercent = judgementIndicatorWidthScaleToPercent(
-        AppSettings::kMinJudgementIndicatorWidthScale);
-    const int maxPercent = judgementIndicatorWidthScaleToPercent(
-        AppSettings::kMaxJudgementIndicatorWidthScale);
-    const int nextPercent =
-        std::clamp(currentPercent + deltaPercent, minPercent, maxPercent);
-    context.settings.presentation().judgementIndicatorWidthScale =
-        judgementIndicatorWidthPercentToScale(nextPercent);
-    persistSettings();
-    syncJudgementIndicatorWidthInputText(true);
-  };
-
-  auto *minusIndicatorWidthLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-5%");
-  minusIndicatorWidthLarge->setOnClickListener(
-      [updateJudgementIndicatorWidth]() {
-        updateJudgementIndicatorWidth(-5);
-      });
-  judgementIndicatorWidthControls->addView(minusIndicatorWidthLarge);
-  auto *minusIndicatorWidthSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1%");
-  minusIndicatorWidthSmall->setOnClickListener(
-      [updateJudgementIndicatorWidth]() { updateJudgementIndicatorWidth(-1); });
-  judgementIndicatorWidthControls->addView(minusIndicatorWidthSmall);
-  judgementIndicatorWidthInput = makeNumericInput(metrics);
-  judgementIndicatorWidthInput->onEditingFinished(
-      [this](const std::string &) { commitJudgementIndicatorWidthInput(); });
-  judgementIndicatorWidthControls->addView(
-      makeInputFrame(metrics, judgementIndicatorWidthInput));
-  auto *plusIndicatorWidthSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1%");
-  plusIndicatorWidthSmall->setOnClickListener(
-      [updateJudgementIndicatorWidth]() { updateJudgementIndicatorWidth(1); });
-  judgementIndicatorWidthControls->addView(plusIndicatorWidthSmall);
-  auto *plusIndicatorWidthLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+5%");
-  plusIndicatorWidthLarge->setOnClickListener(
-      [updateJudgementIndicatorWidth]() { updateJudgementIndicatorWidth(5); });
-  judgementIndicatorWidthControls->addView(plusIndicatorWidthLarge);
-  auto *resetIndicatorWidth = makeResetButton(metrics);
-  resetIndicatorWidth->setOnClickListener([this]() {
-    context.settings.presentation().judgementIndicatorWidthScale =
-        AppSettings::kDefaultJudgementIndicatorWidthScale;
-    persistSettings();
-    syncJudgementIndicatorWidthInputText(true);
-  });
-  judgementIndicatorWidthControls->addView(resetIndicatorWidth);
-  judgementIndicatorControls->addView(judgementIndicatorWidthControls);
-
-  judgementIndicatorControls->addView(makeText(
-      i18n::message("settings.timing.range_ms.label"), metrics.bodyTextSize, app_theme::textSecondary()));
-  auto *judgementIndicatorRangeControls = new View();
-  judgementIndicatorRangeControls->setFlexDirection(FlexDirection::Row);
-  judgementIndicatorRangeControls->setFlexWrap(YGWrapWrap);
-  judgementIndicatorRangeControls->setGap(metrics.compact ? 8.0f : 12.0f);
-  judgementIndicatorRangeControls->setAlignItems(YGAlignFlexStart);
-  auto updateJudgementIndicatorRange = [this](int deltaMilliseconds) {
-    context.settings.presentation().judgementIndicatorRangeMilliseconds =
-        clampJudgementIndicatorRangeMilliseconds(
-            context.settings.presentation().judgementIndicatorRangeMilliseconds +
-            deltaMilliseconds);
-    persistSettings();
-    syncJudgementIndicatorRangeInputText(true);
-  };
-
-  auto *minusIndicatorRangeLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "-10");
-  minusIndicatorRangeLarge->setOnClickListener(
-      [updateJudgementIndicatorRange]() {
-        updateJudgementIndicatorRange(-10);
-      });
-  judgementIndicatorRangeControls->addView(minusIndicatorRangeLarge);
-  auto *minusIndicatorRangeSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "-1");
-  minusIndicatorRangeSmall->setOnClickListener(
-      [updateJudgementIndicatorRange]() {
-        updateJudgementIndicatorRange(-1);
-      });
-  judgementIndicatorRangeControls->addView(minusIndicatorRangeSmall);
-  judgementIndicatorRangeInput = makeNumericInput(metrics);
-  judgementIndicatorRangeInput->onEditingFinished(
-      [this](const std::string &) { commitJudgementIndicatorRangeInput(); });
-  judgementIndicatorRangeControls->addView(
-      makeInputFrame(metrics, judgementIndicatorRangeInput));
-  auto *plusIndicatorRangeSmall =
-      makeStepButton(metrics, metrics.offsetButtonWidthSmall, "+1");
-  plusIndicatorRangeSmall->setOnClickListener(
-      [updateJudgementIndicatorRange]() {
-        updateJudgementIndicatorRange(1);
-      });
-  judgementIndicatorRangeControls->addView(plusIndicatorRangeSmall);
-  auto *plusIndicatorRangeLarge =
-      makeStepButton(metrics, metrics.offsetButtonWidthLarge, "+10");
-  plusIndicatorRangeLarge->setOnClickListener(
-      [updateJudgementIndicatorRange]() {
-        updateJudgementIndicatorRange(10);
-      });
-  judgementIndicatorRangeControls->addView(plusIndicatorRangeLarge);
-  auto *resetIndicatorRange = makeResetButton(metrics);
-  resetIndicatorRange->setOnClickListener([this]() {
-    context.settings.presentation().judgementIndicatorRangeMilliseconds =
-        AppSettings::kDefaultJudgementIndicatorRangeMilliseconds;
-    persistSettings();
-    syncJudgementIndicatorRangeInputText(true);
-  });
-  judgementIndicatorRangeControls->addView(resetIndicatorRange);
-  judgementIndicatorControls->addView(judgementIndicatorRangeControls);
-
-  appendJudgementIndicatorDimensionSettings(judgementIndicatorControls, metrics);
-  appendJudgementIndicatorColorizationSettings(judgementIndicatorControls, metrics);
-
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.timing.judgement_indicator.label"),
-      i18n::message("settings.timing.set_position_size_timing_range_render_mode.message"),
-      judgementIndicatorControls, metrics.visibleTimeCardHeight,
-      metrics.cardsWidth));
-
-  auto *judgementCounterControls = new View();
-  judgementCounterControls->setFlexDirection(FlexDirection::Column);
-  judgementCounterControls->setGap(metrics.compact ? 12.0f : 16.0f);
-  judgementCounterControls->setAlignItems(YGAlignFlexStart);
-  auto *judgementCounterModeControls = new View();
-  judgementCounterModeControls->setFlexDirection(FlexDirection::Column);
-  judgementCounterModeControls->setWidthPercent(100);
-  judgementCounterModeControls->setFlexWrap(YGWrapWrap);
-  judgementCounterModeControls->setGap(metrics.compact ? 8.0f : 10.0f);
-  judgementCounterModeControls->setAlignItems(YGAlignFlexStart);
-  judgementCounterModeText =
-      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE);
-  judgementCounterModeButton =
-      makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                       judgementCounterModeText, app_theme::lime(), true);
-  judgementCounterModeButton->setOnClickListener([this]() {
-    context.settings.presentation().judgementCounterEnabled =
-        !context.settings.presentation().judgementCounterEnabled;
-    persistSettings();
-  });
-  judgementCounterModeControls->addView(judgementCounterModeButton);
-  judgementCounterModeControls->addView(makeEnumChoice(metrics, overlayPortal,
-      context.settings.presentation().judgementCounterPosition,
-      {AppSettings::JudgementCounterPosition::Top, AppSettings::JudgementCounterPosition::Left, AppSettings::JudgementCounterPosition::Right},
-      formatJudgementCounterPositionLabel, [this](AppSettings::JudgementCounterPosition value) {
-        context.settings.presentation().judgementCounterPosition = value;
-        persistSettings();
-      }));
-  judgementCounterControls->addView(judgementCounterModeControls);
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.visual.judgement_counter.label"), i18n::message("settings.visual.show_live_judgement_totals.message"),
-      judgementCounterControls, metrics.modeCardHeight, metrics.cardsWidth));
-
-  auto *gaugeControls = new View();
-  gaugeControls->setFlexDirection(FlexDirection::Column);
-  gaugeControls->setGap(metrics.compact ? 12.0f : 16.0f);
-  gaugeControls->setAlignItems(YGAlignFlexStart);
-  gaugeControls->addView(makeWrappedText(
-      i18n::message("settings.visual.gauge_position.help"),
-      metrics.bodyTextSize, app_theme::textSecondary()));
-  auto *gaugePositionControls = new View();
-  gaugePositionControls->setFlexDirection(FlexDirection::Column);
-  gaugePositionControls->setWidthPercent(100);
-  gaugePositionControls->setFlexWrap(YGWrapWrap);
-  gaugePositionControls->setGap(metrics.compact ? 8.0f : 10.0f);
-  gaugePositionControls->setAlignItems(YGAlignFlexStart);
-  gaugePositionControls->addView(makeEnumChoice(metrics, overlayPortal,
-      context.settings.presentation().gaugeBarPosition,
-      {AppSettings::GaugeBarPosition::World, AppSettings::GaugeBarPosition::Left, AppSettings::GaugeBarPosition::Right},
-      formatGaugeBarPositionLabel, [this](AppSettings::GaugeBarPosition value) {
-        context.settings.presentation().gaugeBarPosition = value;
-        persistSettings();
-      }));
-  gaugeControls->addView(gaugePositionControls);
-  cardsColumn->addView(makeCard(
-      metrics, i18n::message("settings.visual.gauge_bar.label"), i18n::message("settings.visual.choose_gauge_position.message"),
-      gaugeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   return cardsColumn;
 }
@@ -2750,7 +2403,6 @@ void SettingsScene::initView() {
     case SettingsTab::Input: return ui_icons::kKeyboard;
     case SettingsTab::Timing: return ui_icons::kClock;
     case SettingsTab::Lane: return ui_icons::kRoad;
-    case SettingsTab::Hud: return ui_icons::kRecords;
     case SettingsTab::Background: return ui_icons::kImage;
     case SettingsTab::GameplaySkins: return ui_icons::kPalette;
     case SettingsTab::Audio: return ui_icons::kVolume;
@@ -2787,7 +2439,6 @@ void SettingsScene::initView() {
   timingTabButton =
       makeTabButton(SettingsTab::Timing, i18n::message("settings.navigation.timing.label"), &timingTabText);
   laneTabButton = makeTabButton(SettingsTab::Lane, i18n::message("settings.navigation.lane.label"), &laneTabText);
-  hudTabButton = makeTabButton(SettingsTab::Hud, "HUD", &hudTabText);
   backgroundTabButton =
       makeTabButton(SettingsTab::Background, i18n::message("settings.navigation.background.label"), &backgroundTabText);
   gameplaySkinsTabButton = makeTabButton(SettingsTab::GameplaySkins,
@@ -2808,7 +2459,6 @@ void SettingsScene::initView() {
   tabControls->addView(inputTabButton);
   tabControls->addView(timingTabButton);
   tabControls->addView(laneTabButton);
-  tabControls->addView(hudTabButton);
   tabControls->addView(backgroundTabButton);
   tabControls->addView(gameplaySkinsTabButton);
   tabControls->addView(audioTabButton);
@@ -2864,9 +2514,6 @@ void SettingsScene::initView() {
     break;
   case SettingsTab::Timing:
     cardsColumn = buildTimingTab(metrics);
-    break;
-  case SettingsTab::Hud:
-    cardsColumn = buildHudTab(metrics);
     break;
   case SettingsTab::Background:
     cardsColumn = buildBackgroundTab(metrics);

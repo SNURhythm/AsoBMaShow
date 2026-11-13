@@ -184,7 +184,7 @@ with the current score; practice keeps Start outside scrolling content.
 
 ## Settings organization
 
-Navigation follows this order: Profiles, Input, Timing, Lane, HUD, Background,
+Navigation follows this order: Profiles, Input, Timing, Lane, Background,
 Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
 
 Metal uses a fixed pool of three drawable buffers to preserve display
@@ -198,10 +198,14 @@ throughput. Buffer count is not a user setting.
   key mode selects touch/virtual-controller layouts and bindings; player and
   device select bindings. Touch and virtual-controller editors precede bindings,
   and the input monitor follows the binding list.
-- Timing contains audio and visual calibration offsets. HUD owns judgement
-  text/combo styling and position, FAST/SLOW and millisecond feedback, timing
-  indicators, judgement counts, and gauge placement. Built-in-only controls
-  are identified separately from HUD settings shared with custom skins.
+- Timing contains audio and visual calibration offsets. Judgement text/combo
+  styling and position, FAST/SLOW and millisecond feedback, timing indicators,
+  judgement counts, and gauge placement live in Skins under the built-in HUD
+  editor. Custom gameplay skins expose shared application HUD controls
+  separately from skin-authored settings. Their own FAST/SLOW condition appears
+  before the catalog options in both the skin editor and live preview. The
+  per-skin condition defaults to GREAT or below and does not change the built-in
+  skin's setting.
 - Lane contains preview, shared scroll/covers, and visibility aids. Built-in
   appearance has one editor in Skins, with horizontal Lane, Notes, Effects,
   and HUD tabs. Numeric appearance controls consistently use left-aligned

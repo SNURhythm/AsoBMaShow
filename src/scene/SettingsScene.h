@@ -144,7 +144,6 @@ private:
   enum class SettingsTab {
     Profile,
     Timing,
-    Hud,
     Background,
     Lane,
     Input,
@@ -185,9 +184,6 @@ private:
   TextView *summaryGaugeBarPositionValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextView *summaryUiThemeValueText = nullptr;
-  TextInputBox *judgementIndicatorYInput = nullptr;
-  TextInputBox *judgementIndicatorWidthInput = nullptr;
-  TextInputBox *judgementIndicatorRangeInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *prepMetronomeModeText = nullptr;
@@ -201,11 +197,9 @@ private:
   TextView *archiveChartPreviewModeText = nullptr;
   TextView *findBmsSkipUnarchivingModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
-  TextView *judgementIndicatorModeText = nullptr;
   TextView *judgementIndicatorRenderModeText = nullptr;
   TextView *judgementTimingFastSlowCriteriaText = nullptr;
   TextView *judgementTimingMillisecondsCriteriaText = nullptr;
-  TextView *judgementCounterModeText = nullptr;
   TextView *judgementCounterPositionText = nullptr;
   TextView *gaugeBarPositionText = nullptr;
   TextView *bgaModeText = nullptr;
@@ -228,11 +222,9 @@ private:
   Button *archiveChartPreviewModeButton = nullptr;
   Button *findBmsSkipUnarchivingModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;
-  Button *judgementIndicatorModeButton = nullptr;
   Button *judgementIndicatorRenderModeButton = nullptr;
   Button *judgementTimingFastSlowCriteriaButton = nullptr;
   Button *judgementTimingMillisecondsCriteriaButton = nullptr;
-  Button *judgementCounterModeButton = nullptr;
   Button *judgementCounterPositionButton = nullptr;
   Button *gaugeBarPositionButton = nullptr;
   Button *bgaModeButton = nullptr;
@@ -241,7 +233,6 @@ private:
   Button *archiveCacheCleanupButton = nullptr;
   Button *profileTabButton = nullptr;
   Button *timingTabButton = nullptr;
-  Button *hudTabButton = nullptr;
   Button *backgroundTabButton = nullptr;
   Button *laneTabButton = nullptr;
   Button *inputTabButton = nullptr;
@@ -254,7 +245,6 @@ private:
   Button *gameplaySkinsTabButton = nullptr;
   Button *irTabButton = nullptr;
   TextView *timingTabText = nullptr;
-  TextView *hudTabText = nullptr;
   TextView *backgroundTabText = nullptr;
   TextView *laneTabText = nullptr;
   TextView *inputTabText = nullptr;
@@ -534,7 +524,6 @@ private:
   void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
   View *buildProfileTab(const settings_scene::LayoutMetrics &metrics);
-  View *buildHudTab(const settings_scene::LayoutMetrics &metrics);
   View *buildBackgroundTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
@@ -654,6 +643,9 @@ private:
       const settings_scene::LayoutMetrics &metrics, int skinType,
       const skin::GameplaySkinSelection &selection, bool ordinaryActionsEnabled,
       float menuWidth);
+  void appendGameplaySkinTimingSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics,
+      const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
   void appendGameplaySkinCatalogSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
@@ -697,16 +689,10 @@ private:
   void syncBgaBrightnessInputText(bool force = false);
   void syncBgaBlurInputText(bool force = false);
   void syncNoteStartPositionInputText(bool force = false);
-  void syncJudgementIndicatorYInputText(bool force = false);
-  void syncJudgementIndicatorWidthInputText(bool force = false);
-  void syncJudgementIndicatorRangeInputText(bool force = false);
   void commitOffsetInput();
   void commitVisualOffsetInput();
   void commitVisibleTimeInput();
   void commitBgaBrightnessInput();
   void commitBgaBlurInput();
   void commitNoteStartPositionInput();
-  void commitJudgementIndicatorYInput();
-  void commitJudgementIndicatorWidthInput();
-  void commitJudgementIndicatorRangeInput();
 };
