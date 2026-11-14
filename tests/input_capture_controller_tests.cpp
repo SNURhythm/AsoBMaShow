@@ -473,6 +473,10 @@ void testMonitoringNoiseActivationRepeatsAndDuplicateIgnore() {
               profile.bindings.size() == 2 && saves == 2,
           "an exact scoped action/control duplicate is ignored without save");
   controller.cancel();
+  harness.input(event(keyControl(23), 1.0F, 28));
+  require(controller.state() == InputCaptureController::State::Idle &&
+              profile.bindings.size() == 2 && saves == 2,
+          "typing after capture cancellation cannot save a new binding");
 }
 
 void testLostReleaseRecoveryPreservesBindingEditing() {

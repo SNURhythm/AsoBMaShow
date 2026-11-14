@@ -2361,6 +2361,12 @@ void SettingsScene::initView() {
     searchButton->setName("settingsSearchButton");
     searchButton->setEnabled(!profilePipelineBusy);
     searchButton->setOnClickListener([this] {
+      // Search hides the binding editor, so it must retire capture before the
+      // focused text field can receive keyboard input.
+      if (inputCaptureController != nullptr) inputCaptureController->cancel();
+      inputCaptureAction.reset();
+      inputViewRebuildGate.reset();
+      inputLastViewSignature.clear();
       closeAppearanceColorPopup();
       settingsSearchOpen = true;
       settingsScrollResetRequested = true;
