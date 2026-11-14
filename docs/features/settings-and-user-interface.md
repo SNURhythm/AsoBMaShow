@@ -187,7 +187,9 @@ with the current score; practice keeps Start outside scrolling content.
 Navigation follows this order: Profiles, Input, Calibration, Scroll & visibility,
 Background, Appearance & skins, Audio, Display, BMS Library, Difficulty Tables,
 IR, General, Legal. The header keeps the active profile visible and offers a Font
-Awesome magnifier button. It opens a full-screen search view; Back closes search,
+Awesome magnifier button. It opens a full-screen search view with only the input
+and Back button in its top row, without the settings title or profile information.
+The input activates automatically. Back closes search,
 and choosing a result opens its settings editor. Search matches
 translated section and setting names plus aliases such as `±ms`, `lane cover`,
 and `keybomb`, and opens the corresponding editor without changing a saved skin

@@ -2290,6 +2290,12 @@ void SettingsScene::initView() {
   rootLayout->setGap(0);
   rootLayout->setThemedBackgroundColor(app_theme::backdrop);
 
+  if (settingsSearchOpen) {
+    appendSettingsSearch(rootLayout, metrics);
+    rootLayout->applyYogaLayout();
+    return;
+  }
+
   auto *header = new View();
   header->setName("settingsTopBar");
   header->setFlexDirection(FlexDirection::Row);
@@ -2305,8 +2311,7 @@ void SettingsScene::initView() {
   headerText->setFlexDirection(FlexDirection::Column);
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
-      makeHeading(i18n::message(settingsSearchOpen ? "settings.clarity.search"
-          : "settings.navigation.settings.label"), metrics.titleSize));
+      makeHeading(i18n::message("settings.navigation.settings.label"), metrics.titleSize));
   auto *profileScope = makeWrappedText(i18n::message("settings.clarity.profile",
       {{"profile", context.profileManager.activeProfile().displayName}}),
       metrics.smallTextSize, app_theme::textSecondary());
@@ -2331,13 +2336,6 @@ void SettingsScene::initView() {
       profilePhase == ProfileSettingsPhase::PickingExport;
   backButton->setEnabled(!profilePipelineBusy);
   backButton->setOnClickListener([this]() {
-    if (settingsSearchOpen) {
-      settingsSearchOpen = false;
-      settingsSearchQuery.clear();
-      settingsScrollResetRequested = true;
-      lastLayoutWidth = -1;
-      return;
-    }
     if (profileController != nullptr) {
       const auto phase = profileController->phase();
       if (phase == ProfileSettingsPhase::PickingImport ||
@@ -2373,11 +2371,6 @@ void SettingsScene::initView() {
   headerActions->addView(backButton);
   header->addView(headerActions);
   rootLayout->addView(header);
-  if (settingsSearchOpen) {
-    appendSettingsSearch(rootLayout, metrics);
-    rootLayout->applyYogaLayout();
-    return;
-  }
 
   const bool portrait = rendering::window_height > rendering::window_width;
   const int tabColumnWidth = portrait ? metrics.contentWidth : std::min(

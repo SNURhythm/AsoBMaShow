@@ -1646,7 +1646,6 @@
 {"settings.clarity.profile", "Active profile: {profile}", "현재 프로필: {profile}", "使用中のプロファイル: {profile}", "当前档案：{profile}", "目前設定檔：{profile}"},
 {"settings.clarity.profile_scope", "This profile · all layouts", "현재 프로필 · 모든 레이아웃", "このプロファイル · 全レイアウト", "此档案 · 所有布局", "此設定檔 · 所有版面"},
 {"settings.clarity.reset", "Reset section", "이 항목 초기화", "この項目をリセット", "重置此部分", "重設此部分"},
-{"settings.clarity.search", "Search settings", "설정 검색", "設定を検索", "搜索设置", "搜尋設定"},
 {"settings.clarity.selection_changed", "The selection changed. Reopen the section and try again.", "선택이 변경되었습니다. 항목을 다시 열어 시도하세요.", "選択が変わりました。項目を開き直してください。", "选择已更改。请重新打开此部分后重试。", "選擇已變更。請重新開啟此部分後重試。"},
 {"settings.clarity.shared_effects", "Beam length is shared by built-in modes in this layout. Keybomb settings belong to the selected mode.", "빔 길이는 이 레이아웃의 기본 스킨 모드가 공유합니다. 키빔 효과는 선택한 모드에 적용됩니다.", "ビームの長さはこのレイアウトの標準モード共通です。キーボム設定は選択モードに適用されます。", "光束长度由此布局的内置模式共用；按键特效仅用于所选模式。", "光束長度由此版面的內建模式共用；按鍵特效僅用於所選模式。"},
 {"settings.clarity.shared_geometry", "Lane length, angle and scratch side are shared by built-in modes in this layout. Width and lane styling belong to the selected mode.", "레인 길이·각도·스크래치 위치는 이 레이아웃의 기본 스킨 모드가 공유합니다. 너비와 레인 모양은 선택한 모드에 적용됩니다.", "レーンの長さ・角度・スクラッチ位置はこのレイアウトの標準モード共通です。幅と装飾は選択モードに適用されます。", "轨道长度、角度和搓盘位置由此布局的内置模式共用；宽度和样式仅用于所选模式。", "軌道長度、角度和轉盤位置由此版面的內建模式共用；寬度和樣式僅用於所選模式。"},
