@@ -2305,7 +2305,8 @@ void SettingsScene::initView() {
   headerText->setFlexDirection(FlexDirection::Column);
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
-      makeHeading(i18n::message("settings.navigation.settings.label"), metrics.titleSize));
+      makeHeading(i18n::message(settingsSearchOpen ? "settings.clarity.search"
+          : "settings.navigation.settings.label"), metrics.titleSize));
   auto *profileScope = makeWrappedText(i18n::message("settings.clarity.profile",
       {{"profile", context.profileManager.activeProfile().displayName}}),
       metrics.smallTextSize, app_theme::textSecondary());
@@ -2330,6 +2331,13 @@ void SettingsScene::initView() {
       profilePhase == ProfileSettingsPhase::PickingExport;
   backButton->setEnabled(!profilePipelineBusy);
   backButton->setOnClickListener([this]() {
+    if (settingsSearchOpen) {
+      settingsSearchOpen = false;
+      settingsSearchQuery.clear();
+      settingsScrollResetRequested = true;
+      lastLayoutWidth = -1;
+      return;
+    }
     if (profileController != nullptr) {
       const auto phase = profileController->phase();
       if (phase == ProfileSettingsPhase::PickingImport ||
@@ -2341,9 +2349,35 @@ void SettingsScene::initView() {
     }
     (void)returnToScene(*context.sceneManager, returnTarget_);
   });
-  header->addView(backButton);
+  auto *headerActions = new View();
+  headerActions->setFlexDirection(FlexDirection::Row);
+  headerActions->setAlignItems(YGAlignCenter);
+  headerActions->setGap(8);
+  headerActions->setFlexShrink(0);
+  if (!settingsSearchOpen) {
+    auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, metrics.bodyTextSize);
+    icon->setText(ui_icons::textForCodepoint(0xf002)); // magnifying-glass
+    icon->setThemedColor(app_theme::textPrimary);
+    auto *searchButton = makeControlButton(metrics.actionButtonHeight,
+        metrics.actionButtonHeight, icon);
+    searchButton->setName("settingsSearchButton");
+    searchButton->setEnabled(!profilePipelineBusy);
+    searchButton->setOnClickListener([this] {
+      closeAppearanceColorPopup();
+      settingsSearchOpen = true;
+      settingsScrollResetRequested = true;
+      lastLayoutWidth = -1;
+    });
+    headerActions->addView(searchButton);
+  }
+  headerActions->addView(backButton);
+  header->addView(headerActions);
   rootLayout->addView(header);
-  appendSettingsSearch(rootLayout, metrics);
+  if (settingsSearchOpen) {
+    appendSettingsSearch(rootLayout, metrics);
+    rootLayout->applyYogaLayout();
+    return;
+  }
 
   const bool portrait = rendering::window_height > rendering::window_width;
   const int tabColumnWidth = portrait ? metrics.contentWidth : std::min(

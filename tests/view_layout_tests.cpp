@@ -1,6 +1,7 @@
 #include "../src/view/BlockingOverlayView.h"
 #include "../src/view/OverlayPortal.h"
 #include "../src/view/View.h"
+#include "../src/view/ViewVisibility.h"
 #include "../src/view/UiTheme.h"
 #include "scene/ResultLayoutGeometry.h"
 #include "ir/IrRankingModal.h"
@@ -1419,7 +1420,24 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 
 } // namespace
 
+void testConditionalRowsHideRenderingAndLayoutTogether() {
+  View root(0, 0, 300, 200);
+  root.setFlexDirection(FlexDirection::Column);
+  auto *conditional = new View(0, 0, 100, 40);
+  auto *following = new View(0, 0, 100, 40);
+  root.addView(conditional);
+  root.addView(following);
+  assert(following->getY() == 40);
+  view_visibility::setLayoutVisible(conditional, false);
+  assert(!conditional->getVisible());
+  assert(following->getY() == 0);
+  view_visibility::setLayoutVisible(conditional, true);
+  assert(conditional->getVisible());
+  assert(following->getY() == 40);
+}
+
 int main() {
+  testConditionalRowsHideRenderingAndLayoutTogether();
   testVisualMutationsWakeIdlePresentation();
   testThemedStyleAndLayoutReapplicationSettle();
   testPublishedGeometryWakesAfterExternalYogaCalculation();

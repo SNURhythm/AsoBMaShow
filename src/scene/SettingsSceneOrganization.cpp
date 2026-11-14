@@ -1,6 +1,7 @@
 #include "SettingsSceneShared.h"
 #include "../GameplayKeyMode.h"
 #include "../view/ScrollView.h"
+#include "../view/ViewVisibility.h"
 #include "../input/InputCaptureController.h"
 
 using namespace settings_scene;
@@ -199,6 +200,7 @@ void SettingsScene::openSettingsSearchResult(settings_search::Destination destin
   }
   if (!selectSettingsTab(tab)) return;
   settingsSearchQuery.clear();
+  settingsSearchOpen = false;
   settingsScrollResetRequested = true;
   pendingSectionAction.clear();
   switch (destination) {
@@ -219,13 +221,18 @@ void SettingsScene::openSettingsSearchResult(settings_search::Destination destin
 void SettingsScene::appendSettingsSearch(View *body, const LayoutMetrics &metrics) {
   auto *search = new View();
   search->setFlexDirection(FlexDirection::Column);
-  search->setGap(6);
+  search->setGap(12);
+  search->setFlex(1);
+  search->setMinHeight(0);
+  search->setPadding(Edge::Bottom, metrics.safe.bottom + metrics.verticalPadding);
   search->setPadding(Edge::Left, metrics.safe.left + metrics.horizontalPadding);
   search->setPadding(Edge::Right, metrics.safe.right + metrics.horizontalPadding);
-  search->setFlexShrink(0);
+  search->setFlexShrink(1);
   search->addView(makeWrappedText(i18n::message("settings.clarity.search"),
       metrics.smallTextSize, app_theme::textSecondary()));
-  auto *input = makeTextInput(metrics, std::min(540, metrics.contentWidth));
+  auto *input = makeTextInput(metrics, metrics.contentWidth);
+  input->setWidthPercent(100);
+  input->setFlexShrink(0);
   input->setName("settingsSearch");
   input->setClearable(true);
   input->setEditingText(settingsSearchQuery);
@@ -238,6 +245,8 @@ void SettingsScene::appendSettingsSearch(View *body, const LayoutMetrics &metric
     auto *button = sectionButton(metrics, i18n::message(entry.title.data()), [this, destination = entry.destination] {
       openSettingsSearchResult(destination);
     });
+    button->setWidthPercent(100);
+    button->setFlexShrink(0);
     results->addView(button);
     buttons.emplace_back(entry.title, button);
   }
@@ -245,23 +254,26 @@ void SettingsScene::appendSettingsSearch(View *body, const LayoutMetrics &metric
       metrics.smallTextSize, app_theme::textSecondary());
   results->addView(empty);
   auto *resultScroll = new ScrollView();
-  resultScroll->setHeight(metrics.compact ? 160 : 220);
+  resultScroll->setFlex(1);
+  resultScroll->setMinHeight(0);
   resultScroll->setWidthPercent(100);
   resultScroll->setContentView(results);
   search->addView(resultScroll);
   // Filter retained rows without rebuilding the input or ending composition.
   const auto filter = [this, buttons, empty, resultScroll](const std::string &query) {
+    View::LayoutBatchScope layoutBatch;
     settingsSearchQuery = query;
+    resultScroll->setScrollOffset(0);
     const auto matches = settings_search::search(query, [](std::string_view id) {
       return i18n::message(id.data()).resolve();
     });
     const bool hasQuery = query.find_first_not_of(" \t\r\n") != std::string::npos;
-    resultScroll->setDisplay(hasQuery ? YGDisplayFlex : YGDisplayNone);
+    view_visibility::setLayoutVisible(resultScroll, hasQuery);
     for (const auto &[title, button] : buttons) {
       const auto found = std::ranges::find(matches, title, &settings_search::Result::title);
-      button->setDisplay(found != matches.end() ? YGDisplayFlex : YGDisplayNone);
+      view_visibility::setLayoutVisible(button, found != matches.end());
     }
-    empty->setDisplay(hasQuery && matches.empty() ? YGDisplayFlex : YGDisplayNone);
+    view_visibility::setLayoutVisible(empty, hasQuery && matches.empty());
   };
   input->onTextChanged(filter);
   filter(settingsSearchQuery);

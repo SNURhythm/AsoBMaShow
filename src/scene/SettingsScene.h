@@ -126,6 +126,7 @@ private:
   AppearancePage appearancePage = AppearancePage::Skin;
   bool skinDetailsVisible = false;
   std::string settingsSearchQuery;
+  bool settingsSearchOpen = false;
   bool settingsScrollResetRequested = false;
   std::string pendingSectionAction;
   bool pendingSectionCopy = false;

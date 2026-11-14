@@ -186,10 +186,14 @@ with the current score; practice keeps Start outside scrolling content.
 
 Navigation follows this order: Profiles, Input, Calibration, Scroll & visibility,
 Background, Appearance & skins, Audio, Display, BMS Library, Difficulty Tables,
-IR, General, Legal. The header keeps the active profile visible. Search matches
+IR, General, Legal. The header keeps the active profile visible and offers a Font
+Awesome magnifier button. It opens a full-screen search view; Back closes search,
+and choosing a result opens its settings editor. Search matches
 translated section and setting names plus aliases such as `±ms`, `lane cover`,
 and `keybomb`, and opens the corresponding editor without changing a saved skin
-selection. Filtering retains the input and its composition/focus.
+selection. Filtering retains the input and its composition/focus. Conditional
+search rows use `view_visibility::setLayoutVisible` to update rendering/input
+visibility and Yoga layout together, including the no-results label.
 
 Metal uses a fixed pool of three drawable buffers to preserve display
 throughput. Buffer count is not a user setting.
