@@ -278,4 +278,14 @@ void SettingsScene::appendSettingsSearch(View *body, const LayoutMetrics &metric
   input->onTextChanged(filter);
   filter(settingsSearchQuery);
   body->addView(search);
+  // Focus after the layout batch completes so native keyboards get the final
+  // input rectangle. Resolve the current view instead of retaining a pointer
+  // across a possible close or rebuild.
+  defer([this] {
+    if (settingsSearchOpen && rootLayout != nullptr) {
+      if (auto *field = dynamic_cast<TextInputBox *>(rootLayout->findViewByName("settingsSearch")))
+        field->beginEditing();
+    }
+    return true;
+  }, 0, true);
 }
