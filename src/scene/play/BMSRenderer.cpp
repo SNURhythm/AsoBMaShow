@@ -297,48 +297,6 @@ Color hudTimingColor(long long diffMicros) {
   return diffMicros < 0 ? hudFastColor() : hudSlowColor();
 }
 
-int judgementTimingRank(Judgement judgement) {
-  switch (judgement) {
-  case PGreat:
-    return 0;
-  case Great:
-    return 1;
-  case Good:
-    return 2;
-  case Bad:
-    return 3;
-  case Kpoor:
-  case Poor:
-    return 4;
-  case None:
-  case JudgementCount:
-    break;
-  }
-  return 99;
-}
-
-int judgementTimingCriteriaRank(
-    AppSettings::JudgementTimingDisplayCriteria criteria) {
-  switch (criteria) {
-  case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
-    return 0;
-  case AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow:
-    return 1;
-  case AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow:
-    return 2;
-  case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
-    return 3;
-  case AppSettings::JudgementTimingDisplayCriteria::Off:
-    return 100;
-  }
-  return 1;
-}
-
-bool judgementMeetsTimingCriteria(
-    Judgement judgement, AppSettings::JudgementTimingDisplayCriteria criteria) {
-  return judgementTimingRank(judgement) >= judgementTimingCriteriaRank(criteria);
-}
-
 int counterValueAt(const JudgementCounterSnapshot &snapshot, size_t index) {
   switch (index) {
   case 0:
@@ -4167,10 +4125,10 @@ void BMSRenderer::applyPendingHudText(long long currentMicros) {
   const bool hasJudgement = judgement != None;
   const bool hasTiming = hasJudgement && diffMicros != 0;
   const bool showTimingDirection =
-      hasTiming && judgementMeetsTimingCriteria(
+      hasTiming && player_settings::judgementMeetsTimingCriteria(
                        judgement, judgementTimingFastSlowCriteria);
   const bool showTimingMs =
-      hasTiming && judgementMeetsTimingCriteria(
+      hasTiming && player_settings::judgementMeetsTimingCriteria(
                        judgement, judgementTimingMillisecondsCriteria);
   const bool showTimingFeedback = showTimingDirection || showTimingMs;
   renderedTimingFastShown = showTimingFeedback && diffMicros < 0;

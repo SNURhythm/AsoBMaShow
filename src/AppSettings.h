@@ -12,6 +12,7 @@
 #include "settings/BuiltInJudgeLine.h"
 #include "settings/BuiltInLaneAppearance.h"
 #include "settings/JudgementTextVisibility.h"
+#include "settings/JudgementTimingDisplayCriteria.h"
 #include "settings/KeybombSettings.h"
 #include "settings/PresentationGeometryPolicy.h"
 #include "platform/ScreenOrientation.h"
@@ -66,13 +67,8 @@ public:
     Right = 2,
   };
 
-  enum class JudgementTimingDisplayCriteria {
-    GreatOrBelow = 0,
-    PGreatOrBelow = 1,
-    GoodOrBelow = 2,
-    BadOrBelow = 3,
-    Off = 4,
-  };
+  using JudgementTimingDisplayCriteria =
+      player_settings::JudgementTimingDisplayCriteria;
 
   enum class GaugeBarPosition {
     World = 0,

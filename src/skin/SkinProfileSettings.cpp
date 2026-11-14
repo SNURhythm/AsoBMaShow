@@ -150,6 +150,10 @@ void sanitizeEntry(EntryProfileSettings &entry) {
   sanitizeMap(entry.offsets,
               [](ConfigOffset value) { return std::optional<ConfigOffset>(value); });
   sanitizeViewport(entry.viewport);
+  entry.fastSlowCriteria = player_settings::sanitizeJudgementTimingDisplayCriteria(
+      entry.fastSlowCriteria);
+  entry.millisecondsCriteria = player_settings::sanitizeJudgementTimingDisplayCriteria(
+      entry.millisecondsCriteria);
 }
 
 } // namespace

@@ -5,6 +5,7 @@
 #include "Lr2GameplaySkinDecoder.h"
 #include "Lr2SkinCsvParser.h"
 #include "Lr2SkinHeaderDecoder.h"
+#include "Lr2SkinPath.h"
 #include "LuaSkinRuntime.h"
 #include "LuaSkinTableDecoder.h"
 #include "MusicSelectSkinModelResolver.h"
@@ -359,6 +360,23 @@ DecodedGameplaySkinDocument decodeJson(GameplaySkinDocumentRequest &request,
   return result;
 }
 
+void resolveLr2ResourcePaths(std::vector<Lr2SkinCommand> &commands,
+                             const SkinEntryId &entry) {
+  for (auto &command : commands) {
+    std::size_t field = 0;
+    if (command.name == "IMAGE" || command.name == "LR2FONT") field = 1;
+    else if (command.name == "CUSTOMFILE") field = 2;
+    else if (command.name == "DST_PM_CHARA_1P" ||
+             command.name == "DST_PM_CHARA_2P") field = 7;
+    else if (command.name == "DST_PM_CHARA_ANIMATION") field = 12;
+    else if (command.name == "SRC_PM_CHARA_IMAGE") field = 3;
+    if (field != 0 && field <= command.fields.size()) {
+      command.fields[field - 1] =
+          lr2EntryRelativePath(entry, command.fields[field - 1]);
+    }
+  }
+}
+
 DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
   DecodedGameplaySkinDocument result;
   const auto bytes = request.documentFileSystem.readEntry(documentByteLimit(
@@ -392,6 +410,7 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
   }
 
   Lr2SkinHeaderDecoder headerDecoder;
+  resolveLr2ResourcePaths(rootParsed.commands, request.entry);
   auto decodedHeader = headerDecoder.decode(rootParsed.commands);
   appendMoved(result.diagnostics, decodedHeader.diagnostics);
   result.header = std::move(decodedHeader.header);
@@ -399,9 +418,33 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
     return result;
   }
 
+  // LR2 custom-file defaults commonly omit the extension. Use the same
+  // directory-backed choices as Lua/JSON, retaining LR2's option semantics.
+  BeatorajaSkinHeader fileHeader;
+  fileHeader.files = result.header->files;
+  EntryProfileSettings settings = request.desiredSettings
+      ? *request.desiredSettings : EntryProfileSettings{};
+  // Older LR2 sessions persisted the authored default verbatim, including
+  // extensionless labels. Re-resolve those defaults to actual file choices.
+  for (const auto &file : fileHeader.files) {
+    const auto saved = settings.filePaths.find(file.name);
+    if (saved != settings.filePaths.end() && saved->second == file.defaultValue) {
+      settings.filePaths.erase(saved);
+    }
+  }
+  auto files = reconcileSkinConfiguration(
+      fileHeader, &settings, request.documentFileSystem,
+      request.pinnedRuntimeSelection);
+  appendMoved(result.diagnostics, files.diagnostics);
+  if (!files.configuration) {
+    result.fatal = true;
+    return result;
+  }
+  settings.filePaths = files.reconciledSettings.filePaths;
+
   Lr2GameplaySkinDecoder gameplayDecoder;
   auto reconciled = reconcileLr2GameplaySkinConfiguration(
-      *result.header, request.desiredSettings);
+      *result.header, &settings);
   appendMoved(result.diagnostics, reconciled.diagnostics);
   if (reconciled.fatal || !reconciled.configuration) {
     result.fatal = true;
@@ -421,10 +464,16 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
     result.fatal = true;
     return result;
   }
+  resolveLr2ResourcePaths(parsed.commands, request.entry);
   auto decoded = gameplayDecoder.decode(
-      *result.header, parsed.commands, request.desiredSettings,
+      *result.header, parsed.commands, &settings,
       gameplaySkinBuiltinCatalog(), request.safetyPolicy, request.stop, {},
       &reconciled.configuration->optionStates);
+  if (decoded.configuration) {
+    decoded.configuration->orderedFiles =
+        std::move(files.configuration->orderedFiles);
+    decoded.configuration->filePaths = std::move(files.configuration->filePaths);
+  }
   result.configuration = std::move(decoded.configuration);
   result.reconciledSettings = std::move(decoded.reconciledSettings);
   result.model = std::move(decoded.model);

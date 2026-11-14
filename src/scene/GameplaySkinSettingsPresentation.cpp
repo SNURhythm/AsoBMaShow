@@ -214,6 +214,8 @@ void encodeSettings(PresentationKeyEncoder &encoder,
     encoder.signedNumber(value.a);
   }
   encodeViewport(encoder, settings.viewport);
+  encodeEnum(encoder, settings.fastSlowCriteria);
+  encodeEnum(encoder, settings.millisecondsCriteria);
 }
 
 const char *progressPhaseLabel(SkinProgressPhase phase) {
@@ -341,6 +343,8 @@ std::string gameplaySkinPreviewConfigurationKey(
     encoder.text(row->revisionDigest);
     encoder.text(row->configurationDigest);
     encodeViewport(encoder, row->settings.viewport);
+    encodeEnum(encoder, row->settings.fastSlowCriteria);
+    encodeEnum(encoder, row->settings.millisecondsCriteria);
   }
   return std::move(encoder).finish();
 }
@@ -590,6 +594,8 @@ std::string gameplaySkinSettingsLayoutKey(
     // Viewport labels, framing selection and button availability are built
     // from the committed snapshot rather than updated by the live UI path.
     encodeViewport(encoder, row.settings.viewport);
+    encodeEnum(encoder, row.settings.fastSlowCriteria);
+    encodeEnum(encoder, row.settings.millisecondsCriteria);
     encoder.unsignedNumber(row.diagnostics.size());
     for (const auto &diagnostic : row.diagnostics) {
       encodeDiagnostic(encoder, diagnostic);

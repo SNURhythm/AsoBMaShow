@@ -1,4 +1,6 @@
 #pragma once
+#include "../settings/AppearanceSections.h"
+#include "SettingsSearch.h"
 #include "../i18n/Localization.h"
 
 #include "../repositories/ChartRepository.h"
@@ -120,6 +122,14 @@ private:
   std::function<void(PlayfieldPresentationConfig &)> appearanceColorPreview;
   std::map<int, std::set<int>> builtInNoteLanes;
   int builtInNoteType = 0;
+  enum class AppearancePage { Skin, BuiltIn, Overlays, Manage };
+  AppearancePage appearancePage = AppearancePage::Skin;
+  bool skinDetailsVisible = false;
+  std::string settingsSearchQuery;
+  bool settingsSearchOpen = false;
+  bool settingsScrollResetRequested = false;
+  std::string pendingSectionAction;
+  bool pendingSectionCopy = false;
   enum class BuiltInSkinTab { Lane, Notes, Effects, Hud };
   BuiltInSkinTab builtInSkinTab = BuiltInSkinTab::Lane;
   int builtInSkinFallbackMode = 7;
@@ -144,7 +154,6 @@ private:
   enum class SettingsTab {
     Profile,
     Timing,
-    Hud,
     Background,
     Lane,
     Input,
@@ -158,6 +167,19 @@ private:
     Ir,
   };
 
+  bool selectSettingsTab(SettingsTab tab);
+  void openSettingsSearchResult(settings_search::Destination destination);
+  void appendSettingsSearch(View *body, const settings_scene::LayoutMetrics &metrics);
+  void appendAppearanceNavigation(View *body, const settings_scene::LayoutMetrics &metrics);
+  void appendAppearanceShortcut(View *body, const settings_scene::LayoutMetrics &metrics, AppearancePage page);
+  i18n::Text orientationLabel(AppSettings::PresentationOrientation orientation) const;
+  i18n::Text appearanceScope(int mode, bool shared, const i18n::Text &skinName) const;
+  void appendSectionActions(View *body, const settings_scene::LayoutMetrics &metrics,
+      const std::string &key, const i18n::Text &section, const i18n::Text &scope,
+      bool enabled, std::function<void(bool)> apply, bool allowCopy = true);
+  void appendBuiltInSectionActions(View *body, const settings_scene::LayoutMetrics &metrics,
+      settings_edit::AppearanceSection section, int mode, const i18n::Text &label);
+  void appendSharedOverlaySettings(View *body, const settings_scene::LayoutMetrics &metrics);
   View *rootLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
   TextInputBox *offsetInput = nullptr;
@@ -185,9 +207,6 @@ private:
   TextView *summaryGaugeBarPositionValueText = nullptr;
   TextView *summaryNotePriorityValueText = nullptr;
   TextView *summaryUiThemeValueText = nullptr;
-  TextInputBox *judgementIndicatorYInput = nullptr;
-  TextInputBox *judgementIndicatorWidthInput = nullptr;
-  TextInputBox *judgementIndicatorRangeInput = nullptr;
   TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *prepMetronomeModeText = nullptr;
@@ -201,11 +220,9 @@ private:
   TextView *archiveChartPreviewModeText = nullptr;
   TextView *findBmsSkipUnarchivingModeText = nullptr;
   TextView *notePriorityModeText = nullptr;
-  TextView *judgementIndicatorModeText = nullptr;
   TextView *judgementIndicatorRenderModeText = nullptr;
   TextView *judgementTimingFastSlowCriteriaText = nullptr;
   TextView *judgementTimingMillisecondsCriteriaText = nullptr;
-  TextView *judgementCounterModeText = nullptr;
   TextView *judgementCounterPositionText = nullptr;
   TextView *gaugeBarPositionText = nullptr;
   TextView *bgaModeText = nullptr;
@@ -228,11 +245,9 @@ private:
   Button *archiveChartPreviewModeButton = nullptr;
   Button *findBmsSkipUnarchivingModeButton = nullptr;
   Button *notePriorityModeButton = nullptr;
-  Button *judgementIndicatorModeButton = nullptr;
   Button *judgementIndicatorRenderModeButton = nullptr;
   Button *judgementTimingFastSlowCriteriaButton = nullptr;
   Button *judgementTimingMillisecondsCriteriaButton = nullptr;
-  Button *judgementCounterModeButton = nullptr;
   Button *judgementCounterPositionButton = nullptr;
   Button *gaugeBarPositionButton = nullptr;
   Button *bgaModeButton = nullptr;
@@ -241,7 +256,6 @@ private:
   Button *archiveCacheCleanupButton = nullptr;
   Button *profileTabButton = nullptr;
   Button *timingTabButton = nullptr;
-  Button *hudTabButton = nullptr;
   Button *backgroundTabButton = nullptr;
   Button *laneTabButton = nullptr;
   Button *inputTabButton = nullptr;
@@ -254,7 +268,6 @@ private:
   Button *gameplaySkinsTabButton = nullptr;
   Button *irTabButton = nullptr;
   TextView *timingTabText = nullptr;
-  TextView *hudTabText = nullptr;
   TextView *backgroundTabText = nullptr;
   TextView *laneTabText = nullptr;
   TextView *inputTabText = nullptr;
@@ -534,7 +547,6 @@ private:
   void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
   View *buildProfileTab(const settings_scene::LayoutMetrics &metrics);
-  View *buildHudTab(const settings_scene::LayoutMetrics &metrics);
   View *buildBackgroundTab(const settings_scene::LayoutMetrics &metrics);
   View *buildLaneTab(const settings_scene::LayoutMetrics &metrics);
   View *buildInputTab(const settings_scene::LayoutMetrics &metrics);
@@ -654,6 +666,12 @@ private:
       const settings_scene::LayoutMetrics &metrics, int skinType,
       const skin::GameplaySkinSelection &selection, bool ordinaryActionsEnabled,
       float menuWidth);
+  void appendCustomSectionActions(View *body, const settings_scene::LayoutMetrics &metrics,
+      const skin::GameplaySkinEntryRow &row, skin::EntrySettingsSection section,
+      const i18n::Text &label, bool enabled);
+  void appendGameplaySkinTimingSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics,
+      const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
   void appendGameplaySkinCatalogSettings(
       View *body, const settings_scene::LayoutMetrics &metrics,
       const skin::GameplaySkinEntryRow &row, bool ordinaryActionsEnabled);
@@ -697,16 +715,10 @@ private:
   void syncBgaBrightnessInputText(bool force = false);
   void syncBgaBlurInputText(bool force = false);
   void syncNoteStartPositionInputText(bool force = false);
-  void syncJudgementIndicatorYInputText(bool force = false);
-  void syncJudgementIndicatorWidthInputText(bool force = false);
-  void syncJudgementIndicatorRangeInputText(bool force = false);
   void commitOffsetInput();
   void commitVisualOffsetInput();
   void commitVisibleTimeInput();
   void commitBgaBrightnessInput();
   void commitBgaBlurInput();
   void commitNoteStartPositionInput();
-  void commitJudgementIndicatorYInput();
-  void commitJudgementIndicatorWidthInput();
-  void commitJudgementIndicatorRangeInput();
 };

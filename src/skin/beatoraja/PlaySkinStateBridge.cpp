@@ -2185,7 +2185,8 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
   case 1363: {
     const int region = *id < 1260 ? 0 : *id < 1360 ? 1 : 2;
     const auto &judge = judgeRegions_[region];
-    return {.value = judge.judgement != None &&
+    return {.value = player_settings::judgementMeetsTimingCriteria(
+                         judge.judgement, context_.configuration.fastSlowCriteria) &&
                      (*id % 2 == 0 ? judge.fastSlowMicros < 0
                                    : judge.fastSlowMicros > 0),
             .supported = true};
@@ -3014,6 +3015,12 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
   case 525:
   case 526:
   case 527:
+    // Excluded grades use SkinNumber's hidden sentinel, not a zero-ms value.
+    if (!player_settings::judgementMeetsTimingCriteria(
+            judgeRegions_[*id - 525].judgement,
+            context_.configuration.millisecondsCriteria)) {
+      return {.value = std::numeric_limits<std::int32_t>::min(), .supported = true};
+    }
     // Beatoraja's recent timing uses the opposite sign and milliseconds.
     return {.value = -static_cast<std::int64_t>(
                          judgeRegions_[*id - 525].fastSlowMicros) / 1'000,

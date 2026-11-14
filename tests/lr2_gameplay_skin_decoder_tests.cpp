@@ -223,6 +223,8 @@ void testAllCommandsDecodeToTypedCanonicalModel() {
   desired.filePaths["Files"] = "selected.png";
   desired.offsets["Move"] = {.x = 7, .y = 8, .w = 9, .h = 10, .r = 11,
                               .a = 12};
+  desired.fastSlowCriteria = player_settings::JudgementTimingDisplayCriteria::BadOrBelow;
+  desired.millisecondsCriteria = player_settings::JudgementTimingDisplayCriteria::GoodOrBelow;
   desired.viewport = {.mode = ViewportMode::Stretch,
                       .scaleX = 1.25F,
                       .scaleY = 0.75F,
@@ -239,6 +241,12 @@ void testAllCommandsDecodeToTypedCanonicalModel() {
   if (!decoded.configuration || !decoded.reconciledSettings || !decoded.model) {
     return;
   }
+  expect(decoded.configuration->millisecondsCriteria == desired.millisecondsCriteria &&
+             decoded.reconciledSettings->millisecondsCriteria == desired.millisecondsCriteria,
+         "millisecond criteria reach the decoded skin independently");
+  expect(decoded.configuration->fastSlowCriteria == desired.fastSlowCriteria &&
+             decoded.reconciledSettings->fastSlowCriteria == desired.fastSlowCriteria,
+         "static skin preserves FAST/SLOW criteria in runtime configuration");
   const auto &configuration = *decoded.configuration;
   const auto &model = *decoded.model;
 
@@ -698,6 +706,24 @@ void testStrictLr2IntegerMatchesJavaParseIntAsciiBoundary() {
          "without trimming, coercion, or overflow");
 }
 
+void testLegacyGaugeWithoutResultTimingKeepsRenderableDefaults() {
+  const BeatorajaSkinHeader header{.type = 0, .width = 640, .height = 480};
+  const std::vector<Lr2SkinCommand> commands{
+      {.name = "IMAGE", .fields = {"gauge.png"}},
+      {.name = "SRC_GROOVEGAUGE",
+       .fields = splitFields("0,0,0,0,28,28,4,1,0,0,6,0,,,,,,,,,,")}};
+  const auto decoded = Lr2GameplaySkinDecoder{}.decode(
+      header, commands, nullptr, gameplaySkinBuiltinCatalog());
+  expect(decoded.model.has_value(), "legacy groove gauge decodes");
+  if (!decoded.model) return;
+  const auto gauges = objectsWith<SkinGaugeObject>(*decoded.model);
+  expect(gauges.size() == 1, "legacy groove gauge is retained");
+  if (gauges.empty()) return;
+  const auto &gauge = std::get<SkinGaugeObject>(gauges.front()->payload);
+  expect(gauge.resultStartMillis == 0 && gauge.resultEndMillis == 500,
+         "omitted LR2 result timing preserves a renderable gauge interval");
+}
+
 void testCancellationStopsMidLr2ModelFold() {
   const BeatorajaSkinHeader header{.type = 0, .width = 640, .height = 480};
   std::vector<Lr2SkinCommand> commands;
@@ -723,6 +749,7 @@ void testCancellationStopsMidLr2ModelFold() {
 int main(int argc, char **argv) {
   testStrictLr2IntegerMatchesJavaParseIntAsciiBoundary();
   testBuiltinReferenceBarGraphsRetainTheirPinnedSource();
+  testLegacyGaugeWithoutResultTimingKeepsRenderableDefaults();
   testCancellationStopsMidLr2ModelFold();
   testAllCommandsDecodeToTypedCanonicalModel();
   return gameplay_skin_ledger_evidence::finish(

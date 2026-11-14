@@ -444,9 +444,6 @@ void SettingsScene::cleanupScene() {
   summaryPreviewPlayAreaWidthValueText = nullptr;
   summaryNotePriorityValueText = nullptr;
   summaryJudgementIndicatorRangeValueText = nullptr;
-  judgementIndicatorYInput = nullptr;
-  judgementIndicatorWidthInput = nullptr;
-  judgementIndicatorRangeInput = nullptr;
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
@@ -456,7 +453,6 @@ void SettingsScene::cleanupScene() {
   touchVisualizationModeText = nullptr;
   hispeedAutoAdjustModeText = nullptr;
   notePriorityModeText = nullptr;
-  judgementIndicatorModeText = nullptr;
   judgementIndicatorRenderModeText = nullptr;
   bgaModeText = nullptr;
   bgaDisplayModeText = nullptr;
@@ -473,14 +469,12 @@ void SettingsScene::cleanupScene() {
   touchVisualizationModeButton = nullptr;
   hispeedAutoAdjustModeButton = nullptr;
   notePriorityModeButton = nullptr;
-  judgementIndicatorModeButton = nullptr;
   judgementIndicatorRenderModeButton = nullptr;
   bgaModeButton = nullptr;
   bgaDisplayModeButton = nullptr;
   archiveCacheCleanupButton = nullptr;
   profileTabButton = nullptr;
   timingTabButton = nullptr;
-  hudTabButton = nullptr;
   backgroundTabButton = nullptr;
   laneTabButton = nullptr;
   inputTabButton = nullptr;
@@ -491,7 +485,6 @@ void SettingsScene::cleanupScene() {
   bmsLibraryTabButton = nullptr;
   irTabButton = nullptr;
   timingTabText = nullptr;
-  hudTabText = nullptr;
   backgroundTabText = nullptr;
   laneTabText = nullptr;
   inputTabText = nullptr;

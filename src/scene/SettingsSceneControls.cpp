@@ -151,6 +151,8 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     button->setOnClickListener([this, page]() {
       if (builtInSkinTab == page) return;
       builtInSkinTab = page;
+      pendingSectionAction.clear();
+      settingsScrollResetRequested = true;
       lastLayoutWidth = -1;
     });
     tabs->addView(button);
@@ -158,13 +160,16 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
   appendTab(BuiltInSkinTab::Lane, i18n::message("settings.preview_layout.lane.label"));
   appendTab(BuiltInSkinTab::Notes, i18n::message("settings.notes.title"));
   appendTab(BuiltInSkinTab::Effects, i18n::message("settings.skins.effects.label"));
-  appendTab(BuiltInSkinTab::Hud, "HUD");
+  appendTab(BuiltInSkinTab::Hud, i18n::message("settings.clarity.builtin_hud"));
   body->addView(tabs);
-  body->addView(makeWrappedText(i18n::message("settings.skins.builtin_scope.description"),
-                                metrics.smallTextSize, app_theme::textSecondary()));
+  const bool shared = builtInSkinTab == BuiltInSkinTab::Hud;
+  body->addView(makeWrappedText(appearanceScope(keyMode, shared,
+      i18n::message("settings.clarity.builtin")), metrics.smallTextSize, app_theme::textSecondary()));
 
   switch (builtInSkinTab) {
   case BuiltInSkinTab::Lane: {
+    body->addView(makeWrappedText(i18n::message("settings.clarity.shared_geometry"),
+        metrics.smallTextSize, app_theme::textSecondary()));
     if (keyMode == 5 || keyMode == 7 || keyMode == -5 || keyMode == -7) {
       body->addView(buildScratchLanePositionControl(metrics));
     }
@@ -172,19 +177,30 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     appendBuiltInLaneOpacityControls(body, metrics, keyMode);
     appendBuiltInJudgeLineControls(body, metrics, keyMode);
     appendBuiltInMeasureLineControls(body, metrics, keyMode);
+    appendBuiltInSectionActions(body, metrics, settings_edit::AppearanceSection::Lane,
+        keyMode, i18n::message("settings.clarity.builtin_lane"));
     break;
   }
   case BuiltInSkinTab::Notes:
     appendBuiltInNoteControls(body, metrics, keyMode);
+    appendBuiltInSectionActions(body, metrics, settings_edit::AppearanceSection::Notes,
+        keyMode, i18n::message("settings.notes.title"));
     break;
   case BuiltInSkinTab::Effects:
+    body->addView(makeWrappedText(i18n::message("settings.clarity.shared_effects"),
+        metrics.smallTextSize, app_theme::textSecondary()));
     appendBuiltInBeamLengthControls(body, metrics);
     body->addView(makeWrappedText(i18n::message("settings.keybomb.title"),
                                   metrics.bodyTextSize, app_theme::textPrimary()));
     body->addView(buildKeybombControls(metrics, keyMode, false));
+    appendBuiltInSectionActions(body, metrics, settings_edit::AppearanceSection::Effects,
+        keyMode, i18n::message("settings.skins.effects.label"));
     break;
   case BuiltInSkinTab::Hud:
     appendSelectedSkinHudSettings(body, metrics, true);
+    appendBuiltInSectionActions(body, metrics, settings_edit::AppearanceSection::Hud,
+        keyMode, i18n::message("settings.clarity.builtin_hud"));
+    appendAppearanceShortcut(body, metrics, AppearancePage::Overlays);
     break;
   }
 }
@@ -197,6 +213,8 @@ void SettingsScene::appendBuiltInSkinFallbackSettings(
   auto *mode = new DropdownView({
       .onOptionSelected = [this](const std::string &id) {
         builtInSkinFallbackMode = std::stoi(id);
+        pendingSectionAction.clear();
+        settingsScrollResetRequested = true;
         lastLayoutWidth = -1;
       }}, overlayPortal);
   std::vector<DropdownView::Option> options;
@@ -563,8 +581,6 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   const i18n::Text judgementCounterPositionLabel =
       formatJudgementCounterPositionLabel(
           context.settings.presentation().judgementCounterPosition);
-  const i18n::Text judgementCounterModeLabel =
-      context.settings.presentation().judgementCounterEnabled ? i18n::message("settings.controls.judgement_counter_mode.enabled.label") : i18n::message("settings.controls.judgement_counter_mode.disabled.label");
   const i18n::Text judgementCounterSummaryLabel =
       context.settings.presentation().judgementCounterEnabled ? judgementCounterPositionLabel
                                                : i18n::message("settings.controls.judgement_counter_summary.disabled.label");
@@ -668,15 +684,6 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   if (summaryUiThemeValueText != nullptr) {
     summaryUiThemeValueText->setLocalizedText(uiThemeLabel);
   }
-  if (syncInputs) {
-    syncJudgementIndicatorYInputText();
-  }
-  if (syncInputs) {
-    syncJudgementIndicatorWidthInputText();
-  }
-  if (syncInputs) {
-    syncJudgementIndicatorRangeInputText();
-  }
   if (keysoundModeText != nullptr) {
     keysoundModeText->setLocalizedText(keysoundLabel);
   }
@@ -718,18 +725,12 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   if (findBmsSkipUnarchivingModeText != nullptr) {
     findBmsSkipUnarchivingModeText->setLocalizedText(findBmsSkipUnarchivingLabel);
   }
-  if (judgementIndicatorModeText != nullptr) {
-    judgementIndicatorModeText->setLocalizedText(judgementIndicatorLabel);
-  }
   if (judgementIndicatorRenderModeText != nullptr) {
     judgementIndicatorRenderModeText->setLocalizedText(
         judgementIndicatorRenderModeLabel);
   }
   if (judgementCounterPositionText != nullptr) {
     judgementCounterPositionText->setLocalizedText(judgementCounterPositionLabel);
-  }
-  if (judgementCounterModeText != nullptr) {
-    judgementCounterModeText->setLocalizedText(judgementCounterModeLabel);
   }
   if (judgementTimingFastSlowCriteriaText != nullptr) {
     judgementTimingFastSlowCriteriaText->setLocalizedText(judgementTimingFastSlowLabel);
@@ -777,14 +778,12 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   toggle_button::style(hispeedAutoAdjustModeButton, context.settings.hispeedAutoAdjust);
   toggle_button::style(archiveChartPreviewModeButton, context.settings.archiveChartPreviewEnabled);
   toggle_button::style(findBmsSkipUnarchivingModeButton, context.settings.findBmsSkipUnarchivingForNonSolidArchives);
-  toggle_button::style(judgementIndicatorModeButton, context.settings.presentation().judgementIndicatorEnabled);
   applySemanticButtonStyle(
       judgementIndicatorRenderModeButton, judgementIndicatorRenderModeText,
       context.settings.presentation().judgementIndicatorRenderMode ==
               AppSettings::JudgementIndicatorRenderMode::Hud2D
           ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
-  toggle_button::style(judgementCounterModeButton, context.settings.presentation().judgementCounterEnabled);
   SettingsButtonTone judgementCounterPositionTone = SettingsButtonTone::Neutral;
   if (context.settings.presentation().judgementCounterEnabled) {
     judgementCounterPositionTone =
@@ -836,7 +835,6 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   };
   applyTabStyle(profileTabButton, profileTabText, SettingsTab::Profile);
   applyTabStyle(timingTabButton, timingTabText, SettingsTab::Timing);
-  applyTabStyle(hudTabButton, hudTabText, SettingsTab::Hud);
   applyTabStyle(backgroundTabButton, backgroundTabText, SettingsTab::Background);
   applyTabStyle(laneTabButton, laneTabText, SettingsTab::Lane);
   applyTabStyle(inputTabButton, inputTabText, SettingsTab::Input);
@@ -969,40 +967,6 @@ void SettingsScene::syncNoteStartPositionInputText(bool force) {
       std::to_string(context.settings.presentation().noteStartPositionPercent));
 }
 
-void SettingsScene::syncJudgementIndicatorYInputText(bool force) {
-  if (judgementIndicatorYInput == nullptr) {
-    return;
-  }
-  if (!force && judgementIndicatorYInput->getSelected()) {
-    return;
-  }
-  judgementIndicatorYInput->setEditingText(std::to_string(
-      judgementIndicatorYToPercent(context.settings.presentation().judgementIndicatorY)));
-}
-
-void SettingsScene::syncJudgementIndicatorWidthInputText(bool force) {
-  if (judgementIndicatorWidthInput == nullptr) {
-    return;
-  }
-  if (!force && judgementIndicatorWidthInput->getSelected()) {
-    return;
-  }
-  judgementIndicatorWidthInput->setEditingText(
-      std::to_string(judgementIndicatorWidthScaleToPercent(
-          context.settings.presentation().judgementIndicatorWidthScale)));
-}
-
-void SettingsScene::syncJudgementIndicatorRangeInputText(bool force) {
-  if (judgementIndicatorRangeInput == nullptr) {
-    return;
-  }
-  if (!force && judgementIndicatorRangeInput->getSelected()) {
-    return;
-  }
-  judgementIndicatorRangeInput->setEditingText(
-      std::to_string(context.settings.presentation().judgementIndicatorRangeMilliseconds));
-}
-
 void SettingsScene::commitOffsetInput() {
   if (offsetInput == nullptr) {
     return;
@@ -1129,75 +1093,6 @@ void SettingsScene::commitNoteStartPositionInput() {
     syncNoteStartPositionInputText(true);
   } catch (const std::exception &) {
     syncNoteStartPositionInputText(true);
-  }
-}
-
-void SettingsScene::commitJudgementIndicatorYInput() {
-  if (judgementIndicatorYInput == nullptr) {
-    return;
-  }
-
-  const std::string rawText = judgementIndicatorYInput->getText();
-  if (rawText.empty()) {
-    syncJudgementIndicatorYInputText(true);
-    return;
-  }
-
-  try {
-    const int percent = std::clamp(std::stoi(rawText), 0, 100);
-    context.settings.presentation().judgementIndicatorY =
-        judgementIndicatorPercentToY(percent);
-    persistSettings();
-    syncJudgementIndicatorYInputText(true);
-  } catch (const std::exception &) {
-    syncJudgementIndicatorYInputText(true);
-  }
-}
-
-void SettingsScene::commitJudgementIndicatorWidthInput() {
-  if (judgementIndicatorWidthInput == nullptr) {
-    return;
-  }
-
-  const std::string rawText = judgementIndicatorWidthInput->getText();
-  if (rawText.empty()) {
-    syncJudgementIndicatorWidthInputText(true);
-    return;
-  }
-
-  try {
-    const int minPercent = judgementIndicatorWidthScaleToPercent(
-        AppSettings::kMinJudgementIndicatorWidthScale);
-    const int maxPercent = judgementIndicatorWidthScaleToPercent(
-        AppSettings::kMaxJudgementIndicatorWidthScale);
-    const int percent = std::clamp(std::stoi(rawText), minPercent, maxPercent);
-    context.settings.presentation().judgementIndicatorWidthScale =
-        judgementIndicatorWidthPercentToScale(percent);
-    persistSettings();
-    syncJudgementIndicatorWidthInputText(true);
-  } catch (const std::exception &) {
-    syncJudgementIndicatorWidthInputText(true);
-  }
-}
-
-void SettingsScene::commitJudgementIndicatorRangeInput() {
-  if (judgementIndicatorRangeInput == nullptr) {
-    return;
-  }
-
-  const std::string rawText = judgementIndicatorRangeInput->getText();
-  if (rawText.empty()) {
-    syncJudgementIndicatorRangeInputText(true);
-    return;
-  }
-
-  try {
-    context.settings.presentation().judgementIndicatorRangeMilliseconds =
-        clampJudgementIndicatorRangeMilliseconds(std::stoi(rawText));
-    persistSettings();
-    syncJudgementIndicatorRangeInputText(true);
-  } catch (const std::exception &) {
-    syncJudgementIndicatorRangeInputText(true);
   }
 }
 

@@ -852,12 +852,30 @@ void testCompatibleModesSaveIndependentSettings() {
            "compatible skin selection commits to the chosen mode");
     expect(controller->setOption(entry, "Play Side", target == -6 ? 921 : 920).accepted && ready(),
            "custom options save for the active mode");
+    expect(controller->setFastSlowCriteria(entry, target == -8
+               ? player_settings::JudgementTimingDisplayCriteria::Off
+               : player_settings::JudgementTimingDisplayCriteria::GoodOrBelow).accepted && ready(),
+           "FAST/SLOW criteria save for the active mode");
+    expect(controller->setMillisecondsCriteria(entry, target == -6
+               ? player_settings::JudgementTimingDisplayCriteria::BadOrBelow
+               : player_settings::JudgementTimingDisplayCriteria::PGreatOrBelow).accepted && ready(),
+           "millisecond criteria save independently for the active mode");
     ViewportSettings viewport;
     viewport.scaleX = target == -8 ? 2.0F : 1.0F;
     expect(controller->setViewport(entry, viewport).accepted && ready(),
            "viewport saves for the active mode");
   }
   const auto saved = fixture.owner.snapshot(fixture.profileA).settings;
+  expect(saved.modeEntries.at(-8).at(entry).fastSlowCriteria ==
+             player_settings::JudgementTimingDisplayCriteria::Off &&
+             saved.entries.at(entry).fastSlowCriteria ==
+             player_settings::JudgementTimingDisplayCriteria::GoodOrBelow,
+         "FAST/SLOW criteria are independent across compatible modes");
+  expect(saved.modeEntries.at(-6).at(entry).millisecondsCriteria ==
+             player_settings::JudgementTimingDisplayCriteria::BadOrBelow &&
+             saved.entries.at(entry).millisecondsCriteria ==
+                 player_settings::JudgementTimingDisplayCriteria::PGreatOrBelow,
+         "millisecond criteria are independent across compatible modes");
   expect(saved.selectedSkinEntries.size() == 4 &&
              saved.entries.at(entry).options.at("Play Side") == 920 &&
              saved.modeEntries.at(-6).at(entry).options.at("Play Side") == 921 &&
@@ -873,6 +891,37 @@ void testCompatibleModesSaveIndependentSettings() {
                activation.activation->reconciledSettings.options == settings.options,
            "all mode configurations remain separately available for gameplay");
   }
+  controller->profileChanged(fixture.profileA, fixture.commits.createClient(), PresentationOrientation::Portrait);
+  expect(controller->selectGameplayTrait(-6, entry).accepted && ready(), "portrait target selection commits");
+  ViewportSettings portraitViewport;
+  portraitViewport.scaleX = 1.5F;
+  expect(controller->setViewport(entry, portraitViewport).accepted && ready(), "portrait framing commits");
+  expect(controller->editSection(entry, EntrySettingsSection::Timing, PresentationOrientation::Landscape).accepted && ready(),
+         "copy timing from landscape commits through the controller");
+  auto portrait = fixture.owner.snapshot(fixture.profileA, PresentationOrientation::Portrait).settings;
+  expect(portrait.entriesForTarget(-6).at(entry).millisecondsCriteria ==
+             saved.modeEntries.at(-6).at(entry).millisecondsCriteria &&
+             portrait.entriesForTarget(-6).at(entry).viewport == portraitViewport,
+         "copy uses same mode and skin, preserving framing");
+  expect(controller->editSection(entry, EntrySettingsSection::Options, PresentationOrientation::Landscape).accepted && ready(),
+         "copy catalog configuration validates and activates");
+  portrait = fixture.owner.snapshot(fixture.profileA, PresentationOrientation::Portrait).settings;
+  expect(portrait.entriesForTarget(-6).at(entry).options == saved.modeEntries.at(-6).at(entry).options &&
+             portrait.entriesForTarget(-6).at(entry).viewport == portraitViewport,
+         "catalog copy preserves independent viewport");
+  expect(controller->editSection(entry, EntrySettingsSection::Timing).accepted && ready(), "timing reset commits");
+  portrait = fixture.owner.snapshot(fixture.profileA, PresentationOrientation::Portrait).settings;
+  expect(portrait.entriesForTarget(-6).at(entry).millisecondsCriteria == EntryProfileSettings{}.millisecondsCriteria,
+         "timing reset restores the default condition");
+  expect(fixture.owner.snapshot(fixture.profileA).settings == saved,
+         "copy and reset never mutate the source orientation");
+  controller->setActiveTarget(-8);
+  expect(!controller->editSection(entry, EntrySettingsSection::Timing).accepted,
+         "stale section action cannot mutate a different selection");
+  controller->profileChanged(fixture.profileA, fixture.commits.createClient(), PresentationOrientation::Landscape);
+  controller->setActiveTarget(1);
+  expect(!controller->editSection(entry, EntrySettingsSection::Timing).accepted,
+         "incompatible target cannot redirect a stale action to the native target");
   expect(controller->followGameplayTrait(-7).accepted && ready(),
          "scratchless mode can follow its original mode");
   expect(controller->snapshot().follow7K1S &&

@@ -8,6 +8,20 @@ an eligible skin for a chart, and receive an explicit failure page when a
 selected skin cannot safely prepare or render. Android intentionally defaults
 this optional feature off.
 
+Each custom gameplay skin has independent **FAST/SLOW** and **+/- ms** dropdowns
+before its catalog options in settings and live preview. Both offer the built-in
+skin's thresholds: PGREAT or below, GREAT or below, GOOD or below, BAD or below,
+and Off. Both default to GREAT or below, including for existing profiles, hiding
+early/late labels and numeric timing on PGREAT.
+Choices are saved per skin, gameplay mode, and presentation orientation.
+
+FAST/SLOW filters compatible early/late conditions. The millisecond condition
+filters numeric properties 525–527 for all three judge regions, using the
+renderer’s hidden-value sentinel when excluded. The skin's own display options
+and animation still apply (for LR2, enable Judge Detail → +-ms). These controls
+do not add a timing display to skins that do not draw one; custom Lua displays
+that compute timing without those properties are outside this filtering.
+
 ## Code map
 
 - `src/skin/` owns feature gating, selection, lifecycle, settings, package

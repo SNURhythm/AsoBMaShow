@@ -19,6 +19,125 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SettingsGameplaySkinInitializationContracts(unittest.TestCase):
+    def test_preview_keeps_every_offered_destination_for_builtin_and_custom_skins(self) -> None:
+        source = (ROOT / "src/scene/SettingsSceneLayout.cpp").read_text()
+        preview = extract(source, "void SettingsScene::buildPreviewLayout(")
+        begin = preview.index("  const int previewPanelPageCount =")
+        end = preview.index("  const int panelWidth =", begin)
+        policy = preview[begin:end]
+        offered = re.findall(r"makePreviewTab\((\d+),", preview)
+        fixture = r'''#include <array>
+#include <cassert>
+int main() {
+  constexpr std::array pages{OFFERED_PAGES};
+  for (const bool previewHasSelectedSkin : {false, true}) {
+    for (const int requested : pages) {
+      int previewPanelPage = requested;
+      PRODUCTION_POLICY
+      assert(previewPanelPage == requested);
+      assert(previewPanelPageCount == pages.size());
+    }
+  }
+}
+'''.replace("OFFERED_PAGES", ", ".join(offered)).replace("PRODUCTION_POLICY", policy)
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = directory / "preview_navigation.cpp"
+            source.write_text(fixture)
+            binary = directory / ("preview_navigation" + compiler.executable_suffix)
+            compiler.build([source], binary, directory, standard=20)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_skin_failure_remains_visible_after_live_refresh(self) -> None:
+        source = (ROOT / "src/scene/SettingsSceneSkins.cpp").read_text()
+        update = extract(source, "void SettingsScene::updateGameplaySkinSettingsLiveUi(")
+        begin = update.index("  if (gameplaySkinStatusText != nullptr)")
+        end = update.index("  if (gameplaySkinConfigurationDigestText != nullptr)", begin)
+        fixture = r'''#include <cassert>
+#include <string>
+namespace i18n {
+struct Text { std::string value; std::string resolve() const { return value; } };
+}
+namespace skin {
+enum class GameplaySkinSettingsState { Ready, Error };
+}
+enum class AppearancePage { Skin, Manage };
+struct Label {
+  std::string text;
+  void setText(const std::string &value) { text = value; }
+  void setLocalizedText(const i18n::Text &value) { text = value.resolve(); }
+};
+int main() {
+  struct Snapshot { skin::GameplaySkinSettingsState state; std::string statusMessage; };
+  for (const auto appearancePage : {AppearancePage::Skin, AppearancePage::Manage}) {
+    Label status, message;
+    Label *gameplaySkinStatusText = &status, *gameplaySkinUiMessageText = &message;
+    i18n::Text gameplaySkinUiMessage;
+    const Snapshot snapshot{skin::GameplaySkinSettingsState::Error, "Import failed: invalid skin"};
+    PRODUCTION_UPDATE
+    assert(status.text == snapshot.statusMessage);
+  }
+}
+'''.replace("PRODUCTION_UPDATE", update[begin:end])
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = directory / "skin_error.cpp"
+            source.write_text(fixture)
+            binary = directory / ("skin_error" + compiler.executable_suffix)
+            compiler.build([source], binary, directory, standard=20)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_opening_search_cancels_binding_capture_before_typing(self) -> None:
+        source = (ROOT / "src/scene/SettingsSceneLayout.cpp").read_text()
+        start = source.index("searchButton->setOnClickListener([this]")
+        callback = extract(source[start:], "[this]")
+        fixture = r'''#include <cassert>
+#include <optional>
+#include <string>
+struct Capture {
+  bool listening = true;
+  bool pendingConflict = true;
+  void cancel() { listening = false; pendingConflict = false; }
+};
+struct Gate { bool pending = true; void reset() { pending = false; } };
+struct SettingsScene {
+  Capture *inputCaptureController = nullptr;
+  std::optional<int> inputCaptureAction = 1;
+  Gate inputViewRebuildGate;
+  std::string inputLastViewSignature = "binding";
+  bool settingsSearchOpen = false, settingsScrollResetRequested = false;
+  int lastLayoutWidth = 800;
+  void closeAppearanceColorPopup() {}
+  void openSearch() { auto click = PRODUCTION_CALLBACK; click(); }
+};
+int main() {
+  Capture capture;
+  SettingsScene scene;
+  scene.inputCaptureController = &capture;
+  scene.openSearch();
+  assert(scene.settingsSearchOpen);
+  assert(!capture.listening && !capture.pendingConflict);
+  assert(!scene.inputCaptureAction && !scene.inputViewRebuildGate.pending);
+  assert(scene.inputLastViewSignature.empty());
+  SettingsScene withoutController;
+  withoutController.openSearch();
+  assert(withoutController.settingsSearchOpen);
+}
+'''.replace("PRODUCTION_CALLBACK", callback)
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = directory / "search_capture.cpp"
+            source.write_text(fixture)
+            binary = directory / ("search_capture" + compiler.executable_suffix)
+            compiler.build([source], binary, directory, standard=20)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_ios_skin_storage_identity_is_independent_of_language(self) -> None:
         settings = (ROOT / "src/scene/SettingsSceneSkins.cpp").read_text()
         begin = settings.index("  const std::filesystem::path visibleSkinRoot =")

@@ -218,6 +218,8 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
           {{"options", settings.options},
            {"filePaths", settings.filePaths},
            {"offsets", std::move(offsets)},
+           {"fastSlowCriteria", static_cast<int>(settings.fastSlowCriteria)},
+           {"millisecondsCriteria", static_cast<int>(settings.millisecondsCriteria)},
            {"viewport",
             {{"mode", viewportModeToString(settings.viewport.mode)},
              {"customBase",
@@ -501,6 +503,8 @@ void readSkinProfileSettings(const json &document,
         }
       }
     };
+    readEnum(encoded, "fastSlowCriteria", settings.fastSlowCriteria, diagnostics);
+    readEnum(encoded, "millisecondsCriteria", settings.millisecondsCriteria, diagnostics);
     readMap("options", settings.options);
     readMap("filePaths", settings.filePaths);
     if (const auto offsets = encoded.find("offsets");

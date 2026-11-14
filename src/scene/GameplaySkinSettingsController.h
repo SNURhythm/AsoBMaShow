@@ -72,6 +72,8 @@ struct GameplaySkinSettingsSnapshot {
   std::string cachedPresentationKey;
 };
 
+enum class EntrySettingsSection { Timing, Options, Framing };
+
 struct ControllerActionResult {
   bool accepted = false;
   bool asynchronous = false;
@@ -143,11 +145,21 @@ public:
   setFileChoice(const SkinEntryId &entry, std::string name, std::string value);
   [[nodiscard]] ControllerActionResult
   setOffset(const SkinEntryId &entry, std::string name, ConfigOffset value);
+  [[nodiscard]] ControllerActionResult setFastSlowCriteria(
+      const SkinEntryId &entry,
+      player_settings::JudgementTimingDisplayCriteria criteria);
+  [[nodiscard]] ControllerActionResult setMillisecondsCriteria(
+      const SkinEntryId &entry,
+      player_settings::JudgementTimingDisplayCriteria criteria);
   [[nodiscard]] ControllerActionResult setViewport(const SkinEntryId &entry,
                                                    ViewportSettings viewport);
   [[nodiscard]] ControllerActionResult
   requestRemoval(const SkinPackageId &package);
   [[nodiscard]] ControllerActionResult resetLayout(const SkinEntryId &entry);
+
+  [[nodiscard]] ControllerActionResult editSection(
+      const SkinEntryId &entry, EntrySettingsSection section,
+      std::optional<PresentationOrientation> copyFrom = std::nullopt);
 
   void cancelRescan() noexcept;
   void close() noexcept;

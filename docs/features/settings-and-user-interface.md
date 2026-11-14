@@ -184,8 +184,18 @@ with the current score; practice keeps Start outside scrolling content.
 
 ## Settings organization
 
-Navigation follows this order: Profiles, Input, Timing, Lane, HUD, Background,
-Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
+Navigation follows this order: Profiles, Input, Calibration, Scroll & visibility,
+Background, Appearance & skins, Audio, Display, BMS Library, Difficulty Tables,
+IR, General, Legal. The header keeps the active profile visible and offers a Font
+Awesome magnifier button. It opens a full-screen search view with only the input
+and Back button in its top row, without the settings title or profile information.
+The input activates automatically. Back closes search,
+and choosing a result opens its settings editor. Search matches
+translated section and setting names plus aliases such as `±ms`, `lane cover`,
+and `keybomb`, and opens the corresponding editor without changing a saved skin
+selection. Filtering retains the input and its composition/focus. Conditional
+search rows use `view_visibility::setLayoutVisible` to update rendering/input
+visibility and Yoga layout together, including the no-results label.
 
 Metal uses a fixed pool of three drawable buffers to preserve display
 throughput. Buffer count is not a user setting.
@@ -198,24 +208,42 @@ throughput. Buffer count is not a user setting.
   key mode selects touch/virtual-controller layouts and bindings; player and
   device select bindings. Touch and virtual-controller editors precede bindings,
   and the input monitor follows the binding list.
-- Timing contains audio and visual calibration offsets. HUD owns judgement
-  text/combo styling and position, FAST/SLOW and millisecond feedback, timing
-  indicators, judgement counts, and gauge placement. Built-in-only controls
-  are identified separately from HUD settings shared with custom skins.
-- Lane contains preview, shared scroll/covers, and visibility aids. Built-in
-  appearance has one editor in Skins, with horizontal Lane, Notes, Effects,
-  and HUD tabs. Numeric appearance controls consistently use left-aligned
-  decrement, editable value, increment, and reset controls, retaining each
-  setting’s limits and reset behavior. Toggle and choice-button groups start
-  below their labels at the left edge. Lane groups width, length, angle, scratch position, opacity,
-  and judge/measure lines; Effects groups beams and keybombs. The catalog's
-  screen/mode selectors stay vertical; only the built-in editor uses horizontal tabs.
-  Built-in controls remain available here when custom skin services are
-  unavailable. The live preview uses the same left-aligned editable rows, including its
-  scroll duration and cover amounts. Judge line and measure line controls belong
-  to Lane in both the skin editor and live preview.
-  Background groups BGA playback, aspect, brightness, and blur. Skin package
-  installation and diagnostics follow selection and appearance controls.
+- Calibration contains audio and visual calibration offsets.
+- Appearance & skins opens **Selected skin**, with separate destinations for
+  **Built-in appearance**, **Shared overlays**, and **Packages & troubleshooting**.
+  Built-in HUD owns judgement/combo text, FAST/SLOW and millisecond conditions,
+  the built-in indicator layout, and gauge position. Shared overlays owns the
+  application's indicator styling and judgement counter; skin editors link to
+  this common editor instead of duplicating those controls.
+  Custom-skin FAST/SLOW and ±ms conditions precede Skin options and Framing.
+  The skin must enable its display separately; LR2's Judge Detail → +-ms enables
+  its application timing overlay, while skin-authored timing may differ. Both
+  conditions default to GREAT or below and do not modify built-in HUD preferences.
+- Built-in appearance has Lane, Notes, Effects and HUD tabs. Lane groups width,
+  length, angle, scratch position, opacity, and judge/measure lines; Effects
+  groups beams and keybombs. Scope labels distinguish per-mode styling from
+  shared layout geometry/beam length and from the HUD shared by all built-in
+  modes. Shared-overlay labels explicitly cover all skins and modes in that
+  orientation. Custom-skin labels identify skin, screen/mode, and orientation.
+  Numeric controls use the same decrement, editable value, increment and reset
+  rows in settings and preview. Built-in and shared-overlay editors remain
+  accessible without custom-skin services.
+- Scroll & visibility contains preview, visible time, lane covers and visibility
+  aids. Visible time, automatic speed adjustment and visibility flags are
+  profile-wide; covers are orientation-specific. Background groups BGA playback,
+  aspect, brightness and blur.
+- Reset section and Copy from landscape/portrait require confirmation naming
+  the section and destination scope. They replace only that section, using
+  destination-orientation defaults for reset and clamping copied geometry to
+  that orientation's limits. Mode-specific appearance preserves other modes.
+  Custom-skin timing/options/framing actions use the same skin and mode; missing
+  source preferences mean defaults, and catalog changes pass through validation
+  and activation. Lane-cover actions leave profile-wide scroll preferences alone.
+- Package installation, sound-set paths, toolbar visibility, safety policy,
+  invalid entries and diagnostic history live under Packages & troubleshooting.
+  The selected skin's hashes, package metadata, revalidation and removal are
+  under Details / Troubleshooting. Actionable diagnostics stay visible, and
+  operations retain their blocking progress/error dialog.
 - Audio includes independent 0–100% Non-gameplay SFX (KOMBO, menu cues and
   device reminders) and Gameplay SFX (Full Combo/Perfect/Max and Quick Retry)
   controls. Both default to 100%, apply immediately, and also follow Master.

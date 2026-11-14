@@ -57,6 +57,7 @@ target_sources(main PRIVATE
     VirtualControllerEditorView.cpp
     SettingsSceneIr.cpp
     SettingsSceneLayout.cpp
+    SettingsSceneOrganization.cpp
     SettingsScenePreview.cpp
     SettingsSceneProfiles.cpp
     SettingsSceneTables.cpp

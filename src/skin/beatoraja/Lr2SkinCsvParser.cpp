@@ -1,5 +1,6 @@
 #include "Lr2SkinCsvParser.h"
 #include "Lr2IntegerParser.h"
+#include "Lr2SkinPath.h"
 
 #include "../../Utils.h"
 
@@ -291,7 +292,10 @@ private:
           DiagnosticSeverity::Warning));
       return;
     }
-    const std::string readPath = includeReadPath(tokens.front());
+    const auto packagePath = lr2PackagePath(fileSystem_.entry(), tokens.front());
+    const std::string readPath = packagePath
+        ? "skin/" + fileSystem_.entry().package.directoryName + "/" + *packagePath
+        : includeReadPath(tokens.front());
     const std::string includedPath =
         includedSourcePath(fileSystem_, chain.front(), readPath);
     std::vector<std::string> nextChain = chain;
