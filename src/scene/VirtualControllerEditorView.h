@@ -11,10 +11,17 @@
 // the pointer is lifted.
 class VirtualControllerEditorView final : public View {
 public:
+  enum class EditMode { Whole, Controls, Compensation };
+  using SelectionCallback = std::function<void(int)>;
   using CommitCallback = std::function<void(input::VirtualControllerConfig)>;
 
   VirtualControllerEditorView(input::VirtualControllerConfig config, int keyMode,
-                              CommitCallback onCommit);
+                              CommitCallback onCommit,
+                              EditMode editMode = EditMode::Whole,
+                              int selectedControl = 0,
+                              SelectionCallback onSelection = {});
+
+  void selectControl(int index) noexcept { selectedControl_ = index; }
 
 protected:
   [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
@@ -23,6 +30,7 @@ protected:
   void renderImpl(RenderContext &context) override;
   bool handleEventsImpl(SDL_Event &event) override;
   void onPointerInputCancelled() override;
+  void onPointerEventConsumed(const SDL_Event &event) override;
 
 private:
   enum class DragMode : unsigned char {
@@ -32,6 +40,9 @@ private:
     KeySpacingX,
     KeySpacingY,
     ScratchKeyplateSpacing,
+    ControlMove,
+    ControlResize,
+    Compensation,
   };
 
   struct HandleCenters {
@@ -51,6 +62,10 @@ private:
   [[nodiscard]] gameplay::VirtualControllerLayout layout() const;
   [[nodiscard]] static HandleCenters
   handleCenters(const gameplay::VirtualControllerLayout &layout) noexcept;
+  [[nodiscard]] const gameplay::VirtualControllerElement *selectedElement(
+      const gameplay::VirtualControllerLayout &layout) const noexcept;
+  [[nodiscard]] gameplay::VirtualControllerRect resizeHandle(
+      const gameplay::VirtualControllerElement &element) const noexcept;
   [[nodiscard]] DragMode hitDragMode(float uiX, float uiY) const;
   [[nodiscard]] bool beginDrag(std::int64_t pointerId, float uiX,
                                float uiY) noexcept;
@@ -70,6 +85,9 @@ private:
   input::VirtualControllerConfig config_;
   int keyMode_;
   CommitCallback onCommit_;
+  EditMode editMode_;
+  int selectedControl_;
+  SelectionCallback onSelection_;
   DragMode dragMode_ = DragMode::None;
   std::int64_t activePointerId_ = -1;
   input::VirtualControllerConfig dragStartConfig_;

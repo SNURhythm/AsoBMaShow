@@ -243,7 +243,7 @@ int main() {
     require(
         oldSchemaProfile.schemaVersion == InputProfile::kSchemaVersion &&
             std::ranges::find(diagnostics,
-                              "Reset unsupported input schema version to 11.") !=
+                              "Reset unsupported input schema version to 12.") !=
                 diagnostics.end(),
         "schema repair diagnostics report the real current version");
 
@@ -653,7 +653,7 @@ int main() {
     require(
         InputProfileStore::saveAtomic(
             migratedVersionZeroPath, versionZeroResult.profile, errorMessage) &&
-            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 11") !=
+            readFile(migratedVersionZeroPath).find("\"schemaVersion\": 12") !=
                 std::string::npos,
         "saving migrated version zero persists the current schema");
 
@@ -684,7 +684,7 @@ int main() {
             "gyroscope profile saves atomically");
     const std::string gyroscopeRoundTripJson = readFile(gyroscopeRoundTripPath);
     require(
-        gyroscopeRoundTripJson.find("\"schemaVersion\": 11") !=
+        gyroscopeRoundTripJson.find("\"schemaVersion\": 12") !=
                 std::string::npos &&
             gyroscopeRoundTripJson.find("\"gyroscopeTurntable\"") !=
                 std::string::npos &&
@@ -704,6 +704,28 @@ int main() {
                 sameBinding(gyroscopeRoundTripResult.profile.bindings.front(),
                             gyroscopeV2Result.profile.bindings.front()),
             "version-two gyroscope profile round trips without loss");
+
+    const auto customizedControllerPath = testRoot / "customized-controller.json";
+    writeFile(customizedControllerPath,
+              R"({"schemaVersion":11,"virtualControllers":{"7":{"enabled":true,"startEnabled":false,"selectEnabled":false,"scratchMode":"touch","touchCompensation":0.75,"controls":[{"sizeScale":1.5,"offsetX":-0.5,"offsetY":0.25}]}},"bindings":[]})");
+    const auto customizedController = InputProfileStore::load(customizedControllerPath);
+    require(customizedController.status == InputProfileLoadStatus::Loaded &&
+                InputProfileStore::saveAtomic(customizedControllerPath,
+                                               customizedController.profile, errorMessage),
+            "custom controller profile loads and saves");
+    const auto &custom = customizedController.profile.virtualControllerForKeyMode(7);
+    require(!custom.startEnabled && !custom.selectEnabled && custom.touchCompensation == 0.75F &&
+                custom.controls[0].sizeScale == 1.5F && custom.controls[0].offsetX == -0.5F &&
+                custom.controls[0].offsetY == 0.25F && custom.controls[1].sizeScale == 1.0F,
+            "custom controls parse with defaults for absent entries");
+    require(InputProfileStore::load(customizedControllerPath).profile.virtualControllers ==
+                customizedController.profile.virtualControllers,
+            "all customization fields round trip without loss");
+    const auto customizedJson = readFile(customizedControllerPath);
+    require(customizedJson.find("\"scratchMode\": \"touch\"") != std::string::npos &&
+                customizedJson.find("\"startEnabled\": false") != std::string::npos &&
+                customizedJson.find("\"sizeScale\": 1.5") != std::string::npos,
+            "individual controller customization survives a profile save");
 
     InputProfile virtualControllerProfile = defaults;
     virtualControllerProfile.virtualControllers.at(7) = {
@@ -737,7 +759,7 @@ int main() {
             "virtual controller enablement, placement, size, and independent signed spacing round trip");
     const std::string virtualControllerJson =
         readFile(virtualControllerRoundTripPath);
-    require(virtualControllerJson.find("\"schemaVersion\": 11") !=
+    require(virtualControllerJson.find("\"schemaVersion\": 12") !=
                     std::string::npos &&
                 virtualControllerJson.find("\"scratchMode\": \"spin\"") !=
                     std::string::npos &&
@@ -752,6 +774,16 @@ int main() {
                 virtualControllerJson.find("\"keyGap\"") == std::string::npos,
             "virtual-controller geometry, player, and scratch mode serialize "
             "in schema ten");
+
+    auto invalidCustom = custom;
+    invalidCustom.touchCompensation = -5.0F;
+    invalidCustom.controls[0] = {.sizeScale = 0.0F, .offsetX = 100.0F,
+                                .offsetY = std::numeric_limits<float>::infinity()};
+    std::vector<std::string> customDiagnostics;
+    invalidCustom.sanitize(customDiagnostics);
+    require(invalidCustom.touchCompensation == 0 && invalidCustom.controls[0].sizeScale == 0.25F &&
+                invalidCustom.controls[0].offsetX == 10 && invalidCustom.controls[0].offsetY == 0,
+            "invalid individual size, offsets and compensation are bounded before persistence");
 
     const auto legacyVirtualControllerPath =
         testRoot / "virtual-controller-v4.json";

@@ -34,6 +34,30 @@ namespace {
 
 constexpr std::string_view kBlankStableIdFilter = "\x1fmissing-stable-id";
 
+i18n::Text virtualControlLabel(int index) {
+  switch (index) {
+  case input::VirtualControllerConfig::kScratchControl:
+    return i18n::message("settings.input.side_taps_scratch.label");
+  case input::VirtualControllerConfig::kStartControl:
+    return i18n::message("settings.input.start.label");
+  case input::VirtualControllerConfig::kSelectControl:
+    return i18n::message("settings.input.select.label");
+  default:
+    return i18n::message("settings.input.virtual_controller.key", {{"number", std::to_string(index + 1)}});
+  }
+}
+
+std::vector<DropdownView::Option> virtualControlOptions(
+    const input::VirtualControllerConfig &config, int keyMode) {
+  std::vector<DropdownView::Option> options;
+  const auto layout = gameplay::makeVirtualControllerLayout(config, keyMode, {0, 0, 1000, 600});
+  for (const auto &element : layout.elements) {
+    const int index = element.configIndex();
+    options.push_back({.id = std::to_string(index), .label = virtualControlLabel(index)});
+  }
+  return options;
+}
+
 View *makeInputCardsColumn(const LayoutMetrics &metrics) {
   auto *column = new View();
   column->setFlexDirection(FlexDirection::Column);
@@ -288,6 +312,9 @@ std::string SettingsScene::inputViewSignature() const {
          << inputVirtualControllerSettingsError << ':'
          << context.inputProfile.gyroscopeTurntable.stepAngleDegrees << ':'
          << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':'
+         << controller.startEnabled << ':' << controller.selectEnabled << ':'
+         << controller.touchCompensation << ':'
+         << inputVirtualControllerEditMode << ':'
          << controller.scratchEnabled << ':'
          << controller.enabled << ':'
          << static_cast<int>(controller.scratchMode)
@@ -301,6 +328,9 @@ std::string SettingsScene::inputViewSignature() const {
          << controller.keySpacingY << ':'
          << controller.scratchKeyplateSpacing
          << ':' << inputVirtualControllerEditorVisible << ':';
+  for (const auto &control : controller.controls) {
+    output << control.sizeScale << ':' << control.offsetX << ':' << control.offsetY << ':';
+  }
   if (inputCaptureAction.has_value()) {
     output << static_cast<int>(inputCaptureAction->kind) << ':'
            << inputCaptureAction->lane;
@@ -729,6 +759,22 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         });
     virtualControllerBody->addView(virtualControllerToggle);
     if (virtualControllerConfig.enabled) {
+      for (const bool start : {true, false}) {
+        const bool enabled = start ? virtualControllerConfig.startEnabled : virtualControllerConfig.selectEnabled;
+        auto *toggle = makeControlButton(std::min(bodyWidth, metrics.actionButtonWidth),
+            metrics.actionButtonHeight, makeText(i18n::message(
+                start ? (enabled ? "settings.input.virtual_start_on.label" : "settings.input.virtual_start_off.label")
+                      : (enabled ? "settings.input.virtual_select_on.label" : "settings.input.virtual_select_off.label")),
+                metrics.bodyTextSize + 1, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE), true);
+        toggle_button::style(toggle, enabled);
+        toggle->setOnClickListener([this, controllerKeyMode, start] {
+          auto next = context.inputProfile.virtualControllerForKeyMode(controllerKeyMode);
+          auto &enabled = start ? next.startEnabled : next.selectEnabled;
+          enabled = !enabled;
+          commitVirtualControllerSetting(controllerKeyMode, next);
+        });
+        virtualControllerBody->addView(toggle);
+      }
       if (input::VirtualControllerConfig::isScratchlessKeyMode(controllerKeyMode)) {
         auto *scratchToggle = makeControlButton(
             std::min(bodyWidth, metrics.actionButtonWidth), metrics.actionButtonHeight,
@@ -748,9 +794,11 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       if (virtualControllerConfig.scratchEnabled) {
         virtualControllerBody->addView(makeEnumChoice(metrics, overlayPortal,
             virtualControllerConfig.scratchMode,
-            {input::VirtualControllerScratchMode::Flick, input::VirtualControllerScratchMode::Spin},
+            {input::VirtualControllerScratchMode::Flick, input::VirtualControllerScratchMode::Spin,
+             input::VirtualControllerScratchMode::Touch},
             [](input::VirtualControllerScratchMode mode) { return i18n::message(
-                mode == input::VirtualControllerScratchMode::Spin
+                mode == input::VirtualControllerScratchMode::Touch
+                    ? "settings.input.scratch_touch_mode.label" : mode == input::VirtualControllerScratchMode::Spin
                     ? "settings.input.scratch_spin_mode.label" : "settings.input.scratch_flick_mode.label"); },
             [this, controllerKeyMode, virtualControllerConfig](input::VirtualControllerScratchMode mode) {
               auto next = virtualControllerConfig;
@@ -780,6 +828,48 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         requestInputViewRebuild();
       });
       virtualControllerBody->addView(editButton);
+      const auto options = virtualControlOptions(virtualControllerConfig, controllerKeyMode);
+      if (std::ranges::none_of(options, [this](const auto &option) {
+            return option.id == std::to_string(inputVirtualControllerSelectedControl);
+          })) inputVirtualControllerSelectedControl = 0;
+      auto *controlChoice = new DropdownView({.onOptionSelected = [this](const std::string &id) {
+        inputVirtualControllerSelectedControl = std::stoi(id);
+        requestInputViewRebuild();
+      }}, overlayPortal);
+      controlChoice->refresh({.selectedId = std::to_string(inputVirtualControllerSelectedControl), .options = options});
+      virtualControllerBody->addView(controlChoice);
+      const int selected = inputVirtualControllerSelectedControl;
+      const auto appendValue = [&](const char *label, int field, const char *defaultValue) {
+        const auto read = [this, controllerKeyMode, selected, field] {
+          const auto &config = context.inputProfile.virtualControllerForKeyMode(controllerKeyMode);
+          const auto &control = config.controls[selected];
+          const float value = field == 0 ? control.sizeScale : field == 1 ? control.offsetX :
+                              field == 2 ? control.offsetY : config.touchCompensation;
+          return formatFloatValue(value * 100.0F, 0);
+        };
+        appendNumericSetting(virtualControllerBody, metrics, i18n::message(label), read,
+            defaultValue, 5.0F, 0, [this, controllerKeyMode, selected, field](const std::string &text) {
+              float value;
+              try {
+                std::size_t consumed = 0;
+                value = std::stof(text, &consumed) / 100.0F;
+                if (consumed != text.size() || !std::isfinite(value)) return;
+              } catch (...) { return; }
+              auto next = context.inputProfile.virtualControllerForKeyMode(controllerKeyMode);
+              auto &control = next.controls[selected];
+              if (field == 0) control.sizeScale = value;
+              else if (field == 1) control.offsetX = value;
+              else if (field == 2) control.offsetY = value;
+              else next.touchCompensation = value;
+              commitVirtualControllerSetting(controllerKeyMode, next);
+            });
+      };
+      appendValue("settings.input.virtual_controller.size_percent", 0, "100");
+      appendValue("settings.input.virtual_controller.offset_x", 1, "0");
+      appendValue("settings.input.virtual_controller.offset_y", 2, "0");
+      appendValue("settings.input.virtual_controller.compensation", 3, "50");
+      virtualControllerBody->addView(makeWrappedText(
+          i18n::message("settings.input.virtual_controller.values_help"), metrics.smallTextSize, app_theme::textSecondary()));
     }
     virtualControllerBody->addView(makeWrappedText(
         inputVirtualControllerSettingsError.empty()
@@ -1231,9 +1321,6 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
   title->setFlex(1.0F);
   title->setGap(4.0F);
   title->addView(makeHeading(i18n::message("settings.input.virtual_controller_layout.label"), metrics.sectionTitleSize));
-  title->addView(makeWrappedText(
-      i18n::message("settings.input.virtual_controller.layout_help"),
-      metrics.smallTextSize, app_theme::textSecondary()));
   header->addView(title);
 
   auto *doneButton = makeAccentButton(
@@ -1249,16 +1336,87 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
   header->addView(doneButton);
   inputVirtualControllerEditorOverlayRoot->addView(header);
 
+  inputVirtualControllerEditorOverlayRoot->addView(makeEnumChoice(metrics, nullptr,
+      inputVirtualControllerEditMode, {0, 1, 2}, [](int mode) {
+        return i18n::message(mode == 0 ? "settings.input.virtual_controller.whole" :
+                             mode == 1 ? "settings.input.virtual_controller.individual" :
+                                         "settings.input.virtual_controller.touch_area");
+      }, [this](int mode) { inputVirtualControllerEditMode = mode; requestInputViewRebuild(); }));
+  auto *selectionRow = new View();
+  selectionRow->setFlexDirection(FlexDirection::Row);
+  selectionRow->setAlignItems(YGAlignCenter);
+  selectionRow->setGap(12);
+  auto *selectionLabel = makeWrappedText(
+      inputVirtualControllerEditMode == 1 ? virtualControlLabel(inputVirtualControllerSelectedControl) :
+          i18n::message("settings.input.virtual_controller.all_controls"),
+      metrics.bodyTextSize, app_theme::textPrimary());
+  selectionLabel->setFlex(1);
+  selectionRow->addView(selectionLabel);
+  auto *reset = makeResetButton(metrics);
+  reset->setOnClickListener([this] {
+    auto next = context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode);
+    const auto defaults = input::VirtualControllerConfig::forKeyMode(inputSelectedKeyMode);
+    if (inputVirtualControllerEditMode == 1) next.controls[inputVirtualControllerSelectedControl] = {};
+    else if (inputVirtualControllerEditMode == 2) next.touchCompensation = defaults.touchCompensation;
+    else {
+      next.centerX = defaults.centerX;
+      next.centerY = defaults.centerY;
+      next.buttonSize = defaults.buttonSize;
+      next.keySpacingX = defaults.keySpacingX;
+      next.keySpacingY = defaults.keySpacingY;
+      next.scratchKeyplateSpacing = defaults.scratchKeyplateSpacing;
+    }
+    commitVirtualControllerSetting(inputSelectedKeyMode, next);
+  });
+  selectionRow->addView(reset);
+  inputVirtualControllerEditorOverlayRoot->addView(selectionRow);
   inputVirtualControllerEditorOverlayRoot->addView(makeWrappedText(
-      i18n::message("settings.input.virtual_controller.handle_legend"),
+      i18n::message(inputVirtualControllerEditMode == 0 ? "settings.input.virtual_controller.handle_legend" :
+                    inputVirtualControllerEditMode == 1 ? "settings.input.virtual_controller.individual_help" :
+                                                         "settings.input.virtual_controller.compensation_help"),
       metrics.smallTextSize, app_theme::textSecondary()));
 
   auto *editor = new VirtualControllerEditorView(
       context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode), inputSelectedKeyMode,
       [this, keyMode = inputSelectedKeyMode](input::VirtualControllerConfig config) {
         commitVirtualControllerSetting(keyMode, config);
+      }, static_cast<VirtualControllerEditorView::EditMode>(inputVirtualControllerEditMode),
+      inputVirtualControllerSelectedControl, [this, selectionLabel](int index) {
+        inputVirtualControllerSelectedControl = index;
+        selectionLabel->setLocalizedText(virtualControlLabel(index));
       });
-  editor->setFlex(1.0F);
-  inputVirtualControllerEditorOverlayRoot->addView(editor);
+  // Keep the editing canvas at full-screen scale, especially on landscape phones.
+  // Toolbar views sit above it; touches on them never reach the drag surface.
+  editor->setPositionType(YGPositionTypeAbsolute);
+  editor->setPosition(Edge::Left, static_cast<float>(metrics.safe.left));
+  editor->setPosition(Edge::Top, static_cast<float>(metrics.safe.top));
+  editor->setPosition(Edge::Right, static_cast<float>(metrics.safe.right));
+  editor->setPosition(Edge::Bottom, static_cast<float>(metrics.safe.bottom));
+  inputVirtualControllerEditorOverlayRoot->insertViewBefore(editor, header);
+  if (inputVirtualControllerEditMode == 1) {
+    for (const int direction : {-1, 1}) {
+      auto *step = makeStepButton(metrics, metrics.offsetButtonWidthSmall, direction < 0 ? "<" : ">");
+      step->setOnClickListener([this, editor, selectionLabel, direction] {
+        const auto options = virtualControlOptions(
+            context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode), inputSelectedKeyMode);
+        if (options.empty()) return;
+        const auto selected = std::ranges::find_if(options, [this](const auto &option) {
+          return option.id == std::to_string(inputVirtualControllerSelectedControl);
+        });
+        const int index = selected == options.end() ? 0 : static_cast<int>(selected - options.begin());
+        const int count = static_cast<int>(options.size());
+        inputVirtualControllerSelectedControl = std::stoi(options[(index + direction + count) % count].id);
+        editor->selectControl(inputVirtualControllerSelectedControl);
+        selectionLabel->setLocalizedText(virtualControlLabel(inputVirtualControllerSelectedControl));
+      });
+      selectionRow->addView(step);
+    }
+  }
+  if (!inputVirtualControllerSettingsError.empty()) {
+    inputVirtualControllerEditorOverlayRoot->addView(makeWrappedText(
+        i18n::message("settings.input.setting.error",
+            {{"prefix", i18n::message("settings.input.not_saved.prefix")},
+             {"error", inputVirtualControllerSettingsError}}), metrics.smallTextSize, app_theme::coral()));
+  }
   rootLayout->addView(inputVirtualControllerEditorOverlayRoot);
 }

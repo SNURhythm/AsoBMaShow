@@ -200,6 +200,7 @@ VirtualControllerLayout makeVirtualControllerLayout(
            .scratch = true,
            .spinScratch = config.scratchMode ==
                           input::VirtualControllerScratchMode::Spin,
+           .touchScratch = config.scratchMode == input::VirtualControllerScratchMode::Touch,
            .invertFlickScratchDirection =
                config.scratchMode == input::VirtualControllerScratchMode::Flick &&
                !drawPlayerTwo,
@@ -274,11 +275,32 @@ VirtualControllerLayout makeVirtualControllerLayout(
   const float offsetY = clampOrigin(desiredOffsetY, canvas.y - rawBounds.y,
                                     canvas.y + canvas.height -
                                         (rawBounds.y + rawBounds.height));
+  layout.unit = requestedUnit * scale;
+  layout.touchCompensation = std::isfinite(config.touchCompensation)
+                                ? std::clamp(config.touchCompensation, 0.0F, 2.0F) : 0.5F;
+  std::erase_if(layout.elements, [&](const auto &element) {
+    return (element.control == VirtualControllerControl::Start && !config.startEnabled) ||
+           (element.control == VirtualControllerControl::Select && !config.selectEnabled);
+  });
   bool initialized = false;
   for (auto &element : layout.elements) {
     element.bounds.x += offsetX;
     element.bounds.y += offsetY;
-    extendBounds(layout.bounds, element.bounds, initialized);
+    const auto &custom = config.controls[element.configIndex()];
+    if (!finite(custom.sizeScale) || custom.sizeScale <= 0.0F ||
+        !finite(custom.offsetX) || !finite(custom.offsetY)) return {};
+    auto &bounds = element.bounds;
+    const float centerX = bounds.centerX() + custom.offsetX * layout.unit;
+    const float centerY = bounds.centerY() + custom.offsetY * layout.unit;
+    const float sizeScale = std::min(custom.sizeScale,
+        std::min(canvas.width / bounds.width, canvas.height / bounds.height));
+    bounds.width *= sizeScale;
+    bounds.height *= sizeScale;
+    bounds.x = std::clamp(centerX - bounds.width * 0.5F, canvas.x,
+                          canvas.x + canvas.width - bounds.width);
+    bounds.y = std::clamp(centerY - bounds.height * 0.5F, canvas.y,
+                          canvas.y + canvas.height - bounds.height);
+    extendBounds(layout.bounds, bounds, initialized);
   }
   return layout;
 }
@@ -305,14 +327,13 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
   if (!layout.valid()) {
     return regions;
   }
-  constexpr float kTouchRegionExtra = 0.5F;
   regions.reserve(layout.elements.size());
   for (const auto &element : layout.elements) {
     const float centerX = element.bounds.centerX();
     const float centerY = element.bounds.centerY();
     const float uniformExtra =
         0.5F * std::min(element.bounds.width, element.bounds.height) *
-        kTouchRegionExtra;
+        layout.touchCompensation;
     const float halfWidth = element.bounds.width * 0.5F + uniformExtra;
     const float halfHeight = element.bounds.height * 0.5F + uniformExtra;
     const auto expandedLeft = centerX - halfWidth;
@@ -335,6 +356,7 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
                                    .lane = element.lane,
                                    .scratch = element.scratch,
                                    .spinScratch = element.spinScratch,
+                                   .touchScratch = element.touchScratch,
                                    .invertFlickScratchDirection =
                                        element.invertFlickScratchDirection,
                                    .replayControl = element.replayControl,

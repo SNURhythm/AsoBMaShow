@@ -42,6 +42,8 @@ struct RealtimeTouchLaneRegion {
   // and built-in playfield scratch regions retain their established flick
   // gesture semantics.
   bool spinScratch = false;
+  // Explicit controller press-and-hold; independent of playfield touch settings.
+  bool touchScratch = false;
   bool invertFlickScratchDirection = false;
   std::optional<replay::LogicalControl> replayControl;
   // Virtual controls require an actual hit. Skin lanes retain the legacy

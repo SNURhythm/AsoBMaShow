@@ -57,17 +57,30 @@ struct VirtualControllerElement {
   int lane = -1;
   bool scratch = false;
   bool spinScratch = false;
+  bool touchScratch = false;
   // A 1P platter is drawn on the left. An upward flick along its practical
   // right-hand edge is counter-clockwise, unlike the historical generic
   // vertical-swipe mapping used by skin-authored scratch lanes.
   bool invertFlickScratchDirection = false;
   std::optional<replay::LogicalControl> replayControl;
   VirtualControllerRect bounds;
+
+  [[nodiscard]] int configIndex() const noexcept {
+    switch (control) {
+    case VirtualControllerControl::Scratch: return input::VirtualControllerConfig::kScratchControl;
+    case VirtualControllerControl::Start: return input::VirtualControllerConfig::kStartControl;
+    case VirtualControllerControl::Select: return input::VirtualControllerConfig::kSelectControl;
+    case VirtualControllerControl::Key: return keyPosition;
+    }
+    return -1;
+  }
 };
 
 struct VirtualControllerLayout {
   VirtualControllerRect bounds;
   std::vector<VirtualControllerElement> elements;
+  float unit = 0.0F;
+  float touchCompensation = 0.5F;
 
   [[nodiscard]] bool valid() const noexcept;
 };

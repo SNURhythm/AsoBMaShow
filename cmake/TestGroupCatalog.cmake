@@ -386,6 +386,7 @@ asobmashow_label_tests(area_settings
     settings_note_editing_tests
     settings_rotation_edit_tests
     settings_virtual_controller_ui_contract
+    virtual_controller_editor_tests
 )
 
 asobmashow_label_tests(area_music_select

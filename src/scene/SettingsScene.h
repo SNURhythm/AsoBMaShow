@@ -347,6 +347,8 @@ private:
   std::string inputVirtualControllerSettingsError;
   std::string inputPlayfieldTouchSettingsError;
   bool inputVirtualControllerEditorVisible = false;
+  int inputVirtualControllerEditMode = 1;
+  int inputVirtualControllerSelectedControl = 0;
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
   settings_scene::CalibrationChartOptions calibrationChartOptions;

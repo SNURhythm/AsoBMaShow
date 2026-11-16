@@ -2816,6 +2816,111 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
           "drag mode changes between Start and Select instead of conflating their shared lane sentinel");
 }
 
+void testVirtualControllerCustomization() {
+  using Control = gameplay::VirtualControllerControl;
+  input::VirtualControllerConfig config;
+  config.enabled = true;
+  config.centerY = 0.5F;
+  const gameplay::VirtualControllerCanvas canvas{0, 0, 1000, 600};
+  const auto find = [](const auto &layout, int index) -> const gameplay::VirtualControllerElement & {
+    for (const auto &element : layout.elements) {
+      if (element.configIndex() == index) return element;
+    }
+    std::abort();
+  };
+  const auto base = gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  config.startEnabled = false;
+  auto layout = gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  require(layout.elements.size() == base.elements.size() - 1 &&
+              std::ranges::none_of(layout.elements, [](const auto &e) { return e.control == Control::Start; }),
+          "Start can be hidden independently of Select");
+  config.selectEnabled = false;
+  config.controls[0] = {.sizeScale = 1.5F, .offsetX = -0.5F, .offsetY = 0.25F};
+  config.controls[input::VirtualControllerConfig::kScratchControl].sizeScale = 0.75F;
+  layout = gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  require(layout.elements.size() == base.elements.size() - 2,
+          "hidden system controls have no layout or touch targets");
+  requireNear(find(layout, 0).bounds.width, find(base, 0).bounds.width * 1.5F,
+              "key scale changes the individual key width");
+  requireNear(find(layout, 0).bounds.centerX(), find(base, 0).bounds.centerX() - base.unit * 0.5F,
+              "individual X offset uses the base button width");
+  requireNear(find(layout, 0).bounds.centerY(), find(base, 0).bounds.centerY() + base.unit * 0.25F,
+              "individual Y offset uses the base button width");
+  requireNear(find(layout, 1).bounds.centerX(), find(base, 1).bounds.centerX(),
+              "moving a key does not recenter its neighbors");
+  requireNear(find(layout, 8).bounds.width, find(base, 8).bounds.width * 0.75F,
+              "scratch has its own proportional size");
+  config.controls[0].offsetX = 10;
+  config.controls[0].offsetY = -10;
+  layout = gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  require(find(layout, 0).bounds.x >= 0 && find(layout, 0).bounds.y >= 0 &&
+              find(layout, 0).bounds.x + find(layout, 0).bounds.width <= canvas.width,
+          "custom controls remain on the canvas at extreme offsets");
+
+  gameplay::RealtimeTouchUiTransform transform{.renderWidth = 1000, .renderHeight = 600,
+                                              .uiScaleX = 1, .uiScaleY = 1};
+  config.touchCompensation = 0;
+  const auto exact = gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  const auto exactRegions = gameplay::makeVirtualControllerTouchRegions(exact, transform);
+  config.touchCompensation = 1;
+  const auto expanded = gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  const auto expandedRegions = gameplay::makeVirtualControllerTouchRegions(expanded, transform);
+  requireNear(exactRegions.front().circle->radiusX, find(exact, 8).bounds.width / 2000,
+              "zero compensation matches the visible scratch circle");
+  requireNear(expandedRegions.front().circle->radiusX, exactRegions.front().circle->radiusX * 2,
+              "compensation expands the scratch hit target");
+  requireNear(expandedRegions[1].bottomRight.x - expandedRegions[1].bottomLeft.x,
+              (exactRegions[1].bottomRight.x - exactRegions[1].bottomLeft.x) * 2,
+              "compensation expands a rectangular key without changing its drawing");
+  gameplay::VirtualControllerLayoutCache cache;
+  (void)cache.get(config, 7, canvas);
+  config.controls[1].offsetX = 0.5F;
+  const auto &cached = cache.get(config, 7, canvas);
+  requireNear(find(cached, 1).bounds.centerX(), find(base, 1).bounds.centerX() + base.unit * 0.5F,
+              "individual customization invalidates the layout cache");
+}
+
+void testVirtualControllerTouchScratch() {
+  for (const int mode : {4, 6, 7, 8, 14, -7}) {
+    for (const bool dragMode : {false, true}) {
+      auto config = input::VirtualControllerConfig::forKeyMode(mode);
+      config.enabled = config.scratchEnabled = true;
+      config.player = input::VirtualControllerPlayer::Player2;
+      config.scratchMode = input::VirtualControllerScratchMode::Touch;
+      const auto controller = gameplay::makeVirtualControllerLayout(config, mode, {0, 0, 1000, 600});
+      gameplay::RealtimeTouchLayout layout;
+      // Binding scopes use signed modes; gameplay/replay uses the canonical chart mode.
+      layout.keyMode = std::abs(mode);
+      layout.dragMode = dragMode;
+      layout.laneRegions = gameplay::makeVirtualControllerTouchRegions(controller,
+          {.renderWidth = 1000, .renderHeight = 600, .uiScaleX = 1, .uiScaleY = 1});
+      const auto scratch = std::ranges::find_if(layout.laneRegions, [](const auto &r) { return r.scratch; });
+      require(scratch != layout.laneRegions.end() && scratch->touchScratch,
+              "Touch scratch keeps the scratch role and opts into press-and-hold");
+      const auto center = scratch->circle->center;
+      InputCapture capture;
+      gameplay::RealtimeTouchInputRouter router(98, layout,
+          {.context = &capture, .emit = &InputCapture::emit});
+      require(router.consume({.fingerId = 300, .phase = gameplay::RealtimeTouchPhase::Down,
+                  .normalizedX = center.x, .normalizedY = center.y, .steadyTimestampMicros = 100}) &&
+                  capture.events.size() == 1 && capture.events[0].type == gameplay::RealtimeGameplayInputType::Press,
+              "Touch scratch presses on contact without a swipe");
+      require(router.consume({.fingerId = 300, .phase = gameplay::RealtimeTouchPhase::Move,
+                  .normalizedX = center.x, .normalizedY = center.y + 0.01F, .steadyTimestampMicros = 200}) &&
+                  router.advanceSpinScratch(500000) && capture.events.size() == 1,
+              "Touch scratch stays held through movement and spin release timeout");
+      require(capture.events[0].hasReplayControl &&
+                  replay::isDirectionalScratchControl(capture.events[0].replayControl.kind) &&
+                  capture.events[0].replayControl.player == (mode == 14 ? 2 : 1),
+              "Touch scratch emits the correct deck's scratch replay control, including command-only modes");
+      require(router.consume({.fingerId = 300, .phase = gameplay::RealtimeTouchPhase::Up,
+                  .normalizedX = center.x, .normalizedY = center.y, .steadyTimestampMicros = 600000}) &&
+                  capture.events.size() == 2 && capture.events[1].type == gameplay::RealtimeGameplayInputType::Release,
+              "Touch scratch releases on finger lift");
+    }
+  }
+}
+
 void testVirtualControllerLayoutCache() {
   gameplay::VirtualControllerLayoutCache cache;
   input::VirtualControllerConfig config;
@@ -2991,6 +3096,8 @@ int main() {
   testScratchlessVirtualControllerOptionalPlatter();
   testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes();
   testVirtualControllerLayoutRoutesKeysAndSystemControls();
+  testVirtualControllerCustomization();
+  testVirtualControllerTouchScratch();
   testVirtualControllerLayoutCache();
   testVirtualControllerAvailabilityMatchesTouchRouterPlatform();
   testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise();

@@ -186,6 +186,27 @@ void parseVirtualControllerConfig(const Json &document, input::VirtualController
         "Reset missing or invalid virtual controller settings.");
     return;
   }
+  for (const auto &[name, destination] : {
+           std::pair{"startEnabled", &settings.startEnabled},
+           std::pair{"selectEnabled", &settings.selectEnabled}}) {
+    const auto member = config->find(name);
+    if (member != config->end() && member->is_boolean()) *destination = member->get<bool>();
+  }
+  if (config->contains("touchCompensation")) {
+    parseVirtualControllerConfigMember(*config, "touchCompensation", 0.5F,
+                                      settings.touchCompensation, diagnostics);
+  }
+  const auto controls = config->find("controls");
+  if (controls != config->end() && controls->is_array()) {
+    for (std::size_t index = 0; index < std::min(controls->size(), settings.controls.size()); ++index) {
+      const auto &entry = (*controls)[index];
+      if (!entry.is_object()) continue;
+      auto &control = settings.controls[index];
+      parseVirtualControllerConfigMember(entry, "sizeScale", 1.0F, control.sizeScale, diagnostics);
+      parseVirtualControllerConfigMember(entry, "offsetX", 0.0F, control.offsetX, diagnostics);
+      parseVirtualControllerConfigMember(entry, "offsetY", 0.0F, control.offsetY, diagnostics);
+    }
+  }
   const auto scratchEnabled = config->find("scratchEnabled");
   if (scratchEnabled != config->end() && scratchEnabled->is_boolean()) {
     settings.scratchEnabled = scratchEnabled->get<bool>();
@@ -208,6 +229,8 @@ void parseVirtualControllerConfig(const Json &document, input::VirtualController
     } else if (*scratchMode == "flick") {
       settings.scratchMode =
           input::VirtualControllerScratchMode::Flick;
+    } else if (*scratchMode == "touch") {
+      settings.scratchMode = input::VirtualControllerScratchMode::Touch;
     } else if (*scratchMode == "spin") {
       settings.scratchMode =
           input::VirtualControllerScratchMode::Spin;
@@ -571,12 +594,19 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
           {"enabled", config.enabled},
           {"scratchEnabled", config.scratchEnabled},
           {"scratchMode", config.scratchMode == input::VirtualControllerScratchMode::Spin
-                              ? "spin" : "flick"},
+                              ? "spin" : config.scratchMode == input::VirtualControllerScratchMode::Touch
+                                             ? "touch" : "flick"},
           {"player", static_cast<int>(config.player)},
           {"centerX", config.centerX}, {"centerY", config.centerY},
           {"buttonSize", config.buttonSize},
           {"keySpacingX", config.keySpacingX}, {"keySpacingY", config.keySpacingY},
-          {"scratchKeyplateSpacing", config.scratchKeyplateSpacing}};
+          {"scratchKeyplateSpacing", config.scratchKeyplateSpacing},
+          {"startEnabled", config.startEnabled}, {"selectEnabled", config.selectEnabled},
+          {"touchCompensation", config.touchCompensation}, {"controls", Json::array()}};
+      for (const auto &control : config.controls) {
+        document["virtualControllers"][std::to_string(mode)]["controls"].push_back(
+            {{"sizeScale", control.sizeScale}, {"offsetX", control.offsetX}, {"offsetY", control.offsetY}});
+      }
     }
     for (const auto &[mode, config] : sanitized.playfieldTouch) {
       document["playfieldTouch"][std::to_string(mode)] = {
