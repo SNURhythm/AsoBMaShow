@@ -16,7 +16,91 @@ int ui_offset_x = 0, ui_offset_y = 0;
 int ui_view_width = 1000, ui_view_height = 600;
 }
 
+namespace {
+
+void sendFinger(VirtualControllerEditorView &editor, Uint32 type, float x, float y) {
+  SDL_Event event{};
+  event.type = type;
+  event.tfinger.fingerID = 1;
+  event.tfinger.x = x / 1000;
+  event.tfinger.y = y / 600;
+  editor.handleEvents(event);
+}
+
+const gameplay::VirtualControllerElement &findControl(
+    const gameplay::VirtualControllerLayout &layout, int index) {
+  const auto found = std::ranges::find_if(layout.elements,
+      [index](const auto &element) { return element.configIndex() == index; });
+  assert(found != layout.elements.end());
+  return *found;
+}
+
+void testSelectionChangeCancelsCapturedGesture() {
+  input::VirtualControllerConfig config;
+  config.enabled = true;
+  config.centerY = 0.5F;
+  const auto layout = gameplay::makeVirtualControllerLayout(config, 7, {28, 28, 944, 544});
+  const auto &first = findControl(layout, 0).bounds;
+  const auto &second = findControl(layout, 1).bounds;
+  for (const bool resize : {false, true}) {
+    int saves = 0;
+    auto saved = config;
+    VirtualControllerEditorView editor(config, 7, [&](auto next) { saved = next; ++saves; },
+        VirtualControllerEditorView::EditMode::Controls, 0);
+    editor.setSize(1000, 600);
+    const float x = resize ? first.x + first.width + 22 : first.centerX();
+    const float y = resize ? first.y + first.height + 22 : first.centerY();
+    sendFinger(editor, SDL_EVENT_FINGER_DOWN, x, y);
+    sendFinger(editor, SDL_EVENT_FINGER_MOTION, x + 20, y + 10);
+    // A second finger activates a selection arrow while the first remains down.
+    editor.selectControl(1);
+    sendFinger(editor, SDL_EVENT_FINGER_MOTION, x + 40, y + 20);
+    sendFinger(editor, SDL_EVENT_FINGER_UP, x + 40, y + 20);
+    assert(saves == 0);
+    sendFinger(editor, SDL_EVENT_FINGER_DOWN, second.centerX(), second.centerY());
+    sendFinger(editor, SDL_EVENT_FINGER_UP, second.centerX() + 10, second.centerY());
+    assert(saves == 1);
+    assert(saved.controls[0] == config.controls[0]);
+    assert(saved.controls[1].offsetX > 0);
+  }
+}
+
+void testCancellationPreservesClampedConfiguration() {
+  input::VirtualControllerConfig config;
+  config.enabled = true;
+  config.centerY = 0.5F;
+  config.controls[6].offsetX = 10;
+  config.controls[8] = {.sizeScale = 3, .offsetX = -10, .offsetY = 10};
+  const auto layout = gameplay::makeVirtualControllerLayout(config, 7, {28, 28, 944, 544});
+  for (const int index : {6, 8}) {
+    int saves = 0;
+    auto saved = config;
+    VirtualControllerEditorView editor(config, 7, [&](auto next) { saved = next; ++saves; },
+        VirtualControllerEditorView::EditMode::Controls, index);
+    editor.setSize(1000, 600);
+    const auto &bounds = findControl(layout, index).bounds;
+    const float x = index == 8 ? std::min(972.0F, bounds.x + bounds.width + 22) : bounds.centerX();
+    const float y = index == 8 ? std::min(572.0F, bounds.y + bounds.height + 22) : bounds.centerY();
+    sendFinger(editor, SDL_EVENT_FINGER_DOWN, x, y);
+    sendFinger(editor, SDL_EVENT_FINGER_MOTION, x - 20, y - 20);
+    sendFinger(editor, SDL_EVENT_FINGER_CANCELED, x - 20, y - 20);
+    assert(saves == 0);
+    // A later unrelated save must not persist the cancelled control's normalized baseline.
+    editor.selectControl(0);
+    const auto &other = findControl(layout, 0).bounds;
+    sendFinger(editor, SDL_EVENT_FINGER_DOWN, other.centerX(), other.centerY());
+    sendFinger(editor, SDL_EVENT_FINGER_UP, other.centerX() + 10, other.centerY());
+    assert(saves == 1);
+    assert(saved.controls[index] == config.controls[index]);
+    assert(saved.controls[0].offsetX > 0);
+  }
+}
+
+} // namespace
+
 int main() {
+  testSelectionChangeCancelsCapturedGesture();
+  testCancellationPreservesClampedConfiguration();
   using Mode = VirtualControllerEditorView::EditMode;
   input::VirtualControllerConfig config;
   config.enabled = true;

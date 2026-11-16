@@ -21,7 +21,7 @@ public:
                               int selectedControl = 0,
                               SelectionCallback onSelection = {});
 
-  void selectControl(int index) noexcept { selectedControl_ = index; }
+  void selectControl(int index) noexcept;
 
 protected:
   [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
@@ -90,6 +90,7 @@ private:
   SelectionCallback onSelection_;
   DragMode dragMode_ = DragMode::None;
   std::int64_t activePointerId_ = -1;
+  input::VirtualControllerConfig dragOriginalConfig_;
   input::VirtualControllerConfig dragStartConfig_;
   gameplay::VirtualControllerLayout dragStartLayout_;
   float dragStartX_ = 0.0F;

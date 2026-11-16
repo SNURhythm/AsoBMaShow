@@ -52,6 +52,13 @@ VirtualControllerEditorView::VirtualControllerEditorView(
   config_.sanitize(ignoredDiagnostics);
 }
 
+void VirtualControllerEditorView::selectControl(int index) noexcept {
+  if (index == selectedControl_) return;
+  // A toolbar selection from another finger must not retarget the captured drag.
+  onPointerInputCancelled();
+  selectedControl_ = index;
+}
+
 gameplay::VirtualControllerCanvas VirtualControllerEditorView::canvas() const
     noexcept {
   return {.x = static_cast<float>(getX()) + kCanvasInset,
@@ -225,6 +232,7 @@ bool VirtualControllerEditorView::beginDrag(std::int64_t pointerId, float uiX,
     return false;
   }
   activePointerId_ = pointerId;
+  dragOriginalConfig_ = config_;
   dragStartConfig_ = config_;
   dragStartLayout_ = layout();
   if (dragMode_ == DragMode::ControlMove || dragMode_ == DragMode::ControlResize) {
@@ -469,7 +477,8 @@ void VirtualControllerEditorView::renderImpl(RenderContext &context) {
 }
 
 void VirtualControllerEditorView::onPointerInputCancelled() {
-  if (dragMode_ != DragMode::None) config_ = dragStartConfig_;
+  // The movement baseline may normalize clamped values; rollback must not.
+  if (dragMode_ != DragMode::None) config_ = dragOriginalConfig_;
   dragMode_ = DragMode::None;
   activePointerId_ = -1;
   dragStartLayout_ = {};
