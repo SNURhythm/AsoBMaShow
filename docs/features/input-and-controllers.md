@@ -57,8 +57,9 @@ control's base size; X/Y offsets are percentages of the base button width,
 positive right/down. Individual edits keep neighboring controls fixed and keep
 controls on the canvas. Whole-layout scaling applies to custom offsets too.
 
-Use the −5° and +5° buttons in **Whole layout** to turn the plate, or in
-**Individual controls** to turn the selected control about its center.
+Drag the circular-arrow handle around the center to rotate. **Whole layout**
+turns the plate and **Individual controls** turns the selected control.
+Lift to save the angle. The −5° and +5° buttons allow small adjustments.
 The numeric rotation fields accept exact degrees. Positive angles turn clockwise,
 and a control’s individual angle is relative to the plate. Existing layouts
 start at zero degrees.

@@ -276,6 +276,8 @@ VirtualControllerLayout makeVirtualControllerLayout(
       canvas.x + halfWidth, canvas.x + canvas.width - halfWidth);
   const float pivotY = clampOrigin(canvas.y + canvas.height * config.centerY,
       canvas.y + halfHeight, canvas.y + canvas.height - halfHeight);
+  layout.plateHalfHeight = rawBounds.height * 0.5F;
+  layout.pivot = {pivotX, pivotY};
   layout.unit = requestedUnit * scale;
   layout.touchCompensation = std::isfinite(config.touchCompensation)
                                 ? std::clamp(config.touchCompensation, 0.0F, 2.0F) : 0.5F;

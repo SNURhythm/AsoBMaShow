@@ -21,6 +21,7 @@ public:
                               int selectedControl = 0,
                               SelectionCallback onSelection = {});
 
+  void installHandleIcons();
   void selectControl(int index) noexcept;
 
 protected:
@@ -42,9 +43,14 @@ private:
     ScratchKeyplateSpacing,
     ControlMove,
     ControlResize,
+    Rotate,
     Compensation,
   };
 
+  std::array<View *, static_cast<size_t>(DragMode::Compensation) + 1> handleIcons_{};
+  void positionIcon(DragMode mode, float x, float y);
+  [[nodiscard]] gameplay::VirtualControllerRect rotationHandle(
+      const gameplay::VirtualControllerLayout &layout) const noexcept;
   struct HandleCenters {
     float moveX = 0.0F;
     float moveY = 0.0F;

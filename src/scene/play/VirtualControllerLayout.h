@@ -87,6 +87,8 @@ struct VirtualControllerElement {
 struct VirtualControllerLayout {
   VirtualControllerRect bounds;
   std::vector<VirtualControllerElement> elements;
+  RealtimeTouchPoint pivot;
+  float plateHalfHeight = 0;
   float unit = 0.0F;
   float touchCompensation = 0.5F;
 

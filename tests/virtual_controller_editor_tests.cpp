@@ -96,9 +96,35 @@ void testCancellationPreservesClampedConfiguration() {
   }
 }
 
+void testRotationHandle() {
+  using Mode = VirtualControllerEditorView::EditMode;
+  input::VirtualControllerConfig config;
+  config.enabled = true;
+  config.centerY = 0.5F;
+  const auto layout = gameplay::makeVirtualControllerLayout(config, 7, {28, 28, 944, 544});
+  const auto &key = findControl(layout, 2).bounds;
+  for (const auto mode : {Mode::Whole, Mode::Controls}) {
+    int saves = 0;
+    auto saved = config;
+    VirtualControllerEditorView editor(config, 7, [&](auto next) { saved = next; ++saves; }, mode, 2);
+    editor.setSize(1000, 600);
+    const float cx = mode == Mode::Whole ? layout.pivot.x : key.centerX();
+    const float cy = mode == Mode::Whole ? layout.pivot.y : key.centerY();
+    const float radius = 22 + (mode == Mode::Whole ? layout.plateHalfHeight : key.height / 2);
+    sendFinger(editor, SDL_EVENT_FINGER_DOWN, cx, cy - radius);
+    sendFinger(editor, SDL_EVENT_FINGER_MOTION, cx + radius, cy);
+    assert(saves == 0);
+    sendFinger(editor, SDL_EVENT_FINGER_UP, cx + radius, cy);
+    assert(saves == 1);
+    assert(std::abs(saved.plateRotationDegrees - (mode == Mode::Whole ? 90 : 0)) < 0.01F);
+    assert(std::abs(saved.controls[2].rotationDegrees - (mode == Mode::Controls ? 90 : 0)) < 0.01F);
+  }
+}
+
 } // namespace
 
 int main() {
+  testRotationHandle();
   testSelectionChangeCancelsCapturedGesture();
   testCancellationPreservesClampedConfiguration();
   using Mode = VirtualControllerEditorView::EditMode;

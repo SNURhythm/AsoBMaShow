@@ -1283,6 +1283,33 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
   rootLayout->addView(inputConflictOverlayRoot);
 }
 
+void VirtualControllerEditorView::installHandleIcons() {
+  const auto add = [&](DragMode mode, uint32_t glyph) {
+    auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, 21);
+    icon->setDeferredTextureMaterialization(true);
+    icon->setText(ui_icons::textForCodepoint(glyph));
+    icon->setAlign(TextView::CENTER);
+    icon->setVAlign(TextView::MIDDLE);
+    icon->setThemedColor(app_theme::backdrop);
+    icon->setPositionType(YGPositionTypeAbsolute);
+    icon->setSize(44, 44);
+    addView(icon);
+    handleIcons_[static_cast<size_t>(mode)] = icon;
+  };
+  if (editMode_ == EditMode::Compensation) return;
+  add(DragMode::Rotate, ui_icons::kRotate);
+  if (editMode_ == EditMode::Controls) {
+    add(DragMode::ControlResize, ui_icons::kExpand);
+  } else {
+    add(DragMode::Move, ui_icons::kDrag);
+    add(DragMode::Resize, ui_icons::kExpand);
+    add(DragMode::KeySpacingX, ui_icons::kArrowRight);
+    if (keyMode_ % 2 != 0 || keyMode_ == 10 || keyMode_ == 14)
+      add(DragMode::KeySpacingY, ui_icons::kArrowDown);
+    if (config_.scratchEnabled) add(DragMode::ScratchKeyplateSpacing, ui_icons::kGripLines);
+  }
+}
+
 void SettingsScene::buildInputVirtualControllerEditorOverlay(
     const LayoutMetrics &metrics) {
   if (activeTab != SettingsTab::Input || !inputVirtualControllerEditorVisible ||
@@ -1403,6 +1430,7 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
       });
   // Keep the editing canvas at full-screen scale, especially on landscape phones.
   // Toolbar views sit above it; touches on them never reach the drag surface.
+  editor->installHandleIcons();
   editor->setPositionType(YGPositionTypeAbsolute);
   editor->setPosition(Edge::Left, static_cast<float>(metrics.safe.left));
   editor->setPosition(Edge::Top, static_cast<float>(metrics.safe.top));
