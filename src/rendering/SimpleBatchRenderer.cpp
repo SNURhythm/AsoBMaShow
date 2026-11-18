@@ -172,12 +172,17 @@ void SimpleBatchRenderer::addRadialGradientCircle(
 void SimpleBatchRenderer::addRoundedRect(float x, float y, float width,
                                          float height, float radius,
                                          uint32_t color) {
+  addRoundedRect(x, y, width, height, radius, color, 0);
+}
+
+void SimpleBatchRenderer::addRoundedRect(float x, float y, float width, float height,
+                                         float radius, uint32_t color, float rotationDegrees) {
   if (width <= 0.0f || height <= 0.0f) {
     return;
   }
 
   radius = std::clamp(radius, 0.0f, std::min(width, height) * 0.5f);
-  if (radius <= 0.5f) {
+  if (radius <= 0.5f && rotationDegrees == 0) {
     addRect(x, y, width, height, color);
     return;
   }
@@ -213,6 +218,17 @@ void SimpleBatchRenderer::addRoundedRect(float x, float y, float width,
   appendCorner(x + radius, y + height - radius, 2);
   appendCorner(x + radius, y + radius, 3);
 
+  if (rotationDegrees != 0) {
+    const float angle = rotationDegrees * (3.14159265359F / 180.0F);
+    const float c = std::cos(angle), s = std::sin(angle);
+    const auto center = vertices[centerIndex];
+    for (size_t i = centerIndex + 1; i < vertices.size(); ++i) {
+      auto &v = vertices[i];
+      const float dx = v.x - center.x, dy = v.y - center.y;
+      v.x = center.x + c * dx - s * dy;
+      v.y = center.y + s * dx + c * dy;
+    }
+  }
   for (uint16_t i = 0; i < ringVertexCount; ++i) {
     const uint16_t current = static_cast<uint16_t>(centerIndex + 1 + i);
     const uint16_t next = static_cast<uint16_t>(

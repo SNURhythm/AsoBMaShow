@@ -19,6 +19,8 @@ public:
                                uint32_t topColor, uint32_t bottomColor);
   void addRoundedRect(float x, float y, float width, float height, float radius,
                       uint32_t color);
+  void addRoundedRect(float x, float y, float width, float height, float radius,
+                      uint32_t color, float rotationDegrees);
   void addLine(float x0, float y0, float x1, float y1, float thickness,
                uint32_t color);
   void addTriangle(float x0, float y0, float x1, float y1, float x2, float y2,

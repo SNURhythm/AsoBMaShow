@@ -57,6 +57,12 @@ control's base size; X/Y offsets are percentages of the base button width,
 positive right/down. Individual edits keep neighboring controls fixed and keep
 controls on the canvas. Whole-layout scaling applies to custom offsets too.
 
+Use the −5° and +5° buttons in **Whole layout** to turn the plate, or in
+**Individual controls** to turn the selected control about its center.
+The numeric rotation fields accept exact degrees. Positive angles turn clockwise,
+and a control’s individual angle is relative to the plate. Existing layouts
+start at zero degrees.
+
 Touch compensation is shared by all controls in that key mode. Its 0–200%
 value adds that fraction of each control's shorter dimension to the hit area's
 width and height (half on each edge). At 0% the touch target matches the visible

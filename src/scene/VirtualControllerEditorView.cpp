@@ -24,8 +24,8 @@ void renderElement(rendering::SimpleBatchRenderer &batch,
     batch.addCircle(bounds.centerX(), bounds.centerY(),
                     std::max(0.0F, radius - borderWidth), fill);
     const float markerRadius = radius * 0.66F;
-    const float markerX = bounds.centerX() + markerRadius;
-    const float markerY = bounds.centerY();
+    const auto marker = element.pointAt(markerRadius, 0);
+    const float markerX = marker.x, markerY = marker.y;
     batch.addLine(bounds.centerX(), bounds.centerY(), markerX, markerY,
                   std::max(2.0F, radius * 0.045F), border);
     batch.addCircle(bounds.centerX(), bounds.centerY(), radius * 0.14F, border);
@@ -34,11 +34,11 @@ void renderElement(rendering::SimpleBatchRenderer &batch,
   }
   const float radius = std::min(bounds.height * 0.2F, 10.0F);
   batch.addRoundedRect(bounds.x, bounds.y, bounds.width, bounds.height, radius,
-                       border);
+                       border, element.rotationDegrees);
   batch.addRoundedRect(bounds.x + borderWidth, bounds.y + borderWidth,
                        std::max(0.0F, bounds.width - borderWidth * 2.0F),
                        std::max(0.0F, bounds.height - borderWidth * 2.0F),
-                       std::max(0.0F, radius - borderWidth), fill);
+                       std::max(0.0F, radius - borderWidth), fill, element.rotationDegrees);
 }
 
 } // namespace
@@ -148,9 +148,11 @@ gameplay::VirtualControllerRect VirtualControllerEditorView::resizeHandle(
     const gameplay::VirtualControllerElement &element) const noexcept {
   const auto area = canvas();
   // Keep a full finger-sized handle reachable even at a canvas edge.
-  const float x = std::clamp(element.bounds.x + element.bounds.width + kHandleSize * 0.5F,
+  const auto corner = element.pointAt((element.bounds.width + kHandleSize) / 2,
+                                      (element.bounds.height + kHandleSize) / 2);
+  const float x = std::clamp(corner.x,
                              area.x, area.x + area.width);
-  const float y = std::clamp(element.bounds.y + element.bounds.height + kHandleSize * 0.5F,
+  const float y = std::clamp(corner.y,
                              area.y, area.y + area.height);
   return handleRect(x, y);
 }
@@ -193,7 +195,10 @@ bool VirtualControllerEditorView::beginDrag(std::int64_t pointerId, float uiX,
   if (editMode_ == EditMode::Controls) {
     const auto *selected = selectedElement(currentLayout);
     const auto hit = [&](const gameplay::VirtualControllerElement &element) {
-      return contains(element.bounds, uiX, uiY) &&
+      const auto local = gameplay::rotateControllerOffset(uiX - element.bounds.centerX(),
+          uiY - element.bounds.centerY(), -element.rotationDegrees);
+      return std::abs(local.x) <= element.bounds.width / 2 &&
+             std::abs(local.y) <= element.bounds.height / 2 &&
              (element.shape != gameplay::VirtualControllerShape::Circle ||
               std::hypot(uiX - element.bounds.centerX(), uiY - element.bounds.centerY()) <=
                   element.bounds.width * 0.5F);
@@ -245,8 +250,10 @@ bool VirtualControllerEditorView::beginDrag(std::int64_t pointerId, float uiX,
       // Start from the visible position, not an off-screen numeric offset that
       // was clamped by the layout (also possible after rotation or resizing).
       auto &custom = dragStartConfig_.controls[selectedControl_];
-      custom.offsetX = (visible->bounds.centerX() - base->bounds.centerX()) / dragStartLayout_.unit;
-      custom.offsetY = (visible->bounds.centerY() - base->bounds.centerY()) / dragStartLayout_.unit;
+      const auto delta = gameplay::rotateControllerOffset(visible->bounds.centerX() - base->bounds.centerX(),
+          visible->bounds.centerY() - base->bounds.centerY(), -config_.plateRotationDegrees);
+      custom.offsetX = delta.x / dragStartLayout_.unit;
+      custom.offsetY = delta.y / dragStartLayout_.unit;
       if (dragMode_ == DragMode::ControlResize)
         custom.sizeScale = visible->bounds.width / base->bounds.width;
     }
@@ -300,12 +307,20 @@ bool VirtualControllerEditorView::updateDrag(float uiX, float uiY) noexcept {
     const auto *element = selectedElement(dragStartLayout_);
     if (!element || dragStartLayout_.unit <= 0.0F) return false;
     // Keep the saved offset within the visible canvas.
-    const auto &bounds = element->bounds;
     auto &custom = config_.controls[selectedControl_];
-    custom.offsetX += std::clamp(dx, editCanvas.x - bounds.x,
-        editCanvas.x + editCanvas.width - bounds.x - bounds.width) / dragStartLayout_.unit;
-    custom.offsetY += std::clamp(dy, editCanvas.y - bounds.y,
-        editCanvas.y + editCanvas.height - bounds.y - bounds.height) / dragStartLayout_.unit;
+    const auto axis = gameplay::rotateControllerOffset(1, 0,
+        element->scratch ? 0 : element->rotationDegrees);
+    const auto &bounds = element->bounds;
+    const float halfWidth = (std::abs(axis.x) * bounds.width + std::abs(axis.y) * bounds.height) / 2;
+    const float halfHeight = (std::abs(axis.y) * bounds.width + std::abs(axis.x) * bounds.height) / 2;
+    const float left = editCanvas.x + halfWidth - bounds.centerX();
+    const float top = editCanvas.y + halfHeight - bounds.centerY();
+    const float right = editCanvas.x + editCanvas.width - halfWidth - bounds.centerX();
+    const float bottom = editCanvas.y + editCanvas.height - halfHeight - bounds.centerY();
+    const auto delta = gameplay::rotateControllerOffset(std::clamp(dx, left, std::max(left, right)),
+        std::clamp(dy, top, std::max(top, bottom)), -config_.plateRotationDegrees);
+    custom.offsetX += delta.x / dragStartLayout_.unit;
+    custom.offsetY += delta.y / dragStartLayout_.unit;
     break;
   }
   case DragMode::ControlResize: {
@@ -313,7 +328,8 @@ bool VirtualControllerEditorView::updateDrag(float uiX, float uiY) noexcept {
     if (!element) return false;
     const auto &bounds = element->bounds;
     // Project the drag onto the diagonal: either axis works and aspect is preserved.
-    const float factor = 1.0F + 2.0F * (dx * bounds.width + dy * bounds.height) /
+    const auto local = gameplay::rotateControllerOffset(dx, dy, -element->rotationDegrees);
+    const float factor = 1.0F + 2.0F * (local.x * bounds.width + local.y * bounds.height) /
         (bounds.width * bounds.width + bounds.height * bounds.height);
     config_.controls[selectedControl_].sizeScale *= factor;
     break;

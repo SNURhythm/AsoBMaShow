@@ -2829,6 +2829,21 @@ void testVirtualControllerCustomization() {
     std::abort();
   };
   const auto base = gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  config.plateRotationDegrees = 90;
+  config.controls[0].rotationDegrees = -45;
+  const auto rotated = gameplay::makeVirtualControllerLayout(config, 7, canvas);
+  const auto &one = find(rotated, 0);
+  const auto &two = find(rotated, 1);
+  requireNear(one.rotationDegrees, 45, "key angle composes with plate angle");
+  requireNear(two.bounds.centerY() - one.bounds.centerY(),
+              find(base, 1).bounds.centerX() - find(base, 0).bounds.centerX(),
+              "plate rotates key centers together");
+  const auto regions = gameplay::makeVirtualControllerTouchRegions(rotated,
+      {.renderWidth = 1000, .renderHeight = 600, .uiScaleX = 1, .uiScaleY = 1});
+  const auto region = std::ranges::find_if(regions, [&](const auto &r) { return r.lane == one.lane; });
+  require(region != regions.end() && region->topRight.y > region->topLeft.y,
+          "touch target follows the rotated top edge");
+  config.plateRotationDegrees = config.controls[0].rotationDegrees = 0;
   config.startEnabled = false;
   auto layout = gameplay::makeVirtualControllerLayout(config, 7, canvas);
   require(layout.elements.size() == base.elements.size() - 1 &&

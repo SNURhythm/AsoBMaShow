@@ -192,6 +192,8 @@ void parseVirtualControllerConfig(const Json &document, input::VirtualController
     const auto member = config->find(name);
     if (member != config->end() && member->is_boolean()) *destination = member->get<bool>();
   }
+  if (config->contains("plateRotationDegrees"))
+    parseVirtualControllerConfigMember(*config, "plateRotationDegrees", 0.0F, settings.plateRotationDegrees, diagnostics);
   if (config->contains("touchCompensation")) {
     parseVirtualControllerConfigMember(*config, "touchCompensation", 0.5F,
                                       settings.touchCompensation, diagnostics);
@@ -202,6 +204,8 @@ void parseVirtualControllerConfig(const Json &document, input::VirtualController
       const auto &entry = (*controls)[index];
       if (!entry.is_object()) continue;
       auto &control = settings.controls[index];
+      if (entry.contains("rotationDegrees"))
+        parseVirtualControllerConfigMember(entry, "rotationDegrees", 0.0F, control.rotationDegrees, diagnostics);
       parseVirtualControllerConfigMember(entry, "sizeScale", 1.0F, control.sizeScale, diagnostics);
       parseVirtualControllerConfigMember(entry, "offsetX", 0.0F, control.offsetX, diagnostics);
       parseVirtualControllerConfigMember(entry, "offsetY", 0.0F, control.offsetY, diagnostics);
@@ -602,10 +606,11 @@ bool InputProfileStore::saveAtomic(const std::filesystem::path &path,
           {"keySpacingX", config.keySpacingX}, {"keySpacingY", config.keySpacingY},
           {"scratchKeyplateSpacing", config.scratchKeyplateSpacing},
           {"startEnabled", config.startEnabled}, {"selectEnabled", config.selectEnabled},
-          {"touchCompensation", config.touchCompensation}, {"controls", Json::array()}};
+          {"plateRotationDegrees", config.plateRotationDegrees}, {"touchCompensation", config.touchCompensation}, {"controls", Json::array()}};
       for (const auto &control : config.controls) {
         document["virtualControllers"][std::to_string(mode)]["controls"].push_back(
-            {{"sizeScale", control.sizeScale}, {"offsetX", control.offsetX}, {"offsetY", control.offsetY}});
+            {{"sizeScale", control.sizeScale}, {"offsetX", control.offsetX}, {"offsetY", control.offsetY},
+             {"rotationDegrees", control.rotationDegrees}});
       }
     }
     for (const auto &[mode, config] : sanitized.playfieldTouch) {

@@ -739,6 +739,8 @@ int main() {
         .keySpacingY = 0.21F,
         .scratchKeyplateSpacing = -0.12F,
     };
+    virtualControllerProfile.virtualControllers.at(7).plateRotationDegrees = -30;
+    virtualControllerProfile.virtualControllers.at(7).controls[2].rotationDegrees = 45;
     virtualControllerProfile.virtualControllers.at(-7).enabled = true;
     virtualControllerProfile.virtualControllers.at(-7).centerX = 0.30F;
     virtualControllerProfile.virtualControllers.at(4).scratchEnabled = true;

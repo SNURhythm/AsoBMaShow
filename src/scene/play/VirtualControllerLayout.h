@@ -50,6 +50,9 @@ enum class VirtualControllerShape : unsigned char {
   Rectangle,
 };
 
+// Rotate a screen-space offset clockwise about the origin.
+[[nodiscard]] RealtimeTouchPoint rotateControllerOffset(float x, float y, float degrees) noexcept;
+
 struct VirtualControllerElement {
   VirtualControllerControl control = VirtualControllerControl::Key;
   VirtualControllerShape shape = VirtualControllerShape::Rectangle;
@@ -64,6 +67,11 @@ struct VirtualControllerElement {
   bool invertFlickScratchDirection = false;
   std::optional<replay::LogicalControl> replayControl;
   VirtualControllerRect bounds;
+  float rotationDegrees = 0;
+  [[nodiscard]] RealtimeTouchPoint pointAt(float dx, float dy) const noexcept {
+    const auto offset = rotateControllerOffset(dx, dy, rotationDegrees);
+    return {bounds.centerX() + offset.x, bounds.centerY() + offset.y};
+  }
 
   [[nodiscard]] int configIndex() const noexcept {
     switch (control) {

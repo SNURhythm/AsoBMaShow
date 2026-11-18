@@ -594,13 +594,15 @@ void appendVirtualControllerHitRegions(
           .center = {.x = bounds.centerX(), .y = bounds.centerY()},
           .radius = std::min(bounds.width, bounds.height) * 0.5F};
     }
+    const auto corner = [&](float x, float y) {
+      const auto point = element.pointAt(x * bounds.width, y * bounds.height);
+      return UiLogicalPoint{point.x, point.y};
+    };
     regions.push_back(
         {.hit = {.kind = PresentationUiControlKind::VirtualController,
                  .layoutRevision = layoutRevision},
-         .boundary = {{{bounds.x, bounds.y},
-                       {bounds.x + bounds.width, bounds.y},
-                       {bounds.x + bounds.width, bounds.y + bounds.height},
-                       {bounds.x, bounds.y + bounds.height}}},
+         .boundary = {{corner(-0.5F, -0.5F), corner(0.5F, -0.5F),
+                       corner(0.5F, 0.5F), corner(-0.5F, 0.5F)}},
          .circle = circle});
   }
 }
@@ -662,10 +664,10 @@ void renderVirtualControllerOverlay(rendering::SimpleBatchRenderer &batch,
                       std::max(0.0F, radius - kBorder), elementFill);
       // A hub and spoke give the transparent platter a stable visual
       // orientation. Spin Mode rotates this decoration with the finger.
-      const float angle = element.spinScratch
+      const float angle = element.rotationDegrees * kPi / 180.0F + (element.spinScratch
                               ? spinScratchRotationDegrees *
                                     kPi / 180.0F
-                              : 0.0F;
+                              : 0.0F);
       const float markerRadius = radius * 0.66F;
       const float markerX = bounds.centerX() + std::cos(angle) * markerRadius;
       const float markerY = bounds.centerY() + std::sin(angle) * markerRadius;
@@ -678,11 +680,11 @@ void renderVirtualControllerOverlay(rendering::SimpleBatchRenderer &batch,
     }
     const float radius = std::min(bounds.height * 0.22F, 12.0F);
     batch.addRoundedRect(bounds.x, bounds.y, bounds.width, bounds.height,
-                        radius, elementBorder);
+                        radius, elementBorder, element.rotationDegrees);
     batch.addRoundedRect(bounds.x + kBorder, bounds.y + kBorder,
                          std::max(0.0F, bounds.width - kBorder * 2.0F),
                          std::max(0.0F, bounds.height - kBorder * 2.0F),
-                         std::max(0.0F, radius - kBorder), elementFill);
+                         std::max(0.0F, radius - kBorder), elementFill, element.rotationDegrees);
   }
   batch.end();
 }

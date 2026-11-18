@@ -23,6 +23,7 @@ struct VirtualControllerControlConfig {
   float sizeScale = 1.0F;
   float offsetX = 0.0F;
   float offsetY = 0.0F;
+  float rotationDegrees = 0.0F;
   auto operator<=>(const VirtualControllerControlConfig &) const = default;
 };
 
@@ -77,6 +78,7 @@ struct VirtualControllerConfig {
   bool startEnabled = true;
   bool selectEnabled = true;
   // Added diameter/width, as a fraction of each control's shorter dimension.
+  float plateRotationDegrees = 0.0F;
   float touchCompensation = 0.5F;
   std::array<VirtualControllerControlConfig, kControlCount> controls{};
 

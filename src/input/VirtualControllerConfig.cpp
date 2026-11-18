@@ -51,9 +51,11 @@ void VirtualControllerConfig::sanitize(std::vector<std::string> &diagnostics) {
     player = VirtualControllerPlayer::Player1;
     diagnostics.emplace_back("Reset invalid virtual controller player.");
   }
+  plateRotationDegrees = std::remainder(finiteOrDefault(plateRotationDegrees, 0.0F, "rotation", diagnostics), 360.0F);
   touchCompensation = finiteOrDefault(touchCompensation, 0.5F, "touch compensation", diagnostics);
   clampValue(touchCompensation, 0.0F, 2.0F, "touch compensation", diagnostics);
   for (auto &control : controls) {
+    control.rotationDegrees = std::remainder(finiteOrDefault(control.rotationDegrees, 0.0F, "rotation", diagnostics), 360.0F);
     control.sizeScale = finiteOrDefault(control.sizeScale, 1.0F, "control size", diagnostics);
     control.offsetX = finiteOrDefault(control.offsetX, 0.0F, "control X offset", diagnostics);
     control.offsetY = finiteOrDefault(control.offsetY, 0.0F, "control Y offset", diagnostics);

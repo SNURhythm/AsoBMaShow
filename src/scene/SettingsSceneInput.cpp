@@ -313,7 +313,7 @@ std::string SettingsScene::inputViewSignature() const {
          << context.inputProfile.gyroscopeTurntable.stepAngleDegrees << ':'
          << context.inputProfile.gyroscopeTurntable.releaseDelayMs << ':'
          << controller.startEnabled << ':' << controller.selectEnabled << ':'
-         << controller.touchCompensation << ':'
+         << controller.plateRotationDegrees << ':' << controller.touchCompensation << ':'
          << inputVirtualControllerEditMode << ':'
          << controller.scratchEnabled << ':'
          << controller.enabled << ':'
@@ -329,7 +329,7 @@ std::string SettingsScene::inputViewSignature() const {
          << controller.scratchKeyplateSpacing
          << ':' << inputVirtualControllerEditorVisible << ':';
   for (const auto &control : controller.controls) {
-    output << control.sizeScale << ':' << control.offsetX << ':' << control.offsetY << ':';
+    output << control.rotationDegrees << ':' << control.sizeScale << ':' << control.offsetX << ':' << control.offsetY << ':';
   }
   if (inputCaptureAction.has_value()) {
     output << static_cast<int>(inputCaptureAction->kind) << ':'
@@ -839,35 +839,37 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       controlChoice->refresh({.selectedId = std::to_string(inputVirtualControllerSelectedControl), .options = options});
       virtualControllerBody->addView(controlChoice);
       const int selected = inputVirtualControllerSelectedControl;
-      const auto appendValue = [&](const char *label, int field, const char *defaultValue) {
-        const auto read = [this, controllerKeyMode, selected, field] {
+      const auto appendValue = [&](const char *label, const char *defaultValue, float displayScale,
+                                   auto member) {
+        const auto read = [this, controllerKeyMode, displayScale, member] {
           const auto &config = context.inputProfile.virtualControllerForKeyMode(controllerKeyMode);
-          const auto &control = config.controls[selected];
-          const float value = field == 0 ? control.sizeScale : field == 1 ? control.offsetX :
-                              field == 2 ? control.offsetY : config.touchCompensation;
-          return formatFloatValue(value * 100.0F, 0);
+          return formatFloatValue(member(config) * displayScale, 0);
         };
         appendNumericSetting(virtualControllerBody, metrics, i18n::message(label), read,
-            defaultValue, 5.0F, 0, [this, controllerKeyMode, selected, field](const std::string &text) {
+            defaultValue, 5.0F, 0, [this, controllerKeyMode, displayScale, member](const std::string &text) {
               float value;
               try {
                 std::size_t consumed = 0;
-                value = std::stof(text, &consumed) / 100.0F;
+                value = std::stof(text, &consumed) / displayScale;
                 if (consumed != text.size() || !std::isfinite(value)) return;
               } catch (...) { return; }
               auto next = context.inputProfile.virtualControllerForKeyMode(controllerKeyMode);
-              auto &control = next.controls[selected];
-              if (field == 0) control.sizeScale = value;
-              else if (field == 1) control.offsetX = value;
-              else if (field == 2) control.offsetY = value;
-              else next.touchCompensation = value;
+              member(next) = value;
               commitVirtualControllerSetting(controllerKeyMode, next);
             });
       };
-      appendValue("settings.input.virtual_controller.size_percent", 0, "100");
-      appendValue("settings.input.virtual_controller.offset_x", 1, "0");
-      appendValue("settings.input.virtual_controller.offset_y", 2, "0");
-      appendValue("settings.input.virtual_controller.compensation", 3, "50");
+      appendValue("settings.input.virtual_controller.plate_rotation", "0", 1,
+                  [](auto &config) -> auto & { return config.plateRotationDegrees; });
+      appendValue("settings.input.virtual_controller.control_rotation", "0", 1,
+                  [selected](auto &config) -> auto & { return config.controls[selected].rotationDegrees; });
+      appendValue("settings.input.virtual_controller.size_percent", "100", 100,
+                  [selected](auto &config) -> auto & { return config.controls[selected].sizeScale; });
+      appendValue("settings.input.virtual_controller.offset_x", "0", 100,
+                  [selected](auto &config) -> auto & { return config.controls[selected].offsetX; });
+      appendValue("settings.input.virtual_controller.offset_y", "0", 100,
+                  [selected](auto &config) -> auto & { return config.controls[selected].offsetY; });
+      appendValue("settings.input.virtual_controller.compensation", "50", 100,
+                  [](auto &config) -> auto & { return config.touchCompensation; });
       virtualControllerBody->addView(makeWrappedText(
           i18n::message("settings.input.virtual_controller.values_help"), metrics.smallTextSize, app_theme::textSecondary()));
     }
@@ -1359,6 +1361,7 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
     if (inputVirtualControllerEditMode == 1) next.controls[inputVirtualControllerSelectedControl] = {};
     else if (inputVirtualControllerEditMode == 2) next.touchCompensation = defaults.touchCompensation;
     else {
+      next.plateRotationDegrees = 0;
       next.centerX = defaults.centerX;
       next.centerY = defaults.centerY;
       next.buttonSize = defaults.buttonSize;
@@ -1368,6 +1371,19 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
     }
     commitVirtualControllerSetting(inputSelectedKeyMode, next);
   });
+  if (inputVirtualControllerEditMode != 2) {
+    for (const int degrees : {-5, 5}) {
+      auto *rotate = makeStepButton(metrics, metrics.offsetButtonWidthLarge, degrees < 0 ? "−5°" : "+5°");
+      rotate->setOnClickListener([this, degrees] {
+        auto next = context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode);
+        auto &angle = inputVirtualControllerEditMode == 0 ? next.plateRotationDegrees
+            : next.controls[inputVirtualControllerSelectedControl].rotationDegrees;
+        angle += degrees;
+        commitVirtualControllerSetting(inputSelectedKeyMode, next);
+      });
+      selectionRow->addView(rotate);
+    }
+  }
   selectionRow->addView(reset);
   inputVirtualControllerEditorOverlayRoot->addView(selectionRow);
   inputVirtualControllerEditorOverlayRoot->addView(makeWrappedText(

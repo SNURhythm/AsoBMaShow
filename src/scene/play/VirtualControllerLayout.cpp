@@ -73,6 +73,13 @@ normalizedPoint(float uiX, float uiY,
 
 } // namespace
 
+RealtimeTouchPoint rotateControllerOffset(float x, float y, float degrees) noexcept {
+  if (degrees == 0) return {x, y};
+  const float radians = degrees * (3.14159265359F / 180.0F);
+  const float c = std::cos(radians), s = std::sin(radians);
+  return {c * x - s * y, s * x + c * y};
+}
+
 bool VirtualControllerCanvas::valid() const noexcept {
   return finite(x) && finite(y) && finite(width) && finite(height) &&
          width > 0.0F && height > 0.0F;
@@ -254,27 +261,21 @@ VirtualControllerLayout makeVirtualControllerLayout(
   if (!requestedBounds.valid()) {
     return {};
   }
-  const float scale = std::min(
-      1.0F, std::min(canvas.width / requestedBounds.width,
-                      canvas.height / requestedBounds.height));
-  if (!finite(scale) || scale <= 0.0F) {
-    return {};
-  }
+  if (!finite(config.plateRotationDegrees)) return {};
+  const auto plateAxis = rotateControllerOffset(1, 0, config.plateRotationDegrees);
+  const float c = std::abs(plateAxis.x), s = std::abs(plateAxis.y);
+  const float plateWidth = c * requestedBounds.width + s * requestedBounds.height;
+  const float plateHeight = s * requestedBounds.width + c * requestedBounds.height;
+  const float scale = std::min({1.0F, canvas.width / plateWidth, canvas.height / plateHeight});
+  if (!finite(scale) || scale <= 0.0F) return {};
   layout.elements = makeElements(requestedUnit * scale);
   const auto rawBounds = elementsBounds(layout.elements);
-  if (!rawBounds.valid()) {
-    return {};
-  }
-  const float desiredOffsetX = canvas.x + canvas.width * config.centerX -
-                               rawBounds.centerX();
-  const float desiredOffsetY = canvas.y + canvas.height * config.centerY -
-                               rawBounds.centerY();
-  const float offsetX = clampOrigin(desiredOffsetX, canvas.x - rawBounds.x,
-                                    canvas.x + canvas.width -
-                                        (rawBounds.x + rawBounds.width));
-  const float offsetY = clampOrigin(desiredOffsetY, canvas.y - rawBounds.y,
-                                    canvas.y + canvas.height -
-                                        (rawBounds.y + rawBounds.height));
+  const float halfWidth = plateWidth * scale * 0.5F;
+  const float halfHeight = plateHeight * scale * 0.5F;
+  const float pivotX = clampOrigin(canvas.x + canvas.width * config.centerX,
+      canvas.x + halfWidth, canvas.x + canvas.width - halfWidth);
+  const float pivotY = clampOrigin(canvas.y + canvas.height * config.centerY,
+      canvas.y + halfHeight, canvas.y + canvas.height - halfHeight);
   layout.unit = requestedUnit * scale;
   layout.touchCompensation = std::isfinite(config.touchCompensation)
                                 ? std::clamp(config.touchCompensation, 0.0F, 2.0F) : 0.5F;
@@ -284,23 +285,32 @@ VirtualControllerLayout makeVirtualControllerLayout(
   });
   bool initialized = false;
   for (auto &element : layout.elements) {
-    element.bounds.x += offsetX;
-    element.bounds.y += offsetY;
     const auto &custom = config.controls[element.configIndex()];
     if (!finite(custom.sizeScale) || custom.sizeScale <= 0.0F ||
         !finite(custom.offsetX) || !finite(custom.offsetY)) return {};
     auto &bounds = element.bounds;
-    const float centerX = bounds.centerX() + custom.offsetX * layout.unit;
-    const float centerY = bounds.centerY() + custom.offsetY * layout.unit;
-    const float sizeScale = std::min(custom.sizeScale,
-        std::min(canvas.width / bounds.width, canvas.height / bounds.height));
-    bounds.width *= sizeScale;
-    bounds.height *= sizeScale;
-    bounds.x = std::clamp(centerX - bounds.width * 0.5F, canvas.x,
-                          canvas.x + canvas.width - bounds.width);
-    bounds.y = std::clamp(centerY - bounds.height * 0.5F, canvas.y,
-                          canvas.y + canvas.height - bounds.height);
-    extendBounds(layout.bounds, bounds, initialized);
+    if (!finite(custom.rotationDegrees)) return {};
+    const auto center = rotateControllerOffset(bounds.centerX() - rawBounds.centerX(),
+        bounds.centerY() - rawBounds.centerY(), config.plateRotationDegrees);
+    const auto offset = rotateControllerOffset(custom.offsetX * layout.unit,
+        custom.offsetY * layout.unit, config.plateRotationDegrees);
+    element.rotationDegrees = config.plateRotationDegrees + custom.rotationDegrees;
+    const auto axis = rotateControllerOffset(1, 0,
+        element.scratch ? 0 : element.rotationDegrees);
+    float width = std::abs(axis.x) * bounds.width + std::abs(axis.y) * bounds.height;
+    float height = std::abs(axis.y) * bounds.width + std::abs(axis.x) * bounds.height;
+    const float fit = std::min({custom.sizeScale, canvas.width / width, canvas.height / height});
+    bounds.width *= fit;
+    bounds.height *= fit;
+    width *= fit;
+    height *= fit;
+    const float cx = clampOrigin(pivotX + center.x + offset.x, canvas.x + width / 2,
+                                 canvas.x + canvas.width - width / 2);
+    const float cy = clampOrigin(pivotY + center.y + offset.y, canvas.y + height / 2,
+                                 canvas.y + canvas.height - height / 2);
+    bounds.x = cx - bounds.width / 2;
+    bounds.y = cy - bounds.height / 2;
+    extendBounds(layout.bounds, {cx - width / 2, cy - height / 2, width, height}, initialized);
   }
   return layout;
 }
@@ -336,16 +346,14 @@ makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
         layout.touchCompensation;
     const float halfWidth = element.bounds.width * 0.5F + uniformExtra;
     const float halfHeight = element.bounds.height * 0.5F + uniformExtra;
-    const auto expandedLeft = centerX - halfWidth;
-    const auto expandedRight = centerX + halfWidth;
-    const auto expandedBottom = centerY + halfHeight;
-    const auto expandedTop = centerY - halfHeight;
-    const auto bottomLeft = normalizedPoint(expandedLeft, expandedBottom, transform);
-    const auto bottomRight =
-        normalizedPoint(expandedRight, expandedBottom, transform);
-    const auto topLeft = normalizedPoint(expandedLeft, expandedTop, transform);
-    const auto topRight =
-        normalizedPoint(expandedRight, expandedTop, transform);
+    const auto corner = [&](float dx, float dy) {
+      const auto point = element.pointAt(dx, dy);
+      return normalizedPoint(point.x, point.y, transform);
+    };
+    const auto bottomLeft = corner(-halfWidth, halfHeight);
+    const auto bottomRight = corner(halfWidth, halfHeight);
+    const auto topLeft = corner(-halfWidth, -halfHeight);
+    const auto topRight = corner(halfWidth, -halfHeight);
     if (!bottomLeft || !bottomRight || !topLeft || !topRight) {
       return {};
     }
