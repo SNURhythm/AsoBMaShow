@@ -5574,6 +5574,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(virtual_controller_editor_tests
+        tests/virtual_controller_editor_tests.cpp
+        src/scene/VirtualControllerEditorView.cpp
+        src/scene/play/VirtualControllerLayout.cpp
+        src/input/VirtualControllerConfig.cpp
+        src/bms_parser.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(virtual_controller_editor_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(virtual_controller_editor_tests PRIVATE cxx_std_23)
+    target_link_libraries(virtual_controller_editor_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
     add_executable(view_layout_tests
         tests/view_layout_tests.cpp
         tests/support/AllocationLifetimeProbe.cpp
@@ -9027,6 +9043,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_details_view_tests
         decide_loading_overlay_tests
         context_menu_view_tests
+        virtual_controller_editor_tests
         view_layout_tests
         view_layout_threading_tests
         button_enabled_tests
@@ -9361,6 +9378,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_details_view_tests
         dropdown_view_tests
         context_menu_view_tests
+        virtual_controller_editor_tests
         view_layout_tests
         view_layout_threading_tests
         button_enabled_tests

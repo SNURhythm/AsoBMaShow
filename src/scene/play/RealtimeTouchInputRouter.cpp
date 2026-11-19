@@ -672,7 +672,8 @@ bool RealtimeTouchInputRouter::beginLane(
   }
   finger.lane = lane;
   finger.scratch = region.scratch;
-  finger.tapScratch = region.scratch && !region.requiresInside && layout_.touchConfig.tapToScratch;
+  finger.tapScratch = region.scratch && (region.touchScratch ||
+      (!region.requiresInside && layout_.touchConfig.tapToScratch));
   finger.spinScratch = region.scratch && region.spinScratch &&
                        region.circle.has_value();
   finger.invertFlickScratchDirection = region.scratch && !finger.spinScratch &&
@@ -1008,8 +1009,8 @@ bool RealtimeTouchInputRouter::consumeImpl(
             ? nextRegion.replayControl
             : replay::logicalControlForChartLane(layout_.keyMode, nextLane,
                                                  nextRegion.scratch);
-    const bool nextTapScratch = nextRegion.scratch && !nextRegion.requiresInside &&
-                                layout_.touchConfig.tapToScratch;
+    const bool nextTapScratch = nextRegion.scratch && (nextRegion.touchScratch ||
+        (!nextRegion.requiresInside && layout_.touchConfig.tapToScratch));
     if (finger->lane == nextLane && finger->scratch == nextRegion.scratch &&
         finger->tapScratch == nextTapScratch &&
         finger->replayControl == nextReplayControl) {

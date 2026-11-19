@@ -10,8 +10,8 @@
 
 namespace {
 
-constexpr float kCanvasInset = 10.0F;
-constexpr float kHandleSize = 26.0F;
+constexpr float kCanvasInset = 28.0F;
+constexpr float kHandleSize = 44.0F;
 
 void renderElement(rendering::SimpleBatchRenderer &batch,
                    const gameplay::VirtualControllerElement &element,
@@ -24,8 +24,8 @@ void renderElement(rendering::SimpleBatchRenderer &batch,
     batch.addCircle(bounds.centerX(), bounds.centerY(),
                     std::max(0.0F, radius - borderWidth), fill);
     const float markerRadius = radius * 0.66F;
-    const float markerX = bounds.centerX() + markerRadius;
-    const float markerY = bounds.centerY();
+    const auto marker = element.pointAt(markerRadius, 0);
+    const float markerX = marker.x, markerY = marker.y;
     batch.addLine(bounds.centerX(), bounds.centerY(), markerX, markerY,
                   std::max(2.0F, radius * 0.045F), border);
     batch.addCircle(bounds.centerX(), bounds.centerY(), radius * 0.14F, border);
@@ -34,20 +34,29 @@ void renderElement(rendering::SimpleBatchRenderer &batch,
   }
   const float radius = std::min(bounds.height * 0.2F, 10.0F);
   batch.addRoundedRect(bounds.x, bounds.y, bounds.width, bounds.height, radius,
-                       border);
+                       border, element.rotationDegrees);
   batch.addRoundedRect(bounds.x + borderWidth, bounds.y + borderWidth,
                        std::max(0.0F, bounds.width - borderWidth * 2.0F),
                        std::max(0.0F, bounds.height - borderWidth * 2.0F),
-                       std::max(0.0F, radius - borderWidth), fill);
+                       std::max(0.0F, radius - borderWidth), fill, element.rotationDegrees);
 }
 
 } // namespace
 
 VirtualControllerEditorView::VirtualControllerEditorView(
-    input::VirtualControllerConfig config, int keyMode, CommitCallback onCommit)
-    : config_(config), keyMode_(keyMode), onCommit_(std::move(onCommit)) {
+    input::VirtualControllerConfig config, int keyMode, CommitCallback onCommit,
+    EditMode editMode, int selectedControl, SelectionCallback onSelection)
+    : config_(config), keyMode_(keyMode), onCommit_(std::move(onCommit)),
+      editMode_(editMode), selectedControl_(selectedControl), onSelection_(std::move(onSelection)) {
   std::vector<std::string> ignoredDiagnostics;
   config_.sanitize(ignoredDiagnostics);
+}
+
+void VirtualControllerEditorView::selectControl(int index) noexcept {
+  if (index == selectedControl_) return;
+  // A toolbar selection from another finger must not retarget the captured drag.
+  onPointerInputCancelled();
+  selectedControl_ = index;
 }
 
 gameplay::VirtualControllerCanvas VirtualControllerEditorView::canvas() const
@@ -127,6 +136,51 @@ VirtualControllerEditorView::handleRect(float centerX, float centerY) noexcept {
           .height = kHandleSize};
 }
 
+const gameplay::VirtualControllerElement *VirtualControllerEditorView::selectedElement(
+    const gameplay::VirtualControllerLayout &layout) const noexcept {
+  for (const auto &element : layout.elements) {
+    if (element.configIndex() == selectedControl_) return &element;
+  }
+  return nullptr;
+}
+
+gameplay::VirtualControllerRect VirtualControllerEditorView::resizeHandle(
+    const gameplay::VirtualControllerElement &element) const noexcept {
+  const auto area = canvas();
+  // Keep a full finger-sized handle reachable even at a canvas edge.
+  const auto corner = element.pointAt((element.bounds.width + kHandleSize) / 2,
+                                      (element.bounds.height + kHandleSize) / 2);
+  const float x = std::clamp(corner.x,
+                             area.x, area.x + area.width);
+  const float y = std::clamp(corner.y,
+                             area.y, area.y + area.height);
+  return handleRect(x, y);
+}
+
+void VirtualControllerEditorView::positionIcon(DragMode mode, float x, float y) {
+  if (auto *icon = handleIcons_[static_cast<size_t>(mode)]) {
+    icon->setPositionNoLayout(static_cast<int>(std::round(x - getX() - kHandleSize / 2)),
+                              static_cast<int>(std::round(y - getY() - kHandleSize / 2)));
+  }
+}
+
+gameplay::VirtualControllerRect VirtualControllerEditorView::rotationHandle(
+    const gameplay::VirtualControllerLayout &layout) const noexcept {
+  gameplay::RealtimeTouchPoint point;
+  if (editMode_ == EditMode::Controls) {
+    const auto *element = selectedElement(layout);
+    if (!element) return {};
+    point = element->pointAt(0, -element->bounds.height / 2 - kHandleSize / 2);
+  } else {
+    const auto offset = gameplay::rotateControllerOffset(
+        0, -layout.plateHalfHeight - kHandleSize / 2, config_.plateRotationDegrees);
+    point = {layout.pivot.x + offset.x, layout.pivot.y + offset.y};
+  }
+  const auto area = canvas();
+  return handleRect(std::clamp(point.x, area.x, area.x + area.width),
+                    std::clamp(point.y, area.y, area.y + area.height));
+}
+
 VirtualControllerEditorView::DragMode
 VirtualControllerEditorView::hitDragMode(float uiX, float uiY) const {
   const auto currentLayout = layout();
@@ -161,13 +215,76 @@ bool VirtualControllerEditorView::beginDrag(std::int64_t pointerId, float uiX,
   if (dragMode_ != DragMode::None) {
     return false;
   }
-  dragMode_ = hitDragMode(uiX, uiY);
+  const auto currentLayout = layout();
+  if (currentLayout.valid() && editMode_ != EditMode::Compensation &&
+      contains(rotationHandle(currentLayout), uiX, uiY)) {
+    dragMode_ = DragMode::Rotate;
+  } else if (editMode_ == EditMode::Controls) {
+    const auto *selected = selectedElement(currentLayout);
+    const auto hit = [&](const gameplay::VirtualControllerElement &element) {
+      const auto local = gameplay::rotateControllerOffset(uiX - element.bounds.centerX(),
+          uiY - element.bounds.centerY(), -element.rotationDegrees);
+      return std::abs(local.x) <= element.bounds.width / 2 &&
+             std::abs(local.y) <= element.bounds.height / 2 &&
+             (element.shape != gameplay::VirtualControllerShape::Circle ||
+              std::hypot(uiX - element.bounds.centerX(), uiY - element.bounds.centerY()) <=
+                  element.bounds.width * 0.5F);
+    };
+    if (selected && contains(resizeHandle(*selected), uiX, uiY)) {
+      dragMode_ = DragMode::ControlResize;
+    } else if (selected && hit(*selected)) {
+      // Arrow selection must make a covered control draggable out of an overlap.
+      if (onSelection_) onSelection_(selectedControl_);
+      dragMode_ = DragMode::ControlMove;
+    } else {
+      const gameplay::VirtualControllerElement *nearest = nullptr;
+      float nearestDistance = std::numeric_limits<float>::infinity();
+      for (const auto &element : currentLayout.elements) {
+        if (!hit(element)) continue;
+        const float distance = std::hypot(uiX - element.bounds.centerX(), uiY - element.bounds.centerY());
+        if (distance < nearestDistance) {
+          nearest = &element;
+          nearestDistance = distance;
+        }
+      }
+      if (nearest) {
+        selectedControl_ = nearest->configIndex();
+        if (onSelection_) onSelection_(selectedControl_);
+        dragMode_ = DragMode::ControlMove;
+      }
+    }
+  } else if (editMode_ == EditMode::Compensation) {
+    const auto area = canvas();
+    if (contains({area.x, area.y, area.width, area.height}, uiX, uiY))
+      dragMode_ = DragMode::Compensation;
+  } else {
+    dragMode_ = hitDragMode(uiX, uiY);
+  }
   if (dragMode_ == DragMode::None) {
     return false;
   }
   activePointerId_ = pointerId;
+  dragOriginalConfig_ = config_;
   dragStartConfig_ = config_;
   dragStartLayout_ = layout();
+  if (dragMode_ == DragMode::ControlMove || dragMode_ == DragMode::ControlResize) {
+    auto baseConfig = config_;
+    baseConfig.controls[selectedControl_] = {};
+    const auto baseLayout = gameplay::makeVirtualControllerLayout(baseConfig, keyMode_, canvas());
+    const auto *base = selectedElement(baseLayout);
+    const auto *visible = selectedElement(dragStartLayout_);
+    if (base && visible && dragStartLayout_.unit > 0.0F) {
+      // Start from the visible position, not an off-screen numeric offset that
+      // was clamped by the layout (also possible after rotation or resizing).
+      auto &custom = dragStartConfig_.controls[selectedControl_];
+      const auto delta = gameplay::rotateControllerOffset(visible->bounds.centerX() - base->bounds.centerX(),
+          visible->bounds.centerY() - base->bounds.centerY(), -config_.plateRotationDegrees);
+      custom.offsetX = delta.x / dragStartLayout_.unit;
+      custom.offsetY = delta.y / dragStartLayout_.unit;
+      if (dragMode_ == DragMode::ControlResize)
+        custom.sizeScale = visible->bounds.width / base->bounds.width;
+    }
+  }
   dragStartX_ = uiX;
   dragStartY_ = uiY;
   return true;
@@ -183,19 +300,11 @@ bool VirtualControllerEditorView::updateDrag(float uiX, float uiY) noexcept {
   }
   const float dx = uiX - dragStartX_;
   const float dy = uiY - dragStartY_;
+  const auto previousAngle = editMode_ == EditMode::Controls
+      ? config_.controls[selectedControl_].rotationDegrees : config_.plateRotationDegrees;
   config_ = dragStartConfig_;
-  const auto firstKey = std::find_if(
-      dragStartLayout_.elements.begin(), dragStartLayout_.elements.end(),
-      [](const gameplay::VirtualControllerElement &element) {
-        return element.control == gameplay::VirtualControllerControl::Key &&
-               element.keyPosition == 0;
-      });
-  const float keyWidth =
-      firstKey == dragStartLayout_.elements.end() ? 0.0F
-                                                   : firstKey->bounds.width;
-  const float keyHeight =
-      firstKey == dragStartLayout_.elements.end() ? 0.0F
-                                                   : firstKey->bounds.height;
+  const float keyWidth = dragStartLayout_.unit;
+  const float keyHeight = keyWidth * 2.0F;
   switch (dragMode_) {
   case DragMode::Move:
     config_.centerX += dx / editCanvas.width;
@@ -222,6 +331,58 @@ bool VirtualControllerEditorView::updateDrag(float uiX, float uiY) noexcept {
       return false;
     }
     config_.scratchKeyplateSpacing += dx / keyWidth;
+    break;
+  case DragMode::Rotate: {
+    auto pivot = dragStartLayout_.pivot;
+    float *angle = &config_.plateRotationDegrees;
+    if (editMode_ == EditMode::Controls) {
+      const auto *selected = selectedElement(dragStartLayout_);
+      if (!selected) return false;
+      pivot = {selected->bounds.centerX(), selected->bounds.centerY()};
+      angle = &config_.controls[selectedControl_].rotationDegrees;
+    }
+    const float ax = dragStartX_ - pivot.x, ay = dragStartY_ - pivot.y;
+    const float bx = uiX - pivot.x, by = uiY - pivot.y;
+    if (std::hypot(bx, by) < 4) {
+      *angle = previousAngle;
+      return true;
+    }
+    *angle += std::atan2(ax * by - ay * bx, ax * bx + ay * by) * (180.0F / 3.14159265359F);
+    break;
+  }
+  case DragMode::ControlMove: {
+    const auto *element = selectedElement(dragStartLayout_);
+    if (!element || dragStartLayout_.unit <= 0.0F) return false;
+    // Keep the saved offset within the visible canvas.
+    auto &custom = config_.controls[selectedControl_];
+    const auto axis = gameplay::rotateControllerOffset(1, 0,
+        element->scratch ? 0 : element->rotationDegrees);
+    const auto &bounds = element->bounds;
+    const float halfWidth = (std::abs(axis.x) * bounds.width + std::abs(axis.y) * bounds.height) / 2;
+    const float halfHeight = (std::abs(axis.y) * bounds.width + std::abs(axis.x) * bounds.height) / 2;
+    const float left = editCanvas.x + halfWidth - bounds.centerX();
+    const float top = editCanvas.y + halfHeight - bounds.centerY();
+    const float right = editCanvas.x + editCanvas.width - halfWidth - bounds.centerX();
+    const float bottom = editCanvas.y + editCanvas.height - halfHeight - bounds.centerY();
+    const auto delta = gameplay::rotateControllerOffset(std::clamp(dx, left, std::max(left, right)),
+        std::clamp(dy, top, std::max(top, bottom)), -config_.plateRotationDegrees);
+    custom.offsetX += delta.x / dragStartLayout_.unit;
+    custom.offsetY += delta.y / dragStartLayout_.unit;
+    break;
+  }
+  case DragMode::ControlResize: {
+    const auto *element = selectedElement(dragStartLayout_);
+    if (!element) return false;
+    const auto &bounds = element->bounds;
+    // Project the drag onto the diagonal: either axis works and aspect is preserved.
+    const auto local = gameplay::rotateControllerOffset(dx, dy, -element->rotationDegrees);
+    const float factor = 1.0F + 2.0F * (local.x * bounds.width + local.y * bounds.height) /
+        (bounds.width * bounds.width + bounds.height * bounds.height);
+    config_.controls[selectedControl_].sizeScale *= factor;
+    break;
+  }
+  case DragMode::Compensation:
+    config_.touchCompensation += dx / std::max(1.0F, editCanvas.width * 0.5F);
     break;
   case DragMode::None:
     return false;
@@ -300,7 +461,7 @@ bool VirtualControllerEditorView::handleEventsImpl(SDL_Event &event) {
     fingerPoint(event.tfinger, uiX, uiY);
     return !updateDrag(uiX, uiY);
   case SDL_EVENT_FINGER_CANCELED:
-    endDrag(event.tfinger.fingerID);
+    if (activePointerId_ == event.tfinger.fingerID) onPointerInputCancelled();
     return false;
   case SDL_EVENT_FINGER_UP:
     if (activePointerId_ != event.tfinger.fingerID) {
@@ -332,22 +493,50 @@ void VirtualControllerEditorView::renderImpl(RenderContext &context) {
     const uint32_t border = ui_theme::withAlpha(ui_theme::cyan(), 218).toABGR();
     const uint32_t fill = ui_theme::withAlpha(ui_theme::cyan(), 66).toABGR();
     for (const auto &element : currentLayout.elements) {
-      renderElement(batch, element, border, fill);
+      if (editMode_ == EditMode::Compensation) {
+        auto expanded = element;
+        const float extra = std::min(element.bounds.width, element.bounds.height) *
+                            currentLayout.touchCompensation;
+        expanded.bounds.x -= extra * 0.5F;
+        expanded.bounds.y -= extra * 0.5F;
+        expanded.bounds.width += extra;
+        expanded.bounds.height += extra;
+        renderElement(batch, expanded, ui_theme::withAlpha(ui_theme::coral(), 180).toABGR(),
+                       ui_theme::withAlpha(ui_theme::coral(), 30).toABGR());
+      }
+      const bool selected = editMode_ == EditMode::Controls && element.configIndex() == selectedControl_;
+      renderElement(batch, element, selected ? ui_theme::amber().toABGR() : border, fill);
     }
-    const auto handles = handleCenters(currentLayout);
-    const auto addHandle = [&](float x, float y, const Color &color) {
-      const auto handle = handleRect(x, y);
-      batch.addRoundedRect(handle.x, handle.y, handle.width, handle.height,
-                           5.0F, color.toABGR());
-    };
-    addHandle(handles.moveX, handles.moveY, ui_theme::lime());
-    addHandle(handles.resizeX, handles.resizeY, ui_theme::amber());
-    addHandle(handles.keySpacingXX, handles.keySpacingXY, ui_theme::cyan());
-    if (keyMode_ % 2 != 0 || keyMode_ == 10 || keyMode_ == 14) {
-      addHandle(handles.keySpacingYX, handles.keySpacingYY, ui_theme::violetAction());
+    if (editMode_ == EditMode::Controls) {
+      if (const auto *element = selectedElement(currentLayout)) {
+        const auto handle = resizeHandle(*element);
+        batch.addRoundedRect(handle.x, handle.y, handle.width, handle.height,
+                             8.0F, ui_theme::amber().toABGR());
+        positionIcon(DragMode::ControlResize, handle.centerX(), handle.centerY());
+      }
     }
-    if (config_.scratchEnabled) {
-      addHandle(handles.scratchSpacingX, handles.scratchSpacingY, ui_theme::coral());
+    if (editMode_ != EditMode::Compensation) {
+      const auto handle = rotationHandle(currentLayout);
+      batch.addCircle(handle.centerX(), handle.centerY(), kHandleSize / 2, ui_theme::cyan().toABGR());
+      positionIcon(DragMode::Rotate, handle.centerX(), handle.centerY());
+    }
+    if (editMode_ == EditMode::Whole) {
+      const auto handles = handleCenters(currentLayout);
+      const auto addHandle = [&](DragMode mode, float x, float y, const Color &color) {
+        positionIcon(mode, x, y);
+        const auto handle = handleRect(x, y);
+        batch.addRoundedRect(handle.x, handle.y, handle.width, handle.height,
+                             5.0F, color.toABGR());
+      };
+      addHandle(DragMode::Move, handles.moveX, handles.moveY, ui_theme::lime());
+      addHandle(DragMode::Resize, handles.resizeX, handles.resizeY, ui_theme::amber());
+      addHandle(DragMode::KeySpacingX, handles.keySpacingXX, handles.keySpacingXY, ui_theme::cyan());
+      if (keyMode_ % 2 != 0 || keyMode_ == 10 || keyMode_ == 14) {
+        addHandle(DragMode::KeySpacingY, handles.keySpacingYX, handles.keySpacingYY, ui_theme::violetAction());
+      }
+      if (config_.scratchEnabled) {
+        addHandle(DragMode::ScratchKeyplateSpacing, handles.scratchSpacingX, handles.scratchSpacingY, ui_theme::coral());
+      }
     }
   }
   rendering::setScissorUI(context.scissor.x, context.scissor.y,
@@ -356,8 +545,18 @@ void VirtualControllerEditorView::renderImpl(RenderContext &context) {
 }
 
 void VirtualControllerEditorView::onPointerInputCancelled() {
-  if (dragMode_ != DragMode::None) config_ = dragStartConfig_;
+  // The movement baseline may normalize clamped values; rollback must not.
+  if (dragMode_ != DragMode::None) config_ = dragOriginalConfig_;
   dragMode_ = DragMode::None;
   activePointerId_ = -1;
   dragStartLayout_ = {};
+}
+
+void VirtualControllerEditorView::onPointerEventConsumed(const SDL_Event &event) {
+  if ((event.type == SDL_EVENT_MOUSE_BUTTON_UP && activePointerId_ == 0 &&
+       event.button.button == SDL_BUTTON_LEFT) ||
+      ((event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) &&
+       activePointerId_ == event.tfinger.fingerID)) {
+    onPointerInputCancelled();
+  }
 }

@@ -50,6 +50,9 @@ enum class VirtualControllerShape : unsigned char {
   Rectangle,
 };
 
+// Rotate a screen-space offset clockwise about the origin.
+[[nodiscard]] RealtimeTouchPoint rotateControllerOffset(float x, float y, float degrees) noexcept;
+
 struct VirtualControllerElement {
   VirtualControllerControl control = VirtualControllerControl::Key;
   VirtualControllerShape shape = VirtualControllerShape::Rectangle;
@@ -57,17 +60,37 @@ struct VirtualControllerElement {
   int lane = -1;
   bool scratch = false;
   bool spinScratch = false;
+  bool touchScratch = false;
   // A 1P platter is drawn on the left. An upward flick along its practical
   // right-hand edge is counter-clockwise, unlike the historical generic
   // vertical-swipe mapping used by skin-authored scratch lanes.
   bool invertFlickScratchDirection = false;
   std::optional<replay::LogicalControl> replayControl;
   VirtualControllerRect bounds;
+  float rotationDegrees = 0;
+  [[nodiscard]] RealtimeTouchPoint pointAt(float dx, float dy) const noexcept {
+    const auto offset = rotateControllerOffset(dx, dy, rotationDegrees);
+    return {bounds.centerX() + offset.x, bounds.centerY() + offset.y};
+  }
+
+  [[nodiscard]] int configIndex() const noexcept {
+    switch (control) {
+    case VirtualControllerControl::Scratch: return input::VirtualControllerConfig::kScratchControl;
+    case VirtualControllerControl::Start: return input::VirtualControllerConfig::kStartControl;
+    case VirtualControllerControl::Select: return input::VirtualControllerConfig::kSelectControl;
+    case VirtualControllerControl::Key: return keyPosition;
+    }
+    return -1;
+  }
 };
 
 struct VirtualControllerLayout {
   VirtualControllerRect bounds;
   std::vector<VirtualControllerElement> elements;
+  RealtimeTouchPoint pivot;
+  float plateHalfHeight = 0;
+  float unit = 0.0F;
+  float touchCompensation = 0.5F;
 
   [[nodiscard]] bool valid() const noexcept;
 };

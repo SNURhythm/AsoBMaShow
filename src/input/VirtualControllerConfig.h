@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <compare>
 #include <string>
 #include <vector>
@@ -9,11 +10,21 @@ namespace input {
 enum class VirtualControllerScratchMode : unsigned char {
   Flick,
   Spin,
+  Touch,
 };
 
 enum class VirtualControllerPlayer : unsigned char {
   Player1 = 1,
   Player2 = 2,
+};
+
+// Offsets use the unscaled base button width, independent of this control's size.
+struct VirtualControllerControlConfig {
+  float sizeScale = 1.0F;
+  float offsetX = 0.0F;
+  float offsetY = 0.0F;
+  float rotationDegrees = 0.0F;
+  auto operator<=>(const VirtualControllerControlConfig &) const = default;
 };
 
 // Values are fractions of the current mobile canvas. The layout code derives
@@ -48,6 +59,7 @@ struct VirtualControllerConfig {
   }
   // Flick preserves the original vertical-swipe behavior. Spin is an
   // opt-in turntable gesture whose rotation is quantized by the touch router.
+  // Touch presses the scratch control immediately and holds until release.
   VirtualControllerScratchMode scratchMode = VirtualControllerScratchMode::Flick;
   // The selected arcade side determines the deck orientation. On double-play
   // charts it also selects the matching player lanes.
@@ -58,6 +70,17 @@ struct VirtualControllerConfig {
   float keySpacingX = kDefaultKeySpacingX;
   float keySpacingY = kDefaultKeySpacingY;
   float scratchKeyplateSpacing = kDefaultScratchKeyplateSpacing;
+
+  static constexpr int kScratchControl = 8;
+  static constexpr int kStartControl = 9;
+  static constexpr int kSelectControl = 10;
+  static constexpr int kControlCount = 11;
+  bool startEnabled = true;
+  bool selectEnabled = true;
+  // Added diameter/width, as a fraction of each control's shorter dimension.
+  float plateRotationDegrees = 0.0F;
+  float touchCompensation = 0.5F;
+  std::array<VirtualControllerControlConfig, kControlCount> controls{};
 
   auto operator<=>(const VirtualControllerConfig &) const = default;
 
