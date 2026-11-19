@@ -21,6 +21,7 @@ public:
                               int selectedControl = 0,
                               SelectionCallback onSelection = {});
 
+  [[nodiscard]] bool hasActiveDrag() const noexcept { return dragMode_ != DragMode::None; }
   void installHandleIcons();
   void selectControl(int index) noexcept;
 

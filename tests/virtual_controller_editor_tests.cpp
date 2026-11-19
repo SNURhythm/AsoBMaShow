@@ -150,13 +150,16 @@ int main() {
     return editor.handleEvents(event);
   };
   assert(!finger(SDL_EVENT_FINGER_DOWN, x, y));
+  assert(editor.hasActiveDrag());
   assert(selected == 0);
   assert(!finger(SDL_EVENT_FINGER_MOTION, x + 20, y + 10));
   assert(saves == 0); // No disk writes during a gesture.
   finger(SDL_EVENT_FINGER_DOWN, x, y, 2);
   finger(SDL_EVENT_FINGER_UP, x, y, 2);
+  assert(editor.hasActiveDrag());
   assert(saves == 0); // A second contact cannot finish the active gesture.
   assert(!finger(SDL_EVENT_FINGER_UP, x + 20, y + 10));
+  assert(!editor.hasActiveDrag());
   assert(saves == 1);
   assert(std::abs(saved.controls[0].offsetX - 20 / layout.unit) < 0.0001F);
   assert(std::abs(saved.controls[0].offsetY - 10 / layout.unit) < 0.0001F);

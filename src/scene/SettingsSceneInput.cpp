@@ -1381,8 +1381,18 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
       metrics.bodyTextSize, app_theme::textPrimary());
   selectionLabel->setFlex(1);
   selectionRow->addView(selectionLabel);
+  auto *editor = new VirtualControllerEditorView(
+      context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode), inputSelectedKeyMode,
+      [this, keyMode = inputSelectedKeyMode](input::VirtualControllerConfig config) {
+        commitVirtualControllerSetting(keyMode, config);
+      }, static_cast<VirtualControllerEditorView::EditMode>(inputVirtualControllerEditMode),
+      inputVirtualControllerSelectedControl, [this, selectionLabel](int index) {
+        inputVirtualControllerSelectedControl = index;
+        selectionLabel->setLocalizedText(virtualControlLabel(index));
+      });
   auto *reset = makeResetButton(metrics);
-  reset->setOnClickListener([this] {
+  reset->setOnClickListener([this, editor] {
+    if (editor->hasActiveDrag()) return;
     auto next = context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode);
     const auto defaults = input::VirtualControllerConfig::forKeyMode(inputSelectedKeyMode);
     if (inputVirtualControllerEditMode == 1) next.controls[inputVirtualControllerSelectedControl] = {};
@@ -1401,7 +1411,8 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
   if (inputVirtualControllerEditMode != 2) {
     for (const int degrees : {-5, 5}) {
       auto *rotate = makeStepButton(metrics, metrics.offsetButtonWidthLarge, degrees < 0 ? "−5°" : "+5°");
-      rotate->setOnClickListener([this, degrees] {
+      rotate->setOnClickListener([this, editor, degrees] {
+        if (editor->hasActiveDrag()) return;
         auto next = context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode);
         auto &angle = inputVirtualControllerEditMode == 0 ? next.plateRotationDegrees
             : next.controls[inputVirtualControllerSelectedControl].rotationDegrees;
@@ -1419,15 +1430,6 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
                                                          "settings.input.virtual_controller.compensation_help"),
       metrics.smallTextSize, app_theme::textSecondary()));
 
-  auto *editor = new VirtualControllerEditorView(
-      context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode), inputSelectedKeyMode,
-      [this, keyMode = inputSelectedKeyMode](input::VirtualControllerConfig config) {
-        commitVirtualControllerSetting(keyMode, config);
-      }, static_cast<VirtualControllerEditorView::EditMode>(inputVirtualControllerEditMode),
-      inputVirtualControllerSelectedControl, [this, selectionLabel](int index) {
-        inputVirtualControllerSelectedControl = index;
-        selectionLabel->setLocalizedText(virtualControlLabel(index));
-      });
   // Keep the editing canvas at full-screen scale, especially on landscape phones.
   // Toolbar views sit above it; touches on them never reach the drag surface.
   editor->installHandleIcons();
